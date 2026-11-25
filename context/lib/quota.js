@@ -445,6 +445,14 @@ function normalizePosixSlashes(p) {
   return String(p || "").replace(/\\/g, "/");
 }
 
+function formatCommandPathArg(rawPath) {
+  const posix = normalizePosixSlashes(rawPath);
+  if (/[\s"&|<>^()'`;$]/.test(posix)) {
+    return `"${posix.replace(/"/g, '\\"')}"`;
+  }
+  return posix;
+}
+
 function expandLeadingTilde(p) {
   if (typeof p !== "string") return "";
   const s = p.trim();
@@ -673,7 +681,7 @@ export function buildStatusLineSetupInfo(pluginRoot, { settingsPath = null } = {
       ? path.resolve(pluginRoot.trim())
       : path.join(os.homedir(), ".gemini", "config", "plugins", "agy-dart");
   const scriptPath = path.join(resolvedRoot, "hooks", "statusline.mjs");
-  const quotedPath = normalizePosixSlashes(scriptPath);
+  const formattedScript = formatCommandPathArg(scriptPath);
   const effectiveSettingsPath = settingsPath || getDefaultCliSettingsPath();
   const inspected = inspectExistingCliStatusLine(effectiveSettingsPath, { pluginRoot: resolvedRoot });
 
@@ -705,8 +713,8 @@ export function buildStatusLineSetupInfo(pluginRoot, { settingsPath = null } = {
   }
 
   const command = chainedScriptPath
-    ? `node "${quotedPath}" --chain-script "${normalizePosixSlashes(chainedScriptPath)}"`
-    : `node "${quotedPath}"`;
+    ? `node ${formattedScript} --chain-script ${formatCommandPathArg(chainedScriptPath)}`
+    : `node ${formattedScript}`;
   const snippetObj = {
     statusLine: {
       type: "command",
@@ -724,8 +732,8 @@ export function buildStatusLineSetupInfo(pluginRoot, { settingsPath = null } = {
     alreadyConfigured: inspected.kind === "agy_dart",
     chainedScriptPath,
     existingCommand: inspected.existingCommand || "",
-    enableCommand: `node "${quotedPath}" --enable`,
-    disableCommand: `node "${quotedPath}" --disable`,
+    enableCommand: `node ${formattedScript} --enable`,
+    disableCommand: `node ${formattedScript} --disable`,
     snippetJson: JSON.stringify(snippetObj, null, 2),
     appHint: "Settings > Models",
     cliHint: "/usage"
@@ -747,7 +755,7 @@ export function enableCliStatusLineBridge({
       ? path.resolve(pluginRoot.trim())
       : path.join(os.homedir(), ".gemini", "config", "plugins", "agy-dart");
   const scriptPath = path.join(resolvedRoot, "hooks", "statusline.mjs");
-  const quotedPath = normalizePosixSlashes(scriptPath);
+  const formattedScript = formatCommandPathArg(scriptPath);
   const resolvedReceipt = path.resolve(expandLeadingTilde(receiptPath || getDefaultStatusLineBackupPath()));
   const inspected = inspectExistingCliStatusLine(settingsPath, { pluginRoot: resolvedRoot });
 
@@ -807,8 +815,8 @@ export function enableCliStatusLineBridge({
   }
 
   const command = chainedScriptPath
-    ? `node "${quotedPath}" --chain-script "${normalizePosixSlashes(chainedScriptPath)}"`
-    : `node "${quotedPath}"`;
+    ? `node ${formattedScript} --chain-script ${formatCommandPathArg(chainedScriptPath)}`
+    : `node ${formattedScript}`;
 
   const prevSl = inspected.statusLine || {};
   const nextStatusLine = {
@@ -895,7 +903,7 @@ export function disableCliStatusLineBridge({
     nextSettings.statusLine = {
       ...(inspected.statusLine || {}),
       type: "command",
-      command: `node "${normalizePosixSlashes(inspected.chainedScriptPath)}"`
+      command: `node ${formatCommandPathArg(inspected.chainedScriptPath)}`
     };
     restored = true;
   } else {
