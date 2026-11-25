@@ -13,7 +13,6 @@
   "suggestedPrompts": [
     "Search symbols across the codebase, outline large files, and apply multi-file edits with inline verification",
     "Analyze a large build or server log in the sandbox and summarize only the root causes",
-    "Show agy-dart context savings report and verify plugin health",
-    "Run agy-dart hooks/statusline.mjs --report and summarize official CLI quota remaining % plus local 5h/7d token spend by model family"
+    "Show agy-dart context savings report and verify plugin health"
   ]
 }

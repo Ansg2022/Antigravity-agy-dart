@@ -10,12 +10,6 @@ import { getEffectiveConfig } from "../../context/lib/config.js";
 import { executionReceiptsFromSteps, fastToolClaimsFromSteps } from "../../context/lib/execution-receipts.js";
 import { buildHandoffBrief, inferWorkspaceFromStore } from "../../context/lib/handoff.js";
 import {
-  buildStatusLineSetupInfo,
-  collectLocalRollingUsage,
-  projectQuotaSnapshot,
-  readStatusLineQuotaSnapshot
-} from "../../context/lib/quota.js";
-import {
   DEFAULT_STALE_LEASE_MS,
   WatchdogMonitor,
   collectChildSubagentActivity,
@@ -58,12 +52,10 @@ const { ContextModeStore, FILE_CATEGORIES } = await import("../../context/lib/st
 
 const __selfPath = path.resolve(fileURLToPath(import.meta.url));
 const __dirname = path.dirname(__selfPath);
-const PLUGIN_ROOT = path.resolve(__dirname, "..", "..");
 const HTML_FILE = path.join(__dirname, "index.html");
 export const MAX_REQUEST_BODY_BYTES = 64 * 1024;
 const OVERSIZED_BODY_DRAIN_TIMEOUT_MS = 5_000;
 const SIDECAR_CSRF_TOKEN = crypto.randomBytes(24).toString("hex");
-const QUOTA_LOCAL_CACHE_TTL_MS = 15_000;
 
 let _runtimeStore = null;
 let _appStartTime = null;
@@ -71,9 +63,6 @@ let _hostStartTime = null;
 let _runtimeInitialized = false;
 let _watchdogMonitor = null;
 const _convProjectIdCache = new Map();
-const _quotaFileUsageCache = new Map();
-let _quotaLocalRollupCache = null;
-let _quotaRefreshScheduled = false;
 
 function runAgentApiAsync(args, { projectId = "", timeoutMs = 12000 } = {}) {
   const exe = process.env.ANTIGRAVITY_AGENTAPI_EXE;
@@ -284,9 +273,6 @@ export function closeRuntimeStore() {
   stopWatchdogMonitor();
   _convProjectIdCache.clear();
   claimedTranscriptStatCache.clear();
-  _quotaFileUsageCache.clear();
-  _quotaLocalRollupCache = null;
-  _quotaRefreshScheduled = false;
   if (_runtimeStore) {
     try {
       _runtimeStore.close();
@@ -762,9 +748,6 @@ function getStatsPayload(data, defaultConvId = "default") {
   stats.featureRoi = store.getFeatureRoi(statsTargetSid, { ...sinceOpts, ghost: stats.ghost });
   try {
     stats.starPrompt = store.evaluateStarPrompt({ markTriggered: true });
-  } catch {}
-  try {
-    stats.quota = getQuotaPayload({ forceRefresh: Boolean(data?.forceRefresh), allowNonBlocking: true });
   } catch {}
 
   stats.version = getPackageVersion();
@@ -1805,79 +1788,6 @@ function getWatchdogPayload(data = {}, defaultConvId = "default") {
   };
 }
 
-function refreshLocalQuotaRollupSync(envRootsRaw, nowMs) {
-  if (_quotaLocalRollupCache && _quotaLocalRollupCache.envRootsRaw !== envRootsRaw) {
-    _quotaFileUsageCache.clear();
-  }
-  const localOpts = envRootsRaw
-    ? {
-        roots: envRootsRaw.split(path.delimiter).filter(Boolean),
-        includeDefaultRoots: false,
-        nowMs,
-        cache: _quotaFileUsageCache
-      }
-    : { nowMs, cache: _quotaFileUsageCache };
-  const local = collectLocalRollingUsage(localOpts);
-  _quotaLocalRollupCache = { ts: nowMs, envRootsRaw, payload: local };
-  return local;
-}
-
-export function getQuotaPayload(data = {}) {
-  const nowMs = Date.now();
-  const forceRefresh = Boolean(data?.forceRefresh);
-  const allowNonBlocking = Boolean(data?.allowNonBlocking);
-  const store = getRuntimeStore();
-  const rawSnap = readStatusLineQuotaSnapshot(store, { nowMs });
-  const official = projectQuotaSnapshot(rawSnap, { nowMs });
-
-  const envRootsRaw =
-    typeof process.env.AGY_DART_QUOTA_BRAIN_ROOTS === "string"
-      ? process.env.AGY_DART_QUOTA_BRAIN_ROOTS.trim()
-      : "";
-  const allowDefaultRoots = isDefaultRuntimeStoreDb(store);
-
-  let local;
-  if (!envRootsRaw && !allowDefaultRoots) {
-    // Isolated non-default DB without explicit brain roots (e.g., tests): never scan host ~/.gemini transcripts
-    local = collectLocalRollingUsage({ roots: [], includeDefaultRoots: false, nowMs });
-  } else {
-    const cacheFresh =
-      !forceRefresh &&
-      _quotaLocalRollupCache &&
-      _quotaLocalRollupCache.envRootsRaw === envRootsRaw &&
-      nowMs - _quotaLocalRollupCache.ts < QUOTA_LOCAL_CACHE_TTL_MS;
-
-    if (cacheFresh) {
-      local = _quotaLocalRollupCache.payload;
-    } else if (allowNonBlocking && !forceRefresh && !envRootsRaw) {
-      local =
-        _quotaLocalRollupCache && _quotaLocalRollupCache.envRootsRaw === envRootsRaw
-          ? _quotaLocalRollupCache.payload
-          : collectLocalRollingUsage({ roots: [], includeDefaultRoots: false, nowMs });
-      if (!_quotaRefreshScheduled) {
-        _quotaRefreshScheduled = true;
-        setImmediate(() => {
-          _quotaRefreshScheduled = false;
-          try {
-            if (_runtimeStore && isDefaultRuntimeStoreDb(_runtimeStore)) {
-              refreshLocalQuotaRollupSync(envRootsRaw, Date.now());
-            }
-          } catch {}
-        }).unref?.();
-      }
-    } else {
-      local = refreshLocalQuotaRollupSync(envRootsRaw, nowMs);
-    }
-  }
-
-  return {
-    ok: true,
-    official,
-    local,
-    setup: buildStatusLineSetupInfo(PLUGIN_ROOT)
-  };
-}
-
 function handleWatchdogActionMutation(data = {}, defaultConvId = "default") {
   if (data.fromSidecarHost !== undefined && typeof data.fromSidecarHost !== "boolean") {
     return { ok: false, status: 400, error: "Field 'fromSidecarHost' must be a boolean" };
@@ -2399,8 +2309,7 @@ const READ_ENDPOINTS = new Set([
   "/api/source-chunks",
   "/api/cache-diag",
   "/api/handoff",
-  "/api/watchdog",
-  "/api/quota"
+  "/api/watchdog"
 ]);
 
 const MUTATING_ENDPOINTS = new Set([
@@ -2578,20 +2487,6 @@ export function createStandaloneServer({
             }
           }
           sendJson(res, 200, getWatchdogPayload(data));
-          return;
-        }
-        if (url.pathname === "/api/quota") {
-          if (req.method === "GET" && typeof data.forceRefresh === "string") {
-            const low = data.forceRefresh.trim().toLowerCase();
-            if (low === "true" || low === "1") data.forceRefresh = true;
-            else if (low === "false" || low === "0" || low === "") data.forceRefresh = false;
-          }
-          const bCheck = validateOptionalBooleanField(data, "forceRefresh");
-          if (!bCheck.ok) {
-            sendJson(res, 400, { error: bCheck.error });
-            return;
-          }
-          sendJson(res, 200, getQuotaPayload(data));
           return;
         }
       }
@@ -2999,12 +2894,5 @@ export function registerSidecarRoutes(app) {
     const res = handleStarPromptMutation(data);
     if (res.ok === false) return makeBadRequest(res.error);
     return res;
-  }, "POST");
-  app.api("/api/quota", (rawData) => {
-    const data = normalizeSidecarBody(rawData);
-    if (!data) return makeBadRequest("Request body must be a JSON object");
-    const bCheck = validateOptionalBooleanField(data, "forceRefresh");
-    if (!bCheck.ok) return makeBadRequest(bCheck.error);
-    return getQuotaPayload(data);
   }, "POST");
 }

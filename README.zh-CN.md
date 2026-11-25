@@ -63,7 +63,6 @@ AI 要搜好几个词时一次同时搜完，要改多个文件时一次改完�
 7. **单次返回卡在 8.8 KB 以内（智能匀配额）**：Antigravity 工具单次返回超过约 10 KB 会自动落成临时文件让 AI 多读一轮；插件把返回内容控制在 8.8 KB 内，并自动把短检查省下的空间让给真正报错的长堆栈。
 8. **面板细分统计与离线测算**：右侧面板能查看上下文花在读文件、终端输出还是子智能体上，以及最近 15 轮缓存命中走势和失效原因；可选开启大文件修改后只读改动行（默认关闭）；命令行支持拿历史记录测算缓存命中与自动续期账本。
 9. **与 Agent Skills 生态正交互补，支持全环境 Skills 体检**：可与 Antigravity / Claude Code / Codex 各类业务 Skill 无缝叠加——业务 Skill 负责工作流编排，插件在底层兜底拦截盲读大文件、裁剪刷屏输出并守护缓存；运行 `node bin/agy-dart.mjs audit skills` 可一键审计所有已安装 Skills 的 Turn-0 前缀税与渐进式披露结构。
-10. **剩余额度与近 5h/7d 滚动消耗卡片（零未公开接口探测）**：侧边栏常驻展示近 5 小时 / 近 7 天按模型族统计的本地真实 Token 消耗与限流告警，并提供一键复制查额度提示词；按需接入官方 Antigravity CLI `statusLine` 桥接后还可同步展示官方 5h / 周剩余百分比与重置倒计时，若已装其他 Node `statusLine` 插件会自动串联共存，禁用或全局卸载时无损还原原配置。
 
 > Antigravity 官方更新很勤，可以点一下右上角 **Star** 方便跟进后续兼容更新。
 
@@ -141,14 +140,6 @@ node scripts/install.mjs mode no-read-hook          # 读文件不拦，只拦�
 node scripts/install.mjs tool-loading fast-eager    # 默认：4 个高频 fast 工具直连预载，8 个 context 工具按需懒加载
 node scripts/install.mjs tool-loading lazy          # 12 个工具全部按需懒加载
 node scripts/install.mjs tool-loading eager         # 12 个工具全部预载
-```
-
-可选开启官方 Antigravity CLI `statusLine` 额度同步（`install` 默认零侵入不改你的 `settings.json`；启用时自动备份并串联已有 Node `statusLine` 插件，`--disable` 或全局 `uninstall` 自动无损还原）：
-
-```bash
-node ~/.gemini/config/plugins/agy-dart/hooks/statusline.mjs --enable   # 一键开启 CLI 额度同步（已有 Node 插件自动共存串联）
-node ~/.gemini/config/plugins/agy-dart/hooks/statusline.mjs --report   # 终端直接查看官方 CLI 额度快照 + 近 5h/7d 本地消耗
-node ~/.gemini/config/plugins/agy-dart/hooks/statusline.mjs --disable  # 关闭并无损还原原有 statusLine 配置
 ```
 
 ---

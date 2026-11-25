@@ -63,7 +63,6 @@ With multiple project windows open, if a background window is nearly out of cont
 7. **Hard 8.8 KB response cap with dynamic quota**: Antigravity spills tool outputs above ~10 KB into a temp file that costs an extra read turn; all plugin responses stay within 8.8 KB, dynamically giving short passing checks' unused space to failing stack traces.
 8. **Detailed panel breakdown & offline simulation**: Inspect context usage across file reads, terminal output, and subagents, check 15-turn cache hit trends and miss causes, optionally read only changed lines after edits (off by default), or replay past chat history via CLI to measure cache hit rates and keepalive cost.
 9. **Complements Agent Skills & audits Skills prefix tax**: Works orthogonally alongside domain Agent Skills in Antigravity, Claude Code, and Codex — Skills guide task workflows while `agy-dart` handles low-level read guards, log filtering, and KV-cache hygiene underneath; run `node bin/agy-dart.mjs audit skills` to inspect Turn-0 frontmatter overhead and progressive-disclosure structure across installed skills.
-10. **Remaining quota & 5h/7d rolling spend card (zero undocumented probing)**: Displays official Antigravity CLI `statusLine` remaining percentages and live reset countdowns (opt-in bridge that auto-chains with existing Node `statusLine` plugins without overwriting them, and restores your original config on `--disable` or global uninstall), paired with always-on local 5-hour / 7-day rolling token spend by model family and a one-click chat prompt copy button.
 
 > Antigravity updates frequently — click **Star** at the top right to follow compatibility updates.
 
@@ -141,14 +140,6 @@ node scripts/install.mjs mode no-read-hook          # Never block file reads, on
 node scripts/install.mjs tool-loading fast-eager    # Default: 4 fast tools eager, 8 context tools lazy
 node scripts/install.mjs tool-loading lazy          # All 12 tools lazy-loaded
 node scripts/install.mjs tool-loading eager         # All 12 tools eager-loaded
-```
-
-Optional Antigravity CLI `statusLine` quota sync (never modified automatically during `install`; auto-chains existing Node `statusLine` plugins and restores your prior config on `--disable` or global `uninstall`):
-
-```bash
-node ~/.gemini/config/plugins/agy-dart/hooks/statusline.mjs --enable   # Enable CLI quota sync (auto-chains existing Node statusLine)
-node ~/.gemini/config/plugins/agy-dart/hooks/statusline.mjs --report   # Print official CLI quota snapshot + local 5h/7d spend
-node ~/.gemini/config/plugins/agy-dart/hooks/statusline.mjs --disable  # Disable & losslessly restore previous statusLine
 ```
 
 > **Troubleshooting (`ide-tools` duplicate `/required` error):** If Antigravity fails during toolbox initialization with `building toolbox: tool "mcp_ide-tools_mcp_agy-dart_fast_apply_edits" advertises an invalid parameter schema ... at '/required': items at 1 and 2 are equal`, the host's `ide-tools` bridge is re-wrapping already-eager `mcp_agy-dart_fast_*` tools and appending `toolSummary` to `/required` a second time without deduplicating (`agy-dart` itself only declares `"required": ["edits"]`). Switch to lazy loading and restart Antigravity:

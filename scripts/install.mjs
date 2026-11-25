@@ -7,7 +7,6 @@ import os from "node:os";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { guardPath, read, writeFileAtomicSync } from "./targets/shared.mjs";
-import { disableCliStatusLineBridge } from "../context/lib/quota.js";
 
 const __selfPath = path.resolve(fileURLToPath(import.meta.url));
 const __dirname = path.dirname(__selfPath);
@@ -224,7 +223,6 @@ export const RUNTIME_FILES = Object.freeze([
   "context/lib/text-diff.js",
   "context/lib/json-crusher.js",
   "context/lib/handoff.js",
-  "context/lib/quota.js",
   "context/lib/watchdog-lease.js",
   "context/lib/watchdog.js",
   "hooks/compile-cache.mjs",
@@ -233,7 +231,6 @@ export const RUNTIME_FILES = Object.freeze([
   "hooks/post-tool-use.mjs",
   "hooks/pre-invocation.mjs",
   "hooks/stop.mjs",
-  "hooks/statusline.mjs",
   "hooks/cli-filter.mjs",
   "hooks/filter-rules.mjs",
   "sidecars/dashboard/sidecar.json",
@@ -1591,20 +1588,6 @@ async function main() {
         throw new Error(`Refusing to delete ${targetResolved}: directory does not contain an '${PLUGIN_NAME}' plugin.json manifest.`);
       }
       if (!opts.isCustomTarget && !opts.isProject && opts.syncHosts) await uninstallSyncedHosts(targetResolved);
-      if (!opts.isCustomTarget && !opts.isProject) {
-        try {
-          const slRes = disableCliStatusLineBridge({ pluginRoot: targetResolved });
-          if (slRes.ok && slRes.changed) {
-            console.log(
-              slRes.restored
-                ? `Restored previous CLI statusLine in ${slRes.settingsPath}`
-                : `Removed agy-dart CLI statusLine from ${slRes.settingsPath}`
-            );
-          }
-        } catch {
-          // Best-effort cleanup: never block plugin uninstall
-        }
-      }
       if (installed) {
         if (isPathSameOrInside(process.cwd(), targetResolved)) {
           try {
