@@ -218,10 +218,16 @@ node scripts/install.mjs tool-loading eager         # 12 个工具全部预载
 npm test                                    # 跑全套测试
 npm run verify:pkg                          # 检查安装包文件完整性
 npm run prefix:budget                       # 分别估算 Antigravity 配置的首轮占用和全部工具加载后的占用
+npm run brief:check                         # 检查 AI_REVIEW_BRIEF.md 里的行数和测试数是不是最新的
 node scripts/cache-audit.mjs --workspace . --no-live
 node bin/agy-dart.mjs audit skills --workspace .   # 审计全环境 Skills 的 Turn-0 前缀税与渐进式披露结构
 npm run cache:simulate
 ```
+
+改了源码文件或增删测试后，记得顺手同步下面三处，不然本地自检会报错：
+- **打包清单**（`scripts/install.mjs`）：新增或删除文件后，同步改 `RUNTIME_FILES`（默认安装的文件）或 `DEVTOOLS_FILES`（加 `--with-devtools` 才装的文件），否则 `npm run verify:pkg` 会拦截。
+- **测试总数**（`tests/v1.2-hardening.test.mjs`）：增删用例后，把里面写死的 `computeBriefMetrics(ROOT).testCases` 数量改成和 `npm test` 一致。
+- **审阅简报**（`AI_REVIEW_BRIEF.md`）：改完核心代码或测试后，跑一遍 `node scripts/gen-review-brief.mjs --write` 自动更新行数和测试数，再用 `npm run brief:check` 确认通过。
 
 ---
 

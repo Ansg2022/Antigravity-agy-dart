@@ -226,10 +226,16 @@ node scripts/install.mjs tool-loading eager         # All 12 tools eager-loaded
 npm test                                    # Run full test suite
 npm run verify:pkg                          # Verify installer file list
 npm run prefix:budget                       # Estimate configured Antigravity startup and full-catalog token usage
+npm run brief:check                         # Check that AI_REVIEW_BRIEF.md line/test counts are up to date
 node scripts/cache-audit.mjs --workspace . --no-live
 node bin/agy-dart.mjs audit skills --workspace .   # Audit Skills Turn-0 frontmatter tax & progressive disclosure
 npm run cache:simulate
 ```
+
+After adding, removing, or editing modules or tests, keep these three places in sync so local checks stay green:
+- **Installer file list** (`scripts/install.mjs`): update `RUNTIME_FILES` (installed by default) or `DEVTOOLS_FILES` (`--with-devtools`) whenever files are added or removed, or `npm run verify:pkg` will fail.
+- **Test count check** (`tests/v1.2-hardening.test.mjs`): when the test count changes, update the hardcoded `computeBriefMetrics(ROOT).testCases` number to match `npm test`.
+- **Review brief** (`AI_REVIEW_BRIEF.md`): after changing tracked source files or test counts, run `node scripts/gen-review-brief.mjs --write` to refresh the numbers, then verify with `npm run brief:check`.
 
 ---
 
