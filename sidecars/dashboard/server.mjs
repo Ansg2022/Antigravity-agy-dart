@@ -160,6 +160,33 @@ function isSidecarConversationKilled(conversationId, { store = null, transcriptP
   return Boolean(summary.killed);
 }
 
+function isSidecarConversationArchived(conversationId, { store = null, transcriptPath = "", allowDefaultDb = null } = {}) {
+  if (!conversationId || conversationId === "__unbound__" || !isSafeConversationId(conversationId)) {
+    return false;
+  }
+  const activeStore = store || _runtimeStore;
+  const effectiveAllowDefaultDb = allowDefaultDb !== null ? Boolean(allowDefaultDb) : isDefaultRuntimeStoreDb(activeStore);
+  const lease = activeStore ? readWatchdogLease(activeStore, conversationId) : null;
+  const txPath = transcriptPath || lease?.transcriptPath || "";
+  if (!effectiveAllowDefaultDb && !txPath) return false;
+  const summary = lookupConversationSummary(conversationId, {
+    transcriptPath: txPath,
+    allowDefaultDb: effectiveAllowDefaultDb,
+    checkArchived: true
+  });
+  return Boolean(summary.archived);
+}
+
+function isMetadataTruthyFlag(val) {
+  if (val === true) return true;
+  if (typeof val === "number") return Number.isFinite(val) && val > 0;
+  if (typeof val === "string") {
+    const trimmed = val.trim().toLowerCase();
+    return trimmed === "true" || /^[1-9]\d*$/.test(trimmed);
+  }
+  return false;
+}
+
 export async function sendSidecarKeepaliveMessage(
   conversationId,
   message,
@@ -180,6 +207,10 @@ export async function sendSidecarKeepaliveMessage(
   if (isSidecarConversationKilled(conversationId, { allowDefaultDb: allowDefaultSummaryDb })) {
     _convProjectIdCache.delete(conversationId);
     return { ok: false, skippedKilled: true, error: "killed_conversation_keepalive_suppressed" };
+  }
+  if (isSidecarConversationArchived(conversationId, { allowDefaultDb: allowDefaultSummaryDb })) {
+    _convProjectIdCache.delete(conversationId);
+    return { ok: false, skippedArchived: true, error: "archived_conversation_keepalive_suppressed" };
   }
 
   const cachedProjectId = _convProjectIdCache.get(conversationId) || "";
@@ -202,6 +233,17 @@ export async function sendSidecarKeepaliveMessage(
     ) {
       _convProjectIdCache.delete(conversationId);
       return { ok: false, skippedKilled: true, error: "killed_conversation_keepalive_suppressed" };
+    }
+    const metaAnnotations =
+      (metaObj.annotations && typeof metaObj.annotations === "object" ? metaObj.annotations : null) ||
+      (metaEvent?.annotations && typeof metaEvent.annotations === "object" ? metaEvent.annotations : null);
+    if (
+      isMetadataTruthyFlag(metaObj.archived) ||
+      isMetadataTruthyFlag(metaEvent?.archived) ||
+      isMetadataTruthyFlag(metaAnnotations?.archived)
+    ) {
+      _convProjectIdCache.delete(conversationId);
+      return { ok: false, skippedArchived: true, error: "archived_conversation_keepalive_suppressed" };
     }
     const resolvedId = metaObj.projectId || metaObj.project_id || "";
     if (typeof resolvedId === "string" && resolvedId.trim()) {

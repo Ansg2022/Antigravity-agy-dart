@@ -27,6 +27,11 @@ async function outline() {
 }
 try {
   if(cmd==="outline") await outline();
+  else if(cmd==="dashboard") {
+    const r=spawnSync(process.execPath,[path.join(src,"sidecars/dashboard/server.mjs"),...args],{stdio:"inherit",windowsHide:true});
+    if(r.error) throw r.error;
+    process.exitCode=r.status??1;
+  }
   else if(["install","uninstall","doctor","status","mode","tool-loading"].includes(cmd)) await runTargets(src,[cmd,...args]);
   else if(["compare","session","cache","audit"].includes(cmd)) {
     let script="fast/benchmark.mjs", pass=[cmd,...args];
@@ -42,6 +47,6 @@ try {
     const r=spawnSync(process.execPath,[path.join(src,script),...pass],{stdio:"inherit",windowsHide:true});
     if(r.error) throw r.error;
     process.exitCode=r.status??1;
-  } else if(!cmd || cmd==="--help" || cmd==="-h") console.log("agy-dart install|uninstall|doctor|status|mode|tool-loading|outline|compare|session|cache|audit");
+  } else if(!cmd || cmd==="--help" || cmd==="-h") console.log("agy-dart install|uninstall|doctor|status|mode|tool-loading|dashboard|outline|compare|session|cache|audit");
   else throw Error("Unknown command: "+cmd);
 } catch(error) {console.error(error.message);process.exitCode=1;}

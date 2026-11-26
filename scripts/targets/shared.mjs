@@ -227,7 +227,7 @@ export function skillSpecs(home, dir, src) {
 }
 export function cleanupRuntime(home) {
   const base = path.join(home,".agy-dart");
-  if (["claude","codex"].some(host => read(path.join(base,host+"-install.json")) !== null)) return;
+  if (["claude","codex","dsh"].some(host => read(path.join(base,host+"-install.json")) !== null)) return;
   const dir = path.join(base,"runtime"), marker = path.join(dir,".installed-files.json");
   const list = read(marker);
   if (!list) return;

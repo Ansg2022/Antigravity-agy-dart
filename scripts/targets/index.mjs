@@ -3,13 +3,18 @@ import os from "node:os";
 import path from "node:path";
 import * as claude from "./claude-code.mjs";
 import * as codex from "./codex.mjs";
+import * as dsh from "./dsh.mjs";
 import * as agy from "./antigravity.mjs";
 import { cleanupRuntime, guardPath, manageFiles, read, serverCommands, syncSharedRuntime } from "./shared.mjs";
 import { RUNTIME_FILES, FILES_TO_COPY, checkNodeAndSqlite, verifyMcpServer } from "../install.mjs";
 export async function runTargets(src, argv, home=os.homedir()) {
   const args=[...argv], at=args.indexOf("--target");
   const names=at<0?["agy"]:String(args.splice(at,2)[1]).split(",");
-  const adapters={claude,codex};
+  const profileAt=args.indexOf("--profile");
+  const profile=profileAt<0?undefined:String(args.splice(profileAt,2)[1] ?? "");
+  const mcpOnlyAt=args.indexOf("--mcp-only");
+  const mcpOnly=mcpOnlyAt<0?undefined:(args.splice(mcpOnlyAt,1),true);
+  const adapters={claude,codex,dsh};
   const targets=new Set(names.flatMap(name=>name==="all"?["agy",...Object.keys(adapters).filter(k=>adapters[k].detect(home))]:[name]));
   const action=args[0];
   for(const name of targets) {
@@ -30,7 +35,7 @@ export async function runTargets(src, argv, home=os.homedir()) {
     for(const name of targets) {
     if(name==="agy"){agy.run(src,args);continue;}
     const runtime=path.join(home,".agy-dart/runtime");
-    const specs=adapters[name].specs(home,src,runtime);
+    const specs=adapters[name].specs(home,src,runtime,{profile,mcpOnly});
     if(action==="install") {
       syncSharedRuntime(src,home,args.includes("--with-devtools")?FILES_TO_COPY:RUNTIME_FILES);
       manageFiles(home,name,specs,action);

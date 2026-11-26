@@ -36,7 +36,7 @@ No extra dependencies · Works automatically in the background · Built-in Sidec
 
 ## What does this Google Antigravity plugin do?
 
-`agy-dart` is a performance, KV-cache, and context-window plugin for **Google Antigravity** (also supports Claude Code and Codex via `--target`). It reduces repeated reads and large tool results, shows prompt-cache usage, and helps you resume work in a new chat when a session fills up or stalls.
+`agy-dart` is a performance, KV-cache, and context-window plugin for **Google Antigravity** (also supports DeepSeek Harness, Claude Code, and Codex via `--target`). It reduces repeated reads and large tool results, shows prompt-cache usage, and helps you resume work in a new chat when a session fills up or stalls.
 
 Once installed, it runs automatically in the background — no new commands to learn, just chat and code as usual:
 
@@ -77,13 +77,13 @@ Use **Node.js 22.16.0 or later in the 22.x line, or Node.js 24 or later**. The i
 **Windows (PowerShell):**
 
 ```powershell
-irm https://raw.githubusercontent.com/zou172866/Antigravity-agy-dart/v1.7.6/install.ps1 | iex
+irm https://raw.githubusercontent.com/zou172866/Antigravity-agy-dart/v1.7.7/install.ps1 | iex
 ```
 
 **macOS / Linux:**
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/zou172866/Antigravity-agy-dart/v1.7.6/install.sh | sh
+curl -fsSL https://raw.githubusercontent.com/zou172866/Antigravity-agy-dart/v1.7.7/install.sh | sh
 ```
 
 ### Option 2: Let Antigravity install it
@@ -91,13 +91,13 @@ curl -fsSL https://raw.githubusercontent.com/zou172866/Antigravity-agy-dart/v1.7
 Send this to Antigravity:
 
 ```text
-Clone tag v1.7.6 of https://github.com/zou172866/Antigravity-agy-dart.git to a temp folder, run `node scripts/install.mjs install` (add `--install-rg` on Windows if `rg` is missing), and confirm `doctor` passes.
+Clone tag v1.7.7 of https://github.com/zou172866/Antigravity-agy-dart.git to a temp folder, run `node scripts/install.mjs install` (add `--install-rg` on Windows if `rg` is missing), and confirm `doctor` passes.
 ```
 
 ### Option 3: Clone & install with custom flags
 
 ```powershell
-git clone --branch v1.7.6 --depth 1 https://github.com/zou172866/Antigravity-agy-dart.git
+git clone --branch v1.7.7 --depth 1 https://github.com/zou172866/Antigravity-agy-dart.git
 cd Antigravity-agy-dart
 
 # Windows PowerShell (optional -InstallRg auto-installs ripgrep)
@@ -153,6 +153,10 @@ node scripts/install.mjs tool-loading eager         # All 12 tools eager-loaded
 ---
 
 ## Changelog
+
+### v1.7.7
+- **DeepSeek Harness (`dsh`) native support (`--target dsh`)**: Added a zero-dependency native Cordis plugin (`dsh/plugin.mjs`) and `--target dsh` installer (`--profile <name>` / `--mcp-only`) that mounts both MCP servers (`agy_dart_fast` & `agy_dart_context` with tuned `toolCallTimeoutMs`), bridges DSH native `tools/pre-execute` / `tools/execute` / `tools/result` (supporting `read`, Windows `pwsh`, `bash`, `edit`, `write`, `apply_patch`), syncs `~/.dsh/skills/agy-dart/`, and adds `node bin/agy-dart.mjs dashboard` to open the live dashboard standalone. Zero token or behavior overhead on Antigravity.
+- **Archived-conversation keepalive guard**: Automatically suppresses background auto-keepalive pings, manual warm-ups, and desktop alerts for archived conversations without losing state, and cleanly resumes when unarchived.
 
 ### v1.7.6
 - **One-click self-update & startup version check in the panel** (thanks to [@bestmulicc](https://github.com/bestmulicc), [#5](https://github.com/zou172866/Antigravity-agy-dart/pull/5)): The right-sidebar panel now checks GitHub Releases for new versions on startup (disable via `autoUpdateCheck: false` in `~/.agy-dart/config.json` or `AGY_DART_DISABLE_AUTO_UPDATE_CHECK=1`) and lets you click **Check Update** / **Update Now** to upgrade in place without running terminal commands.
@@ -258,14 +262,14 @@ After adding, removing, or editing modules or tests, keep these three places in 
 
 [MIT License](LICENSE). Incorporates and adapts MIT-licensed code from [INK-Q/agy-fast](https://github.com/INK-Q/agy-fast) and [Domush/antigravity-plugin-context-mode](https://github.com/Domush/antigravity-plugin-context-mode); full third-party notices are in [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
 
-## CLI (Antigravity / Claude Code / Codex)
+## CLI (Antigravity / DeepSeek Harness / Claude Code / Codex)
 
-`node bin/agy-dart.mjs` installs for Antigravity by default; pass `--target claude` or `--target codex` for Claude Code or Codex. You can also run `outline <file>` to print a file's function map with line numbers, `session <id>` to inspect one chat's token bill, or `compare <before> <after>` to compare two chats.
+`node bin/agy-dart.mjs` installs for Antigravity by default; pass `--target dsh` (optional `--profile <name>` / `--mcp-only`), `--target claude`, or `--target codex` for DeepSeek Harness, Claude Code, or Codex. For DeepSeek Harness, `--target dsh` mounts both MCP servers (`agy_dart_fast` & `agy_dart_context`), the zero-dependency native Cordis guard plugin (`dsh/plugin.mjs`), and `~/.dsh/skills/agy-dart/`; run `node bin/agy-dart.mjs dashboard` to open the live Web dashboard standalone. You can also run `outline <file>` to print a file's function map with line numbers, `session <id>` to inspect one chat's token bill, or `compare <before> <after>` to compare two chats.
 
-When installing for Claude Code or Codex, the installer saves an undo record in `~/.agy-dart/<host>-install.json` so uninstalling cleanly restores your original config.
+When installing for DeepSeek Harness, Claude Code, or Codex, the installer saves an undo record in `~/.agy-dart/<host>-install.json` so uninstalling cleanly restores your original config.
 
 ```sh
-git clone --branch v1.7.6 --depth 1 https://github.com/zou172866/Antigravity-agy-dart.git
+git clone --branch v1.7.7 --depth 1 https://github.com/zou172866/Antigravity-agy-dart.git
 cd Antigravity-agy-dart
 node bin/agy-dart.mjs install
 node bin/agy-dart.mjs doctor

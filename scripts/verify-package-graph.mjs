@@ -1167,8 +1167,8 @@ export function verifyPackageManifest(rootDir = REPO_ROOT) {
   const overlap = RUNTIME_FILES.filter((rel) => devtoolsSet.has(rel));
 
   const runtimeEntries = discoverRuntimeEntrypoints(rootDir);
-  const runtimeAssets = ["agents/dart-coder.md", "agents/dart-reviewer.md"];
-  const targetModules = ["shared", "antigravity", "claude-code", "codex", "index"].map(name => "scripts/targets/" + name + ".mjs");
+  const runtimeAssets = ["agents/dart-coder.md", "agents/dart-reviewer.md", "dsh/plugin.mjs"];
+  const targetModules = ["shared", "antigravity", "claude-code", "codex", "dsh", "index"].map(name => "scripts/targets/" + name + ".mjs");
   const runtimeGraph = collectImportGraph([...runtimeEntries, ...runtimeAssets, ...targetModules], rootDir);
   const missingFromRuntimeManifest = runtimeGraph.reachable.filter((rel) => !runtimeSet.has(rel));
   const devtoolsLeakedIntoRuntime = runtimeGraph.reachable.filter((rel) => devtoolsSet.has(rel));

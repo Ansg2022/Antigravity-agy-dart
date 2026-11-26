@@ -1420,9 +1420,130 @@ export function readConversationParentId(db, conversationId, summaryParent) {
   }
 }
 
+const MAX_ANNOTATION_FILE_BYTES = 65536;
+
 /**
- * Read-only, fail-open lookup of Antigravity's official short conversation title
- * and fallback workspace root from `conversation_summaries.db` (zero user-prompt leakage).
+ * Parse the top-level `archived` boolean from an Antigravity `.pbtxt` annotation file.
+ * Strips quoted string literals, comments, and nested `{...}` / `<...>` blocks first so a
+ * conversation title like `title:"archived:true"` or a nested field can never false-trigger.
+ * Returns `true`, `false`, or `null` (when unset/unreadable).
+ */
+export function parseAnnotationArchivedStatus(rawText) {
+  if (typeof rawText !== "string" || !rawText) return null;
+  let topLevel = "";
+  let depth = 0;
+  let quote = "";
+  let escaped = false;
+  let inComment = false;
+  for (let i = 0; i < rawText.length; i += 1) {
+    const ch = rawText[i];
+    if (inComment) {
+      if (ch === "\n" || ch === "\r") {
+        inComment = false;
+        if (depth === 0) topLevel += " ";
+      }
+      continue;
+    }
+    if (quote) {
+      if (escaped) {
+        escaped = false;
+      } else if (ch === "\\") {
+        escaped = true;
+      } else if (ch === quote) {
+        quote = "";
+        if (depth === 0) topLevel += " ";
+      }
+      continue;
+    }
+    if (ch === "#") {
+      inComment = true;
+      continue;
+    }
+    if (ch === '"' || ch === "'") {
+      quote = ch;
+      continue;
+    }
+    if (ch === "{" || ch === "<") {
+      depth += 1;
+      if (depth === 1) topLevel += " ";
+      continue;
+    }
+    if (ch === "}" || ch === ">") {
+      if (depth > 0) depth -= 1;
+      if (depth === 0) topLevel += " ";
+      continue;
+    }
+    if (depth === 0) {
+      topLevel += ch;
+    }
+  }
+  const re = /(?:^|[\s;,])archived\s*:\s*(true|false|1|0)(?=$|[\s;,])/gi;
+  let result = null;
+  let m;
+  while ((m = re.exec(topLevel)) !== null) {
+    const val = m[1].toLowerCase();
+    result = val === "true" || val === "1";
+  }
+  return result;
+}
+
+function readConversationAnnotationArchived(agRoot, conversationId) {
+  const safeId = sanitizeConversationId(conversationId);
+  if (!agRoot || !safeId) return null;
+  const annDir = path.resolve(agRoot, "annotations");
+  const annPath = path.resolve(annDir, `${safeId}.pbtxt`);
+  const rel = path.relative(
+    process.platform === "win32" ? annDir.toLowerCase() : annDir,
+    process.platform === "win32" ? annPath.toLowerCase() : annPath
+  );
+  if (!rel || rel === ".." || rel.startsWith(`..${path.sep}`) || rel.startsWith("../") || path.isAbsolute(rel)) {
+    return null;
+  }
+  let fd = null;
+  try {
+    if (!fs.existsSync(annPath)) return null;
+    fd = fs.openSync(annPath, "r");
+    const st = fs.fstatSync(fd);
+    if (!st.isFile() || st.size <= 0) return null;
+    const toRead = Math.min(MAX_ANNOTATION_FILE_BYTES, st.size);
+    const buf = Buffer.allocUnsafe(toRead);
+    const bytesRead = fs.readSync(fd, buf, 0, toRead, 0);
+    if (bytesRead <= 0) return null;
+    return parseAnnotationArchivedStatus(buf.subarray(0, bytesRead).toString("utf8"));
+  } catch {
+    return null;
+  } finally {
+    if (fd !== null) {
+      try {
+        fs.closeSync(fd);
+      } catch {}
+    }
+  }
+}
+
+function readConversationFtsArchived(db, conversationId) {
+  if (!db || !conversationId) return null;
+  try {
+    const row = db
+      .prepare("SELECT MAX(archived) AS archived FROM conversations_fts WHERE conversation_id = ?")
+      .get(conversationId);
+    if (!row || row.archived === null || row.archived === undefined) return null;
+    if (row.archived === true) return true;
+    const rawStr = typeof row.archived === "string" ? row.archived.trim().toLowerCase() : "";
+    if (rawStr === "true") return true;
+    if (rawStr === "false") return false;
+    const n = Number(row.archived);
+    if (Number.isFinite(n)) return n > 0;
+    return null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Read-only, fail-open lookup of Antigravity's official short conversation title,
+ * archive/killed status, and fallback workspace root from `conversation_summaries.db`
+ * and sibling `annotations/<id>.pbtxt` (zero user-prompt leakage).
  */
 export function lookupConversationSummary(conversationId, options = {}) {
   const safeId = sanitizeConversationId(conversationId);
@@ -1449,18 +1570,20 @@ export function lookupConversationSummary(conversationId, options = {}) {
       cwd: inlineCwd,
       isSubagent: inlineSubagent,
       killed: false,
+      archived: false,
       parentConversationId: inlineParent,
       nestingDepth: 0,
       agentName: ""
     };
   }
-  if (inlineTitle && inlineCwd && !safeOpts.checkSubagent) {
+  if (inlineTitle && inlineCwd && !safeOpts.checkSubagent && !safeOpts.checkArchived) {
     return {
       found: false,
       title: inlineTitle,
       cwd: inlineCwd,
       isSubagent: inlineSubagent,
       killed: false,
+      archived: false,
       parentConversationId: inlineParent,
       nestingDepth: 0,
       agentName: ""
@@ -1473,7 +1596,11 @@ export function lookupConversationSummary(conversationId, options = {}) {
     allowDefaultDb: safeOpts.allowDefaultDb !== false
   });
 
+  let fallbackArchived = false;
   for (const dbPath of dbCandidates) {
+    const agRoot = path.dirname(dbPath);
+    const annArchived = readConversationAnnotationArchived(agRoot, safeId);
+    if (annArchived === true) fallbackArchived = true;
     let db = null;
     try {
       if (!fs.existsSync(dbPath)) continue;
@@ -1517,6 +1644,8 @@ export function lookupConversationSummary(conversationId, options = {}) {
           : 0;
         const dbAgent = typeof row.agent_name === "string" ? row.agent_name.trim().slice(0, 96) : "";
         const dbKilled = Boolean(row.killed === true || (Number.isFinite(Number(row.killed)) && Number(row.killed) > 0));
+        const dbArchived =
+          annArchived !== null ? annArchived : readConversationFtsArchived(db, safeId) === true;
         const dbSubagent = isSummaryMetadataSubagent({
           conversationId: safeId,
           parentConversationId: dbParent,
@@ -1531,10 +1660,14 @@ export function lookupConversationSummary(conversationId, options = {}) {
           cwd: inlineCwd || dbCwd,
           isSubagent: Boolean(inlineSubagent || dbSubagent),
           killed: dbKilled,
+          archived: dbArchived,
           parentConversationId: inlineParent || dbParent,
           nestingDepth: dbDepth,
           agentName: dbAgent
         };
+      }
+      if (annArchived === null && readConversationFtsArchived(db, safeId) === true) {
+        fallbackArchived = true;
       }
     } catch {
       // Fail-open on locked/corrupt/unreadable summary DB
@@ -1553,6 +1686,7 @@ export function lookupConversationSummary(conversationId, options = {}) {
     cwd: inlineCwd,
     isSubagent: inlineSubagent,
     killed: false,
+    archived: fallbackArchived,
     parentConversationId: inlineParent,
     nestingDepth: 0,
     agentName: ""

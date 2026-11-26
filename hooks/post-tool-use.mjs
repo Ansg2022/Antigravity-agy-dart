@@ -178,14 +178,32 @@ export function extractInvalidationTargets(toolName, args = {}, cwd = process.cw
     return path.isAbsolute(cleaned) ? path.normalize(cleaned) : path.resolve(cwd, cleaned);
   };
 
+  const lowerBare = bareTool.toLowerCase();
   if (
     bareTool === "edit_file" ||
     bareTool === "write_file" ||
     bareTool === "replace_file_content" ||
     bareTool === "multi_replace_file_content" ||
-    bareTool === "write_to_file"
+    bareTool === "write_to_file" ||
+    lowerBare === "edit" ||
+    lowerBare === "write" ||
+    (lowerBare === "str_replace_editor" && String(args.command || "").toLowerCase() !== "view")
   ) {
-    addPath(args.Path || args.path || args.TargetFile || args.targetFile || args.filePath || args.AbsolutePath || args.absolutePath);
+    addPath(
+      args.Path ||
+        args.path ||
+        args.file_path ||
+        args.TargetFile ||
+        args.targetFile ||
+        args.filePath ||
+        args.AbsolutePath ||
+        args.absolutePath
+    );
+  } else if (lowerBare === "apply_patch") {
+    const patchText = typeof args.input === "string" ? args.input : "";
+    for (const m of patchText.matchAll(/^\*\*\*\s+(?:(?:Add|Update|Delete)\s+File|Move\s+to):\s*(.+)$/gim)) {
+      if (m[1]) addPath(m[1]);
+    }
   } else if (bareTool === "apply_edits" || /(?:^|_)apply_edits$/.test(bareTool)) {
     if (!args.dryRun) {
       const editCwd = resolveBaseCwd(args.cwd);
@@ -603,6 +621,8 @@ function extractToolResponseText(payload = {}) {
   const candidates = [
     payload.toolResponse,
     payload.tool_response,
+    payload.toolOutput,
+    payload.tool_output,
     payload.response,
     payload.result,
     payload.output,
@@ -1243,23 +1263,15 @@ export function extractVerificationSignal(toolName, args = {}, responseText = ""
   return null;
 }
 
-async function main() {
-  enableVersionedCompileCache();
-
-  const raw = (await readStdin()).trim();
-  if (!raw) {
-    process.stdout.write("{}\n");
-    return;
+export async function processPostToolPayload(rawPayload) {
+  if (!rawPayload || typeof rawPayload !== "object") return;
+  const payload = { ...rawPayload };
+  if (!payload.toolCall && (payload.hook_event_name === "PostToolUse" || typeof payload.tool_name === "string")) {
+    payload.toolCall = {
+      name: payload.tool_name || "",
+      args: payload.tool_input || {}
+    };
   }
-
-  let payload;
-  try {
-    payload = JSON.parse(raw);
-  } catch {
-    process.stdout.write("{}\n");
-    return;
-  }
-
   const toolCall = payload.toolCall || {};
   const toolName = toolCall.name || "";
   const args = toolCall.args || {};
@@ -1460,6 +1472,27 @@ async function main() {
     }
   }
 
+  return;
+}
+
+async function main() {
+  enableVersionedCompileCache();
+
+  const raw = (await readStdin()).trim();
+  if (!raw) {
+    process.stdout.write("{}\n");
+    return;
+  }
+
+  let payload;
+  try {
+    payload = JSON.parse(raw);
+  } catch {
+    process.stdout.write("{}\n");
+    return;
+  }
+
+  await processPostToolPayload(payload);
   process.stdout.write("{}\n");
 }
 

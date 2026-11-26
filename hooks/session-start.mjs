@@ -293,6 +293,20 @@ async function main() {
     process.stdout.write("{}\n");
     return;
   }
+  const isBridge =
+    payload?.hook_event_name === "SessionStart" ||
+    process.env.AGY_DART_HOOK_PROTOCOL === "claude-code";
+  if (isBridge) {
+    process.stdout.write(
+      JSON.stringify({
+        hookSpecificOutput: {
+          hookEventName: "SessionStart",
+          additionalContext: mergedText
+        }
+      }) + "\n"
+    );
+    return;
+  }
   process.stdout.write(
     JSON.stringify({
       injectSteps: [

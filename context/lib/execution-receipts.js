@@ -22,8 +22,8 @@ function unquoteScalar(val) {
   return trimmed;
 }
 
-const CONTEXT_RECEIPT_TOOL_RE = /^(?:mcp_+agy-dart_context_+)?(ctx_execute|ctx_index|ctx_batch)$/;
-const FAST_SAVINGS_TOOL_RE = /^(?:mcp_+agy-dart_fast_+)?(read_slices|run_checks|batch_search)$/;
+const CONTEXT_RECEIPT_TOOL_RE = /^(?:mcp_+agy[-_]dart_context_+)?(ctx_execute|ctx_index|ctx_batch)$/;
+const FAST_SAVINGS_TOOL_RE = /^(?:mcp_+agy[-_]dart_fast_+)?(read_slices|run_checks|batch_search)$/;
 
 // Antigravity can JSON-quote individual wrapper arguments in a transcript.
 export function isContextExecution(call) {
@@ -35,7 +35,7 @@ export function isContextExecution(call) {
   const args = call.args || {};
   const server = unquoteScalar(args.ServerName ?? args.serverName);
   const tool = unquoteScalar(args.ToolName ?? args.toolName);
-  return server === "agy-dart_context" && CONTEXT_RECEIPT_TOOLS.has(tool);
+  return (server === "agy-dart_context" || server === "agy_dart_context") && CONTEXT_RECEIPT_TOOLS.has(tool);
 }
 
 export function extractFastSavingsToolName(call) {
@@ -46,7 +46,7 @@ export function extractFastSavingsToolName(call) {
   const args = call.args || {};
   const server = unquoteScalar(args.ServerName ?? args.serverName);
   const tool = unquoteScalar(args.ToolName ?? args.toolName);
-  if (server === "agy-dart_fast" && FAST_SAVINGS_TOOLS.has(tool)) {
+  if ((server === "agy-dart_fast" || server === "agy_dart_fast") && FAST_SAVINGS_TOOLS.has(tool)) {
     return tool;
   }
   return null;

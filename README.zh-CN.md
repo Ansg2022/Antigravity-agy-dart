@@ -36,7 +36,7 @@
 
 ## 这个 Google Antigravity 插件是干什么的？
 
-`agy-dart` 是专为 **Google Antigravity** 打造的性能、缓存与上下文管理插件（同时支持通过 `--target` 安装到 Claude Code 与 Codex）：减少重复读取和过长的工具输出，查看缓存用量，会话占满上下文或卡住时可以把进度带到新对话。
+`agy-dart` 是专为 **Google Antigravity** 打造的性能、缓存与上下文管理插件（同时支持通过 `--target` 安装到 DeepSeek Harness、Claude Code 与 Codex）：减少重复读取和过长的工具输出，查看缓存用量，会话占满上下文或卡住时可以把进度带到新对话。
 
 装好之后在后台自动生效，不用记新命令，平时照常打字聊天就行：
 
@@ -77,13 +77,13 @@ AI 要搜好几个词时一次同时搜完，要改多个文件时一次改完�
 **Windows（PowerShell）：**
 
 ```powershell
-irm https://raw.githubusercontent.com/zou172866/Antigravity-agy-dart/v1.7.6/install.ps1 | iex
+irm https://raw.githubusercontent.com/zou172866/Antigravity-agy-dart/v1.7.7/install.ps1 | iex
 ```
 
 **macOS / Linux：**
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/zou172866/Antigravity-agy-dart/v1.7.6/install.sh | sh
+curl -fsSL https://raw.githubusercontent.com/zou172866/Antigravity-agy-dart/v1.7.7/install.sh | sh
 ```
 
 ### 方法二：直接发给 Antigravity 装
@@ -91,13 +91,13 @@ curl -fsSL https://raw.githubusercontent.com/zou172866/Antigravity-agy-dart/v1.7
 复制这句发给 Antigravity：
 
 ```text
-请将 https://github.com/zou172866/Antigravity-agy-dart.git 的 v1.7.6 标签克隆到临时目录，运行其中的 scripts/install.mjs install 完成全局安装并跑 doctor 自检（Windows 如未安装 rg 请同时传 --install-rg）。
+请将 https://github.com/zou172866/Antigravity-agy-dart.git 的 v1.7.7 标签克隆到临时目录，运行其中的 scripts/install.mjs install 完成全局安装并跑 doctor 自检（Windows 如未安装 rg 请同时传 --install-rg）。
 ```
 
 ### 方法三：克隆仓库自定义安装
 
 ```powershell
-git clone --branch v1.7.6 --depth 1 https://github.com/zou172866/Antigravity-agy-dart.git
+git clone --branch v1.7.7 --depth 1 https://github.com/zou172866/Antigravity-agy-dart.git
 cd Antigravity-agy-dart
 
 # Windows PowerShell（加 -InstallRg 可顺手自动安装快速搜索工具 rg）
@@ -145,6 +145,10 @@ node scripts/install.mjs tool-loading eager         # 12 个工具全部预载
 ---
 
 ## 更新日志
+
+### v1.7.7
+- **原生适配 DeepSeek Harness（`--target dsh`）**：新增零依赖原生 Cordis 插件（`dsh/plugin.mjs`）与 `--target dsh` 一等宿主安装器（支持 `--profile <名称>` 与 `--mcp-only`），自动在 `cordis.patch.yml` 挂载双 MCP（含 180s/310s 超时配置）、通过 DSH 原生 `tools/pre-execute` / `tools/execute` / `tools/result` 护航 `read` / Windows `pwsh` / `bash` / `edit` / `write` / `apply_patch`，同步 `~/.dsh/skills/agy-dart/`，并新增 `node bin/agy-dart.mjs dashboard` 独立拉起浏览器诊断面板；Antigravity 端零破坏、0 Token 增量。
+- **已归档对话自动停用保活守护**：自动识别已归档对话并暂停后台自动保活、手动预热与桌面弹窗，取消归档后自动恢复且不丢失会话状态。
 
 ### v1.7.6
 - **面板新增一键在线更新与启动版本检查**（感谢 [@bestmulicc](https://github.com/bestmulicc) 贡献，[#5](https://github.com/zou172866/Antigravity-agy-dart/pull/5)）：右侧面板启动时会自动检查 GitHub 是否有新版本（可在 `~/.agy-dart/config.json` 设 `autoUpdateCheck: false` 或环境变量 `AGY_DART_DISABLE_AUTO_UPDATE_CHECK=1` 关闭），点顶栏「检查更新」/「立即更新」即可原地升级，不用再手动跑终端安装命令。
@@ -254,14 +258,14 @@ npm run cache:simulate
 
 [MIT 协议](LICENSE) 开源。部分代码整合改造自同为 MIT 协议的 [INK-Q/agy-fast](https://github.com/INK-Q/agy-fast) 与 [Domush/antigravity-plugin-context-mode](https://github.com/Domush/antigravity-plugin-context-mode)，完整第三方声明见 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)。
 
-## 命令行工具（支持 Antigravity / Claude Code / Codex）
+## 命令行工具（支持 Antigravity / DeepSeek Harness / Claude Code / Codex）
 
-用 `node bin/agy-dart.mjs` 默认装到 Antigravity，加上 `--target claude` 或 `--target codex` 可以装到 Claude Code 或 Codex。平时也能直接用来查大文件目录（`outline <文件>`）、看某次对话花了多少 token（`session <ID>`），或对比两次对话的消耗（`compare <前> <后>`）。
+用 `node bin/agy-dart.mjs` 默认装到 Antigravity，加上 `--target dsh`（可选 `--profile <名称>` / `--mcp-only`）、`--target claude` 或 `--target codex` 可以装到 DeepSeek Harness、Claude Code 或 Codex。装到 DeepSeek Harness 时会自动在 `cordis.patch.yml` 挂载双 MCP（`agy_dart_fast` 与 `agy_dart_context`）、零依赖原生 Cordis 守卫插件（`dsh/plugin.mjs`）并同步 `~/.dsh/skills/agy-dart/`；运行 `node bin/agy-dart.mjs dashboard` 可在浏览器独立打开实时诊断面板。平时也能直接用来查大文件目录（`outline <文件>`）、看某次对话花了多少 token（`session <ID>`），或对比两次对话的消耗（`compare <前> <后>`）。
 
-装到 Claude Code 或 Codex 时，安装器会把改动记录存在 `~/.agy-dart/<宿主名>-install.json` 里，方便以后卸载时干净还原，不会弄乱你原本的配置。
+装到 DeepSeek Harness、Claude Code 或 Codex 时，安装器会把改动记录存在 `~/.agy-dart/<宿主名>-install.json` 里，方便以后卸载时干净还原，不会弄乱你原本的配置。
 
 ```sh
-git clone --branch v1.7.6 --depth 1 https://github.com/zou172866/Antigravity-agy-dart.git
+git clone --branch v1.7.7 --depth 1 https://github.com/zou172866/Antigravity-agy-dart.git
 cd Antigravity-agy-dart
 node bin/agy-dart.mjs install
 node bin/agy-dart.mjs doctor

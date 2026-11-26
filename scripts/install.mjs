@@ -233,6 +233,7 @@ export const RUNTIME_FILES = Object.freeze([
   "hooks/stop.mjs",
   "hooks/cli-filter.mjs",
   "hooks/filter-rules.mjs",
+  "dsh/plugin.mjs",
   "sidecars/dashboard/sidecar.json",
   "sidecars/dashboard/server.mjs",
   "sidecars/dashboard/index.html",
@@ -244,6 +245,7 @@ export const RUNTIME_FILES = Object.freeze([
   "scripts/targets/antigravity.mjs",
   "scripts/targets/codex.mjs",
   "scripts/targets/claude-code.mjs",
+  "scripts/targets/dsh.mjs",
   "scripts/targets/index.mjs"
 ]);
 

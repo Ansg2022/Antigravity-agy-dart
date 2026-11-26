@@ -64,6 +64,7 @@ import {
   lookupConversationSummary,
   lookupConversationTitle,
   normalizeWatchdogLease,
+  parseAnnotationArchivedStatus,
   parseMaybeJsonObj,
   parseStepPrefillTimestampInfo,
   parseStepPrefillTimestampMs,
@@ -84,6 +85,7 @@ export {
   hasPendingKeepaliveColdCheck,
   inspectLatestTurnInSteps,
   isKeepaliveTurnFlushedForRound,
+  parseAnnotationArchivedStatus,
   parseStepPrefillTimestampInfo,
   parseStepPrefillTimestampMs,
   readWatchdogTranscriptTail,
@@ -2154,6 +2156,31 @@ export class WatchdogMonitor {
     return false;
   }
 
+  _isConversationArchived(store, conversationId, leaseInput = null) {
+    const cleanId = sanitizeConversationId(conversationId);
+    if (!cleanId || cleanId === "__unbound__") return false;
+    const lease =
+      leaseInput && leaseInput.conversationId === cleanId
+        ? leaseInput
+        : store
+          ? readWatchdogLease(store, cleanId)
+          : null;
+    const allowDefaultDb = this._shouldAllowDefaultSummaryDb(store);
+    const txPath = lease?.transcriptPath || "";
+    if (!allowDefaultDb && !txPath && !this._hasCustomLookupSummary) return false;
+    try {
+      const summary = this.lookupSummaryFn?.(cleanId, {
+        transcriptPath: txPath,
+        allowDefaultDb,
+        checkArchived: true
+      });
+      if (summary && summary.archived === true) {
+        return true;
+      }
+    } catch {}
+    return false;
+  }
+
   _resolveGlobalTtlKeepaliveMaxCount(store, cfg) {
     if (this._isTtlKeepaliveForcedOffByEnv()) return 0;
     const clampGlobal = (v) => Math.min(20, Math.max(0, Math.floor(Number(v))));
@@ -2576,7 +2603,7 @@ export class WatchdogMonitor {
         lastDispatchId: prevDispatchId,
         lastDispatchMode: prevDispatchMode,
         pendingColdCheckId: prevPendingColdCheckId,
-        lastError: String(errMsg || "keepalive_send_failed").slice(0, 180),
+        lastError: mode === "archived" ? "" : String(errMsg || "keepalive_send_failed").slice(0, 180),
         updatedTs: this.nowFn()
       });
       return true;
@@ -2832,7 +2859,8 @@ export class WatchdogMonitor {
 
       if (
         this._isConversationSubagent(store, lease.conversationId, workingLease, { requireDefinitive: true }) ||
-        this._isConversationKilled(store, lease.conversationId, workingLease)
+        this._isConversationKilled(store, lease.conversationId, workingLease) ||
+        this._isConversationArchived(store, lease.conversationId, workingLease)
       ) {
         exhaustedConvMap.delete(lease.conversationId);
         continue;
@@ -3072,6 +3100,16 @@ export class WatchdogMonitor {
             );
             return;
           }
+          if (res && res.skippedArchived === true) {
+            this._rollbackKeepaliveClaimIfOwned(
+              store,
+              convId,
+              claimMeta,
+              res.error || "archived_conversation_keepalive_suppressed",
+              { mode: "archived" }
+            );
+            return;
+          }
           if (res && res.ok === false) {
             throw new Error(res.error || "keepalive_send_failed");
           }
@@ -3132,6 +3170,9 @@ export class WatchdogMonitor {
     }
     if (this._isConversationKilled(store, convId, lease)) {
       return { ok: true, dispatched: false, skippedReason: "killed", conversationId: convId };
+    }
+    if (this._isConversationArchived(store, convId, lease)) {
+      return { ok: true, dispatched: false, skippedReason: "archived", conversationId: convId };
     }
     if (!lease) {
       return { ok: true, dispatched: false, skippedReason: "no_lease", conversationId: convId };
@@ -3491,6 +3532,16 @@ export class WatchdogMonitor {
           );
           return;
         }
+        if (res && res.skippedArchived === true) {
+          this._rollbackKeepaliveClaimIfOwned(
+            store,
+            convId,
+            claimMeta,
+            res.error || "archived_conversation_keepalive_suppressed",
+            { mode: "archived" }
+          );
+          return;
+        }
         if (res && res.ok === false) {
           throw new Error(res.error || "keepalive_send_failed");
         }
@@ -3599,6 +3650,7 @@ export class WatchdogMonitor {
       if (this._ttlNotifiedKeys.get(lease.conversationId) === dedupKey) continue;
       if (this._lastTtlNotifyGlobalTs > 0 && nowWallMs - this._lastTtlNotifyGlobalTs < 60_000) continue;
       if (this._isConversationKilled(store, lease.conversationId, lease)) continue;
+      if (this._isConversationArchived(store, lease.conversationId, lease)) continue;
 
       const ttlAlertMetaKey = `cache_alert:${lease.conversationId}:ttl_desktop`;
       // Resolve per-window overrides before claiming either kind of TTL popup.
@@ -3754,6 +3806,7 @@ export class WatchdogMonitor {
 
       if (getWmMeta(wmKey) === "critical") continue;
       if (this._isConversationKilled(store, lease.conversationId, lease)) continue;
+      if (this._isConversationArchived(store, lease.conversationId, lease)) continue;
       setWmMeta(wmKey, "critical");
 
       const isZh = uiLang === "zh";

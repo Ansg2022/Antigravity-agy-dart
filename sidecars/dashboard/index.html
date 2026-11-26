@@ -3303,6 +3303,7 @@
         kvWarmSkipNoAnchor: 'Blocked: no valid timing anchor for this session.',
         kvWarmSkipSubagent: 'Subagent sessions cannot be warmed.',
         kvWarmSkipKilled: 'Blocked: conversation has been terminated.',
+        kvWarmSkipArchived: 'Blocked: conversation is archived.',
         kvWarmSkipUnsupported: 'Manual warming is unavailable in this environment.',
         kvWarmErrNote: 'Warm failed: {msg}',
         kaMinCtxLabel: 'Warm ≥',
@@ -3776,6 +3777,7 @@
         kvWarmSkipNoAnchor: '已阻止：缺少可用时间锚点',
         kvWarmSkipSubagent: '子智能体会话不支持续温',
         kvWarmSkipKilled: '已阻止：当前会话已终止',
+        kvWarmSkipArchived: '已阻止：当前会话已归档',
         kvWarmSkipUnsupported: '当前环境无发送能力，不支持手动续温',
         kvWarmErrNote: '续温失败：{msg}',
         kaMinCtxLabel: '续温门槛',
@@ -10347,6 +10349,8 @@
           return { key: 'kvWarmSkipSubagent', params: null, tone: 'warn' };
         case 'killed':
           return { key: 'kvWarmSkipKilled', params: null, tone: 'danger' };
+        case 'archived':
+          return { key: 'kvWarmSkipArchived', params: null, tone: 'warn' };
         case 'unsupported':
           return { key: 'kvWarmSkipUnsupported', params: null, tone: 'warn' };
         default:
