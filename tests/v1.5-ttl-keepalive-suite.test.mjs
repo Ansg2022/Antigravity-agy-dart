@@ -525,7 +525,8 @@ test("v1.5-4: Watchdog IDLE high-context TTL expiry desktop alert — zero statS
     assert.equal(n1.title, "agy-dart: KV-Cache Expiring");
     assert.ok(Buffer.byteLength(n1.title, "utf8") <= 60, `Windows BalloonTipTitle must be <=60B: ${n1.title}`);
     assert.ok(Buffer.byteLength(n1.body, "utf8") <= 220, `Notification body must be <=220B: ${n1.body}`);
-    assert.ok(n1.body.includes("85k") && n1.body.includes("~45s"));
+    // PreInvocation at t0 -> Stop at t0+5s -> +255s idle = 260s from cacheOriginTs (~40s left on 300s TTL)
+    assert.ok(n1.body.includes("85k") && n1.body.includes("~40s"));
     assert.equal(n1.body.includes("TOP_SECRET_USER_PROMPT_DO_NOT_LEAK"), false, "User input must NEVER appear in notification");
 
     const winCmd = buildDesktopNotificationCommand({ title: n1.title, body: n1.body, platform: "win32", baseEnv: {} });

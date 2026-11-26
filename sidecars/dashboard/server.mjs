@@ -14,8 +14,11 @@ import {
   WatchdogMonitor,
   collectChildSubagentActivity,
   classifyTranscriptGenesisFile,
+  computeEffectiveKeepaliveMinRemainSec,
+  hasPendingKeepaliveColdCheck,
   inspectLatestTurnInSteps,
   isHeadlessWorkerPrompt,
+  isKeepalivePendingAckActive,
   isKeepaliveTurnFlushedForRound,
   isSameWorkspacePath,
   isTrajectoryMetadataSubagent,
@@ -990,6 +993,16 @@ function getCacheDiagPayload(data, defaultConvId = "default") {
   const convIntervalSec = isExplicitSubagentForKa
     ? globalTtlKeepaliveIntervalSec
     : store.getTtlKeepaliveIntervalSec(kaConvId || null);
+  const minRemainRaw = cfg.ttlKeepaliveMinRemainSec;
+  const minRemainSec =
+    minRemainRaw !== undefined && minRemainRaw !== null && Number.isFinite(Number(minRemainRaw))
+      ? Math.min(120, Math.max(0, Math.floor(Number(minRemainRaw))))
+      : 15;
+  const leadSec = Math.min(180, Math.max(10, Math.floor(Number(cfg.ttlKeepaliveLeadSec) || 60)));
+  const deliveryCompSec = deliveryLatencyMs > 0 ? Math.min(20, Math.ceil(deliveryLatencyMs / 1000)) : 0;
+  const defaultProfileTtl = resolveModelProfile(null).ttlSec;
+  const initEffLead = Math.min(leadSec, Math.max(5, Math.floor(defaultProfileTtl * 0.5)));
+  const initTriggerLead = Math.min(Math.max(5, Math.floor(defaultProfileTtl * 0.75)), initEffLead + deliveryCompSec);
   const ttlKeepalive = {
     conversationId: kaConvId,
     enabled: isExplicitSubagentForKa ? false : store.isTtlKeepaliveEnabled(kaConvId || null),
@@ -1010,9 +1023,87 @@ function getCacheDiagPayload(data, defaultConvId = "default") {
     usedCount: kaState.usedCount,
     coldMissTripped: Boolean(kaState.coldMissTripped),
     deliveryLatencyMs,
-    leadSec: Math.min(180, Math.max(10, Math.floor(Number(cfg.ttlKeepaliveLeadSec) || 60))),
+    leadSec,
+    minRemainSec,
+    effectiveMinRemainSec: computeEffectiveKeepaliveMinRemainSec(minRemainSec, deliveryCompSec, initTriggerLead),
+    cacheOriginTs: 0,
+    effectiveTtlSec: defaultProfileTtl,
+    estimatedExpireTs: 0,
+    remainingSec: null,
+    narrowMarginSkipped: false,
+    narrowMarginRemSec: null,
+    inFlight: false,
+    pendingAck: Boolean(!isExplicitSubagentForKa && isKeepalivePendingAckActive(kaState)),
+    hasLease: false,
+    leasePhase: "",
+    leaseSubphase: "",
+    leaseStopReason: "",
+    narrowSkippedCount: 0,
+    manualKeepaliveCount: 0,
     lastSentTs: kaState.lastSentTs || 0,
     lastError: kaState.lastError || ""
+  };
+  const mergeWatchdogKeepaliveTelemetry = (baseKa) => {
+    try {
+      const wdMon = getWatchdogMonitor();
+      const targetId = baseKa?.conversationId || "";
+      const wdStatus = wdMon.getStatus({
+        conversationId: targetId,
+        scope,
+        refresh: false,
+        includeRichRescue: false
+      });
+      const wdKa = wdStatus?.ttlKeepalive || null;
+      const wdStats = wdStatus?.stats || null;
+      const narrowSkippedCount = Number(wdStats?.ttlKeepaliveNarrowSkippedCount || 0);
+      const manualKeepaliveCount = Number(wdStats?.manualKeepaliveCount || 0);
+      if (baseKa?.isSubagent) {
+        return {
+          ...baseKa,
+          supported: false,
+          inFlight: false,
+          pendingAck: false,
+          narrowMarginSkipped: false,
+          narrowMarginRemSec: null,
+          hasLease: false,
+          cacheOriginTs: 0,
+          estimatedExpireTs: 0,
+          remainingSec: null,
+          narrowSkippedCount,
+          manualKeepaliveCount
+        };
+      }
+      if (wdKa && wdKa.conversationId === targetId) {
+        return {
+          ...baseKa,
+          supported: Boolean(wdKa.supported),
+          minRemainSec: wdKa.minRemainSec,
+          effectiveMinRemainSec: wdKa.effectiveMinRemainSec,
+          cacheOriginTs: wdKa.cacheOriginTs,
+          effectiveTtlSec: wdKa.effectiveTtlSec,
+          estimatedExpireTs: wdKa.estimatedExpireTs,
+          remainingSec: wdKa.remainingSec,
+          narrowMarginSkipped: Boolean(wdKa.narrowMarginSkipped),
+          narrowMarginRemSec: wdKa.narrowMarginRemSec ?? null,
+          inFlight: Boolean(wdKa.inFlight),
+          pendingAck: Boolean(wdKa.pendingAck),
+          hasLease: Boolean(wdKa.hasLease),
+          leasePhase: wdKa.leasePhase || "",
+          leaseSubphase: wdKa.leaseSubphase || "",
+          leaseStopReason: wdKa.leaseStopReason || "",
+          narrowSkippedCount,
+          manualKeepaliveCount
+        };
+      }
+      return {
+        ...baseKa,
+        supported: typeof wdMon.keepaliveSendFn === "function" && !baseKa?.isSubagent,
+        narrowSkippedCount,
+        manualKeepaliveCount
+      };
+    } catch {
+      return baseKa;
+    }
   };
   const rawTtl = data.ttl !== undefined && data.ttl !== "" ? data.ttl : cfg.cacheTtlSec;
   const explicitTtlSec = parseOptionalPositiveNumber(rawTtl);
@@ -1049,13 +1140,13 @@ function getCacheDiagPayload(data, defaultConvId = "default") {
     const ttlSource = explicitTtlSec !== undefined ? "explicit" : "profile";
     const effTtl = explicitTtlSec ?? defProfile.ttlSec;
     const conversationActive = isSpecificConv ? isSidecarConversationActive(convId, store) : false;
-    const noTxKeepalive = {
+    const noTxKeepalive = mergeWatchdogKeepaliveTelemetry({
       ...ttlKeepalive,
       windowTokens: effectiveWindow,
       minContextTokens: ttlKeepalive.isCustomOverride
         ? 0
         : Math.round((effectiveWindow * globalTtlKeepaliveMinContextPct) / 100)
-    };
+    });
     return {
       ok: true,
       transcriptFound: false,
@@ -1294,21 +1385,43 @@ function getCacheDiagPayload(data, defaultConvId = "default") {
       kaTargetForDiag === resolvedObsConvId
     ) {
       const liveKa = store.getTtlKeepaliveState(kaTargetForDiag);
-      if (
-        liveKa.usedCount >= 1 &&
-        !liveKa.pendingAck &&
-        !liveKa.inKeepaliveTurn &&
-        (liveKa.lastColdCheckUsed || 0) < liveKa.usedCount
-      ) {
+      if (hasPendingKeepaliveColdCheck(liveKa)) {
         const tailToCheck = parsedSteps || readWatchdogTranscriptTail(transcriptPath, 32768).steps;
         const info = inspectLatestTurnInSteps(tailToCheck);
-        if (isKeepaliveTurnFlushedForRound(info, liveKa)) {
-          const nextColdTripped = Boolean(liveKa.coldMissTripped || info.cacheReadTokens === 0);
-          store.setTtlKeepaliveState(kaTargetForDiag, {
-            coldMissTripped: nextColdTripped,
-            lastColdCheckUsed: liveKa.usedCount,
-            updatedTs: Date.now()
-          });
+        if (isKeepaliveTurnFlushedForRound(info, liveKa) && info.cacheReadReported === true) {
+          const expectedDispatchId = liveKa.lastDispatchId || "";
+          const expectedDispatchMode = liveKa.lastDispatchMode || "";
+          const expectedPendingId = liveKa.pendingColdCheckId || "";
+          const expectedLastSentTs = liveKa.lastSentTs || 0;
+          const expectedUsed = liveKa.usedCount || 0;
+          const applyLayer2 = () => {
+            const curKa = store.getTtlKeepaliveState(kaTargetForDiag);
+            if (
+              curKa.lastDispatchId !== expectedDispatchId ||
+              curKa.lastDispatchMode !== expectedDispatchMode ||
+              curKa.pendingColdCheckId !== expectedPendingId ||
+              curKa.lastSentTs !== expectedLastSentTs ||
+              curKa.usedCount !== expectedUsed ||
+              curKa.pendingAck ||
+              curKa.inKeepaliveTurn
+            ) {
+              return Boolean(curKa.coldMissTripped);
+            }
+            const nextColdTripped = Boolean(curKa.coldMissTripped || info.cacheReadTokens === 0);
+            const checkedId = expectedPendingId || expectedDispatchId;
+            store.setTtlKeepaliveState(kaTargetForDiag, {
+              coldMissTripped: nextColdTripped,
+              pendingColdCheckId: "",
+              ...(checkedId ? { lastColdCheckedId: checkedId } : {}),
+              lastColdCheckUsed: Math.max(curKa.usedCount || 0, curKa.lastColdCheckUsed || 0),
+              updatedTs: Date.now()
+            });
+            return nextColdTripped;
+          };
+          const nextColdTripped =
+            typeof store._withWriteTx === "function"
+              ? (store.open?.(), store._withWriteTx(applyLayer2))
+              : applyLayer2();
           effectiveTtlKeepalive = { ...effectiveTtlKeepalive, coldMissTripped: nextColdTripped };
         }
       }
@@ -1348,13 +1461,13 @@ function getCacheDiagPayload(data, defaultConvId = "default") {
       Number(diag?.modelProfile?.windowTokens) > 0
         ? Math.floor(Number(diag.modelProfile.windowTokens))
         : defaultWindowTokens;
-    effectiveTtlKeepalive = {
+    effectiveTtlKeepalive = mergeWatchdogKeepaliveTelemetry({
       ...effectiveTtlKeepalive,
       windowTokens: resolvedWinTokens,
       minContextTokens: effectiveTtlKeepalive.isCustomOverride
         ? 0
         : Math.round((resolvedWinTokens * globalTtlKeepaliveMinContextPct) / 100)
-    };
+    });
 
     const activeTargetConvId = resolvedObsConvId || (isSpecificConv ? convId : "");
     const conversationActive = isSidecarConversationActive(activeTargetConvId, store);
@@ -2246,6 +2359,54 @@ function handleWatchdogActionMutation(data = {}, defaultConvId = "default") {
       status: getScopedStatus({ conversationId: kaConv, scope, refresh: true, includeRichRescue: kaRichAllowed })
     };
   }
+  if (action === "manualTtlKeepalive") {
+    const rawExplicitConv = typeof data.conversationId === "string" ? data.conversationId.trim() : "";
+    const lowerConv = rawExplicitConv.toLowerCase();
+    const isReservedOrUnbound =
+      !rawExplicitConv ||
+      lowerConv === "default" ||
+      lowerConv === "all" ||
+      lowerConv === "lifetime" ||
+      lowerConv === "app" ||
+      lowerConv === "__unbound__" ||
+      lowerConv === "unknown" ||
+      lowerConv === "none" ||
+      lowerConv === "null" ||
+      lowerConv === "undefined";
+    if (
+      unboundHostTab ||
+      scope !== "conversation" ||
+      data.conversationConfirmed === false ||
+      isReservedOrUnbound ||
+      /^-/.test(rawExplicitConv) ||
+      !isSafeConversationId(rawExplicitConv)
+    ) {
+      return {
+        ok: false,
+        status: 400,
+        error: "Invalid, unbound, or unconfirmed 'conversationId' for manualTtlKeepalive"
+      };
+    }
+    const uiLang = typeof store.getUiLang === "function" ? store.getUiLang() : "en";
+    const res = monitor.triggerManualKeepalive(rawExplicitConv, { uiLang });
+    if (res.ok === false) {
+      return {
+        ok: false,
+        status: res.status || 500,
+        error: res.error || "Failed to trigger manual keepalive"
+      };
+    }
+    const manualRichAllowed = Boolean(confirmed && rawExplicitConv === targetConv);
+    return {
+      ...res,
+      status: getScopedStatus({
+        conversationId: rawExplicitConv,
+        scope,
+        refresh: false,
+        includeRichRescue: manualRichAllowed
+      })
+    };
+  }
   if (action === "setUiLang") {
     const requested = typeof data.lang === "string" ? data.lang.trim().toLowerCase() : "";
     if (requested !== "zh" && requested !== "en") {
@@ -2299,7 +2460,7 @@ function handleWatchdogActionMutation(data = {}, defaultConvId = "default") {
     ok: false,
     status: 400,
     error:
-      "Invalid watchdog action: expected 'ack', 'snooze', 'clear', 'markIdle', 'setEnabled', 'setDesktopNotify', 'setTtlDesktopNotify', 'setTtlKeepalive', 'setGlobalTtlKeepalive', 'setTtlKeepaliveMinContextPct', 'resetTtlKeepalive', 'resetTtlKeepaliveOverride', 'setUiLang', 'focusConversation', 'ackJump', or 'tick'"
+      "Invalid watchdog action: expected 'ack', 'snooze', 'clear', 'markIdle', 'setEnabled', 'setDesktopNotify', 'setTtlDesktopNotify', 'setTtlKeepalive', 'manualTtlKeepalive', 'setGlobalTtlKeepalive', 'setTtlKeepaliveMinContextPct', 'resetTtlKeepalive', 'resetTtlKeepaliveOverride', 'setUiLang', 'focusConversation', 'ackJump', or 'tick'"
   };
 }
 
@@ -3027,7 +3188,7 @@ export function registerSidecarRoutes(app) {
   app.api("/api/cache-diag", (rawData) => {
     const data = normalizeSidecarBody(rawData);
     if (!data) return makeBadRequest("Request body must be a JSON object");
-    const check = validateStringFields(data, ["scope", "conversationId", "sessionId"]);
+    const check = validateStringFields(data, ["scope", "conversationId", "sessionId", "cwd"]);
     if (!check.ok) return makeBadRequest(check.error);
     if (data.fromSidecarHost !== undefined && typeof data.fromSidecarHost !== "boolean") {
       return makeBadRequest("Field 'fromSidecarHost' must be a boolean");

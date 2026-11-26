@@ -1095,6 +1095,79 @@
       font-weight: 500;
     }
 
+    .ttl-head-right {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      flex-wrap: wrap;
+      justify-content: flex-end;
+    }
+
+    .warm-now-btn {
+      font-family: inherit;
+      font-size: 11px;
+      line-height: 1.2;
+      font-weight: 500;
+      padding: 2px 8px;
+      border-radius: 999px;
+      border: 1px solid var(--accent-border);
+      background: var(--accent-soft);
+      color: var(--accent-text);
+      cursor: pointer;
+      white-space: nowrap;
+      transition: background-color 140ms ease, border-color 140ms ease, color 140ms ease, opacity 140ms ease;
+    }
+
+    .warm-now-btn:hover:not(:disabled) {
+      filter: brightness(1.08);
+    }
+
+    .warm-now-btn.is-tight {
+      border-color: var(--warn-border);
+      background: var(--warn-soft);
+      color: var(--warn-text);
+    }
+
+    .warm-now-btn.is-pending {
+      border-color: var(--accent-border);
+      background: var(--bg-inset);
+      color: var(--accent-text);
+      cursor: wait;
+      opacity: 0.85;
+    }
+
+    .warm-now-btn.is-expired,
+    .warm-now-btn.is-blocked {
+      border-color: var(--danger-border);
+      background: var(--bg-inset);
+      color: var(--danger-text);
+      cursor: not-allowed;
+      opacity: 0.78;
+    }
+
+    .warm-now-btn.is-disabled {
+      border-color: var(--border-subtle);
+      background: var(--bg-inset);
+      color: var(--text-muted);
+      cursor: not-allowed;
+      opacity: 0.72;
+    }
+
+    .warm-now-note {
+      font-size: 11px;
+      line-height: 1.35;
+      color: var(--text-secondary);
+      word-break: break-word;
+    }
+
+    .warm-now-note.is-warn {
+      color: var(--warn-text);
+    }
+
+    .warm-now-note.is-danger {
+      color: var(--danger-text);
+    }
+
     .ttl-text-danger {
       font-family: var(--font-mono);
       font-variant-numeric: tabular-nums;
@@ -2404,11 +2477,16 @@
         <div id="kv-ttl-bar-row" class="ttl-row hidden">
           <div class="ttl-head">
             <span id="kv-ttl-bar-label" class="progress-label">Prompt Cache TTL</span>
-            <span id="kv-ttl-bar-text" class="ttl-text-ok">-- / --</span>
+            <div class="ttl-head-right">
+              <span id="kv-ttl-bar-text" class="ttl-text-ok">-- / --</span>
+              <span id="kv-ttl-auto-skip-badge" class="meta-tag is-warn hidden"></span>
+              <button id="kv-warm-now-btn" type="button" onclick="triggerManualTtlKeepalive()" class="warm-now-btn hidden" title=""></button>
+            </div>
           </div>
           <div id="kv-ttl-bar-track" class="ttl-track">
             <div id="kv-ttl-bar-fill" class="ttl-fill" style="width: 0%;"></div>
           </div>
+          <div id="kv-warm-now-note" class="warm-now-note hidden"></div>
         </div>
 
         <div class="kpi-strip">
@@ -2925,11 +3003,14 @@
         ttlBarLabel: 'Prompt Cache TTL',
         ttlActiveBar: 'Turn active · refreshes on completion',
         ttlActiveBadge: 'TTL: turn active',
-        ttlExpiredBar: '0s / {total} · Expired ({idle} idle)',
+        ttlWarmBar: 'Est. {rem} / {total}',
+        ttlExpiredBar: '0s / {total} · Est. expired ({idle} idle)',
         ttlExpiredBadge: 'TTL EXPIRED ({idle} idle)',
-        ttlExpiringBar: '{rem} / {total} · Expiring soon',
-        ttlLeftBadge: 'TTL {rem} left',
+        ttlExpiringBar: 'Est. {rem} / {total} · Expiring soon',
+        ttlLeftBadge: 'TTL ~{rem} left',
         ttlColdBadge: 'TTL: cold',
+        ttlAutoSkippedBadge: 'Auto skipped',
+        ttlAutoSkippedTip: 'Remaining est. time fell within the narrow-margin guard (~{minRem}, incl. est. delivery); auto-keepalive skipped to avoid a cold prefill',
         tempHot: 'HOT',
         tempWarm: 'WARM',
         tempCold: 'COLD',
@@ -3051,8 +3132,9 @@
         kvKeepaliveColdSuffix: ' (Cold)',
         kvKeepaliveColdTip: 'Cold-miss circuit breaker tripped (cache_read = 0); paused until your next message or ↺ reset',
         kvKeepaliveBelowMinTip: 'Current {cur}k < {min}k ({pct}%) threshold; custom window override bypasses this gate',
-        kvKeepaliveTip: 'Off by default. When enabled, sends a message requesting an OK reply about 60s before cache expiry. Each reply uses model input.',
+        kvKeepaliveTip: 'Off by default. Counts down from inference start; sends an OK-only message about 60s before est. expiry and skips automatically when remaining margin is too tight. Each reply uses model input.',
         kvKeepaliveFixedTip: 'Fixed keepalive interval: sends a message requesting an OK reply after ~{min}min idle (stops at max count or cold-miss). Each reply uses model input.',
+        kvKeepaliveNarrowSkipTip: 'Auto skipped on this idle cycle (est. {rem} left <= ~{minRem} guard)',
         kvKeepaliveSubagentState: 'Skipped',
         kvKeepaliveSubagentTip: 'Background subagent: auto-keepalive is automatically skipped so subagents never burn quota',
         kvKeepaliveMaxTip: 'Max auto-keepalive count for this conversation window (1–20; clear input to follow global)',
@@ -3067,6 +3149,37 @@
         kvKeepaliveFollowBtn: 'Global',
         kvKeepaliveFollowTip: 'Clear this window\'s custom setting and follow global default (keeps used count)',
         kvKeepaliveResetTip: 'Reset used keepalive count & cold-miss breaker for this conversation back to 0',
+        kvWarmNowBtn: 'Warm 1×',
+        kvWarmTightBtn: 'May cold-read · Warm anyway',
+        kvWarmPendingBtn: 'Warming...',
+        kvWarmExpiredBtn: 'Est. cache window expired',
+        kvWarmColdBtn: 'Cold tripped',
+        kvWarmNoLeaseBtn: 'No lease',
+        kvWarmBlockedBtn: 'Unavailable',
+        kvWarmNowTip: 'Manually send one OK-only keepalive (no tools, does not consume auto-keepalive quota; est. {rem} / {ttl} left)',
+        kvWarmTightTip: 'Remaining est. {rem} is within the ~{minRem} safety guard (est. delivery comp {deliv}). May cold-read if sent now; click if you still want to warm.',
+        kvWarmActiveTip: 'Turn active; manual warm is available once this conversation stops.',
+        kvWarmPendingTip: 'Warm request queued; waiting for confirmation...',
+        kvWarmExpiredTip: 'Est. cache window expired ({ttl} tier for this session). Sending OK now may trigger a full cold prefill; send your next task or /compact instead.',
+        kvWarmColdTip: 'Cold-miss circuit breaker tripped (cache_read = 0); send a new message or click ↺ to reset before warming.',
+        kvWarmNoLeaseTip: 'No active lease for this conversation yet; finish one turn before manual warming.',
+        kvWarmIneligibleTip: 'Conversation did not stop normally; manual warm is blocked.',
+        kvWarmDispatchedNote: 'Warm request queued; waiting for confirmation...',
+        kvWarmTimeoutNote: 'Confirmation timed out; refreshing backend status...',
+        kvWarmSkipTurnActive: 'Blocked: conversation is currently running.',
+        kvWarmSkipCold: 'Blocked: cold-miss breaker is tripped; send a message or click ↺.',
+        kvWarmSkipNoLease: 'Blocked: no active lease for this conversation.',
+        kvWarmSkipExpired: 'Blocked: est. cache window expired ({ttl} tier).',
+        kvWarmSkipPending: 'Already waiting for keepalive confirmation.',
+        kvWarmSkipCooldown: 'Cooling down; please wait before warming again.',
+        kvWarmSkipAlreadyDispatched: 'Already warmed during this idle cycle.',
+        kvWarmSkipCycleChanged: 'Skipped: a newer turn completed before warm dispatch.',
+        kvWarmSkipIneligible: 'Blocked: conversation is not in a normal stopped state.',
+        kvWarmSkipNoAnchor: 'Blocked: no valid timing anchor for this session.',
+        kvWarmSkipSubagent: 'Subagent sessions cannot be warmed.',
+        kvWarmSkipKilled: 'Blocked: conversation has been terminated.',
+        kvWarmSkipUnsupported: 'Manual warming is unavailable in this environment.',
+        kvWarmErrNote: 'Warm failed: {msg}',
         kaMinCtxLabel: 'Warm ≥',
         kaMinCtxNoMin: '(no min)',
         kaMinCtxTip: 'Minimum context window % for default auto-keepalive (default 15%: 512k≈77k, 256k≈38k, 200k=30k; 0% = no minimum; per-window custom overrides bypass this threshold)',
@@ -3323,11 +3436,14 @@
         ttlBarLabel: '提示词缓存 TTL',
         ttlActiveBar: '执行中 · 本轮完成后刷新',
         ttlActiveBadge: 'TTL：执行中',
-        ttlExpiredBar: '0s / {total} · 已过期（空闲 {idle}）',
+        ttlWarmBar: '预计 {rem} / {total}',
+        ttlExpiredBar: '0s / {total} · 预计已过期（空闲 {idle}）',
         ttlExpiredBadge: 'TTL 已过期（空闲 {idle}）',
-        ttlExpiringBar: '{rem} / {total} · 即将过期',
-        ttlLeftBadge: 'TTL 剩余 {rem}',
+        ttlExpiringBar: '预计 {rem} / {total} · 即将过期',
+        ttlLeftBadge: 'TTL 约剩 {rem}',
         ttlColdBadge: 'TTL：冷态',
+        ttlAutoSkippedBadge: '自动已跳过',
+        ttlAutoSkippedTip: '预计剩余时间已落入窄余量保护区（阈值约 {minRem}，含投递延迟估计），本轮自动保活已跳过以防冷读补刀',
         tempHot: '热缓存',
         tempWarm: '温缓存',
         tempCold: '冷缓存',
@@ -3449,8 +3565,9 @@
         kvKeepaliveColdSuffix: '（冷断）',
         kvKeepaliveColdTip: '已触发冷未命中自动熔断（cache_read = 0），本轮空闲停止后续续温，真人发新消息或点 ↺ 自动恢复',
         kvKeepaliveBelowMinTip: '当前 {cur}k 未达 {min}k（{pct}%）默认门槛；单窗口手动设置续温可豁免',
-        kvKeepaliveTip: '默认关闭。开启后，在预计缓存到期前约 60 秒发送一次要求回复 OK 的消息，每次回复都会产生模型输入用量。',
+        kvKeepaliveTip: '默认关闭。按推理起点估算倒计时，开启后在预计到期前约 60 秒发送要求回复 OK 的消息，余量过窄时自动跳过；每次回复都会产生模型输入用量。',
         kvKeepaliveFixedTip: '固定间隔续温：空闲约 {min} 分钟后自动发送要求回复 OK 的消息（达到上限或触发冷断后停止）。每次回复都会产生模型输入用量。',
+        kvKeepaliveNarrowSkipTip: '本空闲周期自动已跳过（预计剩 {rem} <= 约 {minRem} 安全阈值）',
         kvKeepaliveSubagentState: '已跳过',
         kvKeepaliveSubagentTip: '当前为子智能体：已自动跳过续温，避免对一次性后台子任务无意义保活浪费额度',
         kvKeepaliveMaxTip: '当前对话允许自动续温的最大次数（1–20 次；清空输入框可恢复随全局）',
@@ -3465,6 +3582,37 @@
         kvKeepaliveFollowBtn: '随全局',
         kvKeepaliveFollowTip: '清除本窗口独立覆盖，恢复跟随全局设置（保留当前已用次数）',
         kvKeepaliveResetTip: '手动将当前对话已续温次数重置为 0 并解除冷断',
+        kvWarmNowBtn: '续温 1×',
+        kvWarmTightBtn: '可能冷读，仍要续温',
+        kvWarmPendingBtn: '续温中...',
+        kvWarmExpiredBtn: '预计缓存窗口已过',
+        kvWarmColdBtn: '已冷断',
+        kvWarmNoLeaseBtn: '无租约',
+        kvWarmBlockedBtn: '不可续温',
+        kvWarmNowTip: '手动发送一次仅回复 OK 的续温消息（不调用工具，不消耗自动续温次数；当前预计剩余 {rem} / {ttl}）',
+        kvWarmTightTip: '当前预计仅剩 {rem}，已低于约 {minRem} 安全阈值（投递补偿估计 {deliv}）。此时派发可能冷读，确认要继续仍可点击。',
+        kvWarmActiveTip: '对话运行中，完成后可手动续温',
+        kvWarmPendingTip: '已派发续温请求，正在等待确认...',
+        kvWarmExpiredTip: '预计缓存窗口已过（当前会话档位 {ttl}），此时发 OK 易触发全量冷重算；请直接发下一步任务或执行 /compact',
+        kvWarmColdTip: '已触发冷读熔断（cache_read = 0），请发新消息或点 ↺ 重置后再续温',
+        kvWarmNoLeaseTip: '当前会话尚无有效租约，请先完成一轮对话后再手动续温',
+        kvWarmIneligibleTip: '当前会话未处于正常停止态，已阻止手动续温',
+        kvWarmDispatchedNote: '已排入续温发送，正在等待确认...',
+        kvWarmTimeoutNote: '等待确认超时，正在重新拉取后端状态...',
+        kvWarmSkipTurnActive: '已阻止：当前会话仍在运行中',
+        kvWarmSkipCold: '已阻止：已触发冷读熔断，请发新消息或点 ↺ 重置',
+        kvWarmSkipNoLease: '已阻止：当前会话尚无有效租约',
+        kvWarmSkipExpired: '已阻止：预计缓存窗口已过（当前档位 {ttl}）',
+        kvWarmSkipPending: '仍在等待上一条续温确认',
+        kvWarmSkipCooldown: '操作冷却中，请稍后再试',
+        kvWarmSkipAlreadyDispatched: '本空闲周期已派发过续温',
+        kvWarmSkipCycleChanged: '已取消：点击后已有新一轮对话完成',
+        kvWarmSkipIneligible: '已阻止：当前会话不处于正常停止态',
+        kvWarmSkipNoAnchor: '已阻止：缺少可用时间锚点',
+        kvWarmSkipSubagent: '子智能体会话不支持续温',
+        kvWarmSkipKilled: '已阻止：当前会话已终止',
+        kvWarmSkipUnsupported: '当前环境无发送能力，不支持手动续温',
+        kvWarmErrNote: '续温失败：{msg}',
         kaMinCtxLabel: '续温门槛',
         kaMinCtxNoMin: '（无门槛）',
         kaMinCtxTip: '默认自动续温的上下文窗口百分比门槛（默认 15%：512k≈77k、256k≈38k、200k=30k；填 0% 无门槛；单窗口手动开启/自定义续温不受此门槛限制）',
@@ -3769,6 +3917,7 @@
         windowCustomIntervalOpen = false;
         sawOutOfOrderWatchdogAction = false;
         lastObservedWatchdogIncidentKey = '';
+        resetManualWarmState();
         resetHandoffDrawerTargetMode();
         ++watchdogActionSeq;
         clearHandoffSnapshot({ resetPreview: true, reloadIfOpen });
@@ -4464,11 +4613,13 @@
 
       ++watchdogActionSeq;
       lastObservedWatchdogIncidentKey = '';
+      resetManualWarmState();
       resetHandoffDrawerTargetMode();
       clearHandoffSnapshot({ resetPreview: true, reloadIfOpen: handoffDrawerOpen });
       resetPanelGuidanceState();
       updateWatchdogIncidentButtons();
       renderSessionSwitcher(cachedWatchdog);
+      renderManualWarmControls();
 
       refreshData(true);
     }
@@ -5145,6 +5296,16 @@
               if (cachedKv) cachedKv.conversationActive = false;
               if (kvTtlState) kvTtlState.conversationActive = false;
             }
+            if (
+              cachedKv?.ttlKeepalive?.coldMissTripped === true &&
+              wd.ttlKeepalive &&
+              wd.ttlKeepalive.coldMissTripped === false &&
+              wd.ttlKeepalive.conversationId &&
+              wd.ttlKeepalive.conversationId === cachedKv.ttlKeepalive.conversationId &&
+              wd.ttlKeepalive.lastSentTs === cachedKv.ttlKeepalive.lastSentTs
+            ) {
+              wd.ttlKeepalive = { ...wd.ttlKeepalive, coldMissTripped: true };
+            }
             wd._hostEpoch = reqHostEpoch;
             renderWatchdogCard(wd, { expectedEpoch: reqHostEpoch });
           }
@@ -5511,6 +5672,7 @@
       if (!snap || !kvTtlState) {
         if (rowEl) rowEl.classList.add('hidden');
         if (fillEl) fillEl.style.width = '0%';
+        renderManualWarmControls(null, false);
         stopKvTtlTimer();
         return;
       }
@@ -5545,6 +5707,7 @@
         if (cachedCompactAdvice === 'opportunistic_cold_compact') {
           updateHandoffButtonStyle('none');
         }
+        renderManualWarmControls(snap, true);
         return;
       }
 
@@ -5584,7 +5747,7 @@
         if (trackEl) trackEl.className = 'ttl-track';
         if (textEl) {
           textEl.className = 'ttl-text-ok';
-          textEl.textContent = `${fmtSec(snap.remainingSec)} / ${fmtSec(snap.cacheTtlSec)}`;
+          textEl.textContent = t('ttlWarmBar', { rem: fmtSec(snap.remainingSec), total: fmtSec(snap.cacheTtlSec) });
         }
         if (ttlEl) {
           ttlEl.className = 'meta-tag is-info';
@@ -5608,11 +5771,28 @@
       if (snap.ttlStatus === 'expired' && kvTtlState.compactAdvice !== 'critical_compact' && kvTtlState.currentContextTokens >= kvTtlState.coldCompactTokens) {
         updateHandoffButtonStyle('opportunistic_cold_compact');
       }
+      renderManualWarmControls(snap, false);
     }
 
     function syncKvTtlState(kv) {
-      const lastMs = kv && kv.lastPlannerAt ? Date.parse(kv.lastPlannerAt) : NaN;
-      const ttlSec = Number(kv?.cacheTtlSec);
+      const alignedKa =
+        kv?.ttlKeepalive && shouldAcceptKeepalivePayload(kv.ttlKeepalive) ? kv.ttlKeepalive : null;
+      const useAlignedLeaseTiming = Boolean(
+        alignedKa &&
+          alignedKa.hasLease === true &&
+          alignedKa.leasePhase === 'IDLE' &&
+          alignedKa.leaseSubphase === 'stopped' &&
+          Number.isFinite(Number(alignedKa.cacheOriginTs)) &&
+          Number(alignedKa.cacheOriginTs) > 0 &&
+          Number.isFinite(Number(alignedKa.effectiveTtlSec)) &&
+          Number(alignedKa.effectiveTtlSec) > 0
+      );
+      const lastMs = useAlignedLeaseTiming
+        ? Math.floor(Number(alignedKa.cacheOriginTs))
+        : (kv && kv.lastPlannerAt ? Date.parse(kv.lastPlannerAt) : NaN);
+      const ttlSec = useAlignedLeaseTiming
+        ? Math.floor(Number(alignedKa.effectiveTtlSec))
+        : Number(kv?.cacheTtlSec);
       const ctxTokens = Number(kv?.currentContextTokens || 0);
       if (!kv || !kv.transcriptFound || !kv.turnsWithUsage || !Number.isFinite(lastMs) || !(ttlSec > 0) || ctxTokens < 4000) {
         kvTtlState = null;
@@ -5621,6 +5801,7 @@
         const fillEl = document.getElementById('kv-ttl-bar-fill');
         if (rowEl) rowEl.classList.add('hidden');
         if (fillEl) fillEl.style.width = '0%';
+        renderManualWarmControls(null, false);
         return;
       }
       const serverNow = Number(kv.serverNowMs);
@@ -7555,6 +7736,9 @@
       }
       if (kv.ttlKeepalive) {
         if (shouldAcceptKeepalivePayload(kv.ttlKeepalive)) {
+          if (cachedWatchdog) {
+            cachedWatchdog.ttlKeepalive = kv.ttlKeepalive;
+          }
           renderKeepaliveControls(kv.ttlKeepalive);
         } else if (window.sidecar && !getActiveConversationId()) {
           renderKeepaliveControls(unboundKeepaliveState);
@@ -8217,6 +8401,28 @@
       }
       if (wd.ttlKeepalive) {
         if (shouldAcceptKeepalivePayload(wd.ttlKeepalive)) {
+          if (cachedKv) {
+            cachedKv.ttlKeepalive = wd.ttlKeepalive;
+          }
+          if (
+            wd.ttlKeepalive.hasLease === true &&
+            wd.ttlKeepalive.leasePhase === 'IDLE' &&
+            wd.ttlKeepalive.leaseSubphase === 'stopped' &&
+            Number.isFinite(Number(wd.ttlKeepalive.cacheOriginTs)) &&
+            Number(wd.ttlKeepalive.cacheOriginTs) > 0 &&
+            Number.isFinite(Number(wd.ttlKeepalive.effectiveTtlSec)) &&
+            Number(wd.ttlKeepalive.effectiveTtlSec) > 0
+          ) {
+            if (kvTtlState) {
+              kvTtlState.lastPlannerMs = Math.floor(Number(wd.ttlKeepalive.cacheOriginTs));
+              kvTtlState.cacheTtlSec = Math.floor(Number(wd.ttlKeepalive.effectiveTtlSec));
+              if (Number.isFinite(Number(wd.serverNowMs)) && Number(wd.serverNowMs) > 0) {
+                kvTtlState.clockOffsetMs = Number(wd.serverNowMs) - Date.now();
+              }
+            } else if (cachedKv) {
+              syncKvTtlState(cachedKv);
+            }
+          }
           renderKeepaliveControls(wd.ttlKeepalive);
         } else if (window.sidecar && !getActiveConversationId()) {
           renderKeepaliveControls(unboundKeepaliveState);
@@ -8583,6 +8789,7 @@
         }
         if (convChanged || scopeChanged) {
           lastObservedWatchdogIncidentKey = '';
+          resetManualWarmState();
           resetHandoffDrawerTargetMode();
           clearHandoffSnapshot({ resetPreview: true, reloadIfOpen: handoffDrawerOpen });
           resetPanelGuidanceState();
@@ -8632,6 +8839,7 @@
         }
         if (convChanged || scopeChanged) {
           lastObservedWatchdogIncidentKey = '';
+          resetManualWarmState();
           resetHandoffDrawerTargetMode();
           clearHandoffSnapshot({ resetPreview: true, reloadIfOpen: handoffDrawerOpen });
           resetPanelGuidanceState();
@@ -8712,6 +8920,7 @@
           if (changedConv || changedScope) {
             selectedConvOverride = nextOverride;
             lastObservedWatchdogIncidentKey = '';
+            resetManualWarmState();
             resetHandoffDrawerTargetMode();
             clearHandoffSnapshot({ resetPreview: true, reloadIfOpen: handoffDrawerOpen });
             resetPanelGuidanceState();
@@ -9052,6 +9261,7 @@
     async function sendWatchdogAction(payload) {
       const act = payload?.action || '';
       const isIncidentAct = act === 'ack' || act === 'snooze' || act === 'clear' || act === 'markIdle';
+      const isManualWarmAct = act === 'manualTtlKeepalive';
       syncNativeHostConversation({ reloadIfOpen: handoffDrawerOpen });
       updateWatchdogIncidentButtons();
       if (
@@ -9059,6 +9269,14 @@
         !isWatchdogIncidentAlignedWithTarget({ requireActive: act === 'ack' || act === 'snooze' })
       ) {
         return { ok: false, cancelled: true, reason: 'watchdog_target_unaligned' };
+      }
+      if (
+        isManualWarmAct &&
+        (!isCurrentConversationConfirmed() ||
+          !payload?.conversationId ||
+          payload.conversationId !== getConfirmedConversationId())
+      ) {
+        return { ok: false, cancelled: true, reason: 'manual_warm_target_unaligned' };
       }
 
       const reqActionSeq = ++watchdogActionSeq;
@@ -9733,7 +9951,16 @@
           }
         }
         const errText = ka && typeof ka.lastError === 'string' ? ka.lastError.trim() : '';
-        btn.title = errText ? `${baseTip}${coldNote}${minGateNote} (⚠️ ${errText})` : `${baseTip}${coldNote}${minGateNote}`;
+        const narrowNote =
+          ka?.narrowMarginSkipped === true
+            ? ` — ${t('kvKeepaliveNarrowSkipTip', {
+                rem: fmtSec(ka.narrowMarginRemSec ?? ka.remainingSec ?? 0),
+                minRem: fmtSec(ka.effectiveMinRemainSec ?? ka.minRemainSec ?? 15)
+              })}`
+            : '';
+        btn.title = errText
+          ? `${baseTip}${coldNote}${narrowNote}${minGateNote} (⚠️ ${errText})`
+          : `${baseTip}${coldNote}${narrowNote}${minGateNote}`;
       }
       if (maxInput) {
         maxInput.disabled = isSubagent;
@@ -9773,6 +10000,435 @@
           !isSubagent && (usedCount > 0 || coldMissTripped)
             ? 'keepalive-reset-btn'
             : 'keepalive-reset-btn hidden';
+      }
+      syncManualWarmWaitFromKeepalive(ka);
+      if (kvTtlState) {
+        renderLocalTtlCountdown();
+      } else {
+        renderManualWarmControls(null, false);
+      }
+    }
+
+    const MANUAL_WARM_WAIT_TIMEOUT_MS = 60000;
+    const INELIGIBLE_LEASE_STOP_RE =
+      /^(?:EXECUTOR_TERMINATION_REASON_)?(?:USER_CANCELED|USER_CANCELLED|CANCELED|CANCELLED|ABORTED|ERROR|watchdog_disabled|stale_|orphan_)/i;
+    let manualWarmTimeoutTimer = null;
+    let manualWarmState = {
+      requestInFlight: false,
+      waitingAck: false,
+      convId: '',
+      clickSeq: 0,
+      feedbackKey: '',
+      feedbackParams: null,
+      feedbackRawError: '',
+      feedbackTone: ''
+    };
+
+    function clearManualWarmTimeoutTimer() {
+      if (manualWarmTimeoutTimer !== null) {
+        clearTimeout(manualWarmTimeoutTimer);
+        manualWarmTimeoutTimer = null;
+      }
+    }
+
+    function resetManualWarmState() {
+      clearManualWarmTimeoutTimer();
+      manualWarmState = {
+        requestInFlight: false,
+        waitingAck: false,
+        convId: '',
+        clickSeq: manualWarmState.clickSeq + 1,
+        feedbackKey: '',
+        feedbackParams: null,
+        feedbackRawError: '',
+        feedbackTone: ''
+      };
+    }
+
+    function getManualWarmTargetConversationId() {
+      syncNativeHostConversation({ reloadIfOpen: handoffDrawerOpen });
+      return isCurrentConversationConfirmed() ? getConfirmedConversationId() : '';
+    }
+
+    function resolveCurrentKeepalivePayload(targetConvIdOverride = '') {
+      const wdKa = cachedWatchdog?.ttlKeepalive;
+      const kvKa = cachedKv?.ttlKeepalive;
+      const activeId = targetConvIdOverride || getActiveConversationId();
+      if (activeId) {
+        if (wdKa && wdKa.conversationId === activeId) return wdKa;
+        if (kvKa && kvKa.conversationId === activeId) return kvKa;
+      }
+      if (targetConvIdOverride) return null;
+      if (wdKa && shouldAcceptKeepalivePayload(wdKa)) return wdKa;
+      if (kvKa && shouldAcceptKeepalivePayload(kvKa)) return kvKa;
+      return null;
+    }
+
+    function syncManualWarmWaitFromKeepalive(ka) {
+      if (!manualWarmState.waitingAck || !ka || typeof ka !== 'object') return;
+      const activeId = getManualWarmTargetConversationId();
+      if (!activeId || (manualWarmState.convId && manualWarmState.convId !== activeId)) {
+        resetManualWarmState();
+        return;
+      }
+      if (ka.conversationId && manualWarmState.convId && ka.conversationId !== manualWarmState.convId) {
+        return;
+      }
+      const turnActive = isCurrentConversationTurnActive();
+      const settled =
+        turnActive ||
+        (ka.inFlight === false && ka.pendingAck === false) ||
+        Boolean(ka.coldMissTripped) ||
+        Boolean(typeof ka.lastError === 'string' && ka.lastError.trim());
+      if (settled) {
+        clearManualWarmTimeoutTimer();
+        manualWarmState.waitingAck = false;
+        if (typeof ka.lastError === 'string' && ka.lastError.trim()) {
+          manualWarmState.feedbackKey = 'kvWarmErrNote';
+          manualWarmState.feedbackParams = null;
+          manualWarmState.feedbackRawError = ka.lastError.trim();
+          manualWarmState.feedbackTone = 'danger';
+        } else if (manualWarmState.feedbackKey === 'kvWarmDispatchedNote') {
+          manualWarmState.feedbackKey = '';
+          manualWarmState.feedbackParams = null;
+          manualWarmState.feedbackRawError = '';
+          manualWarmState.feedbackTone = '';
+        }
+      }
+    }
+
+    function mapManualWarmSkipReason(reason, ttlSec) {
+      const ttlLabel = fmtSec(ttlSec > 0 ? ttlSec : 300);
+      switch (reason) {
+        case 'turn_active':
+          return { key: 'kvWarmSkipTurnActive', params: null, tone: 'warn' };
+        case 'cold_miss_tripped':
+          return { key: 'kvWarmSkipCold', params: null, tone: 'danger' };
+        case 'no_lease':
+          return { key: 'kvWarmSkipNoLease', params: null, tone: 'warn' };
+        case 'already_expired':
+          return { key: 'kvWarmSkipExpired', params: { ttl: ttlLabel }, tone: 'danger' };
+        case 'in_flight':
+        case 'pending_ack':
+          return { key: 'kvWarmSkipPending', params: null, tone: 'warn' };
+        case 'cooldown':
+          return { key: 'kvWarmSkipCooldown', params: null, tone: 'warn' };
+        case 'already_dispatched':
+          return { key: 'kvWarmSkipAlreadyDispatched', params: null, tone: 'warn' };
+        case 'idle_cycle_changed':
+          return { key: 'kvWarmSkipCycleChanged', params: null, tone: 'warn' };
+        case 'ineligible_stop_state':
+        case 'ineligible_stop_reason':
+          return { key: 'kvWarmSkipIneligible', params: null, tone: 'warn' };
+        case 'no_time_anchor':
+          return { key: 'kvWarmSkipNoAnchor', params: null, tone: 'warn' };
+        case 'subagent':
+          return { key: 'kvWarmSkipSubagent', params: null, tone: 'warn' };
+        case 'killed':
+          return { key: 'kvWarmSkipKilled', params: null, tone: 'danger' };
+        case 'unsupported':
+          return { key: 'kvWarmSkipUnsupported', params: null, tone: 'warn' };
+        default:
+          return { key: 'kvWarmErrNote', params: null, rawError: String(reason || 'blocked'), tone: 'warn' };
+      }
+    }
+
+    function evaluateManualWarmUiState(snapOverride = null, turnActiveOverride = null) {
+      const targetConvId = getManualWarmTargetConversationId();
+      const ka = targetConvId ? resolveCurrentKeepalivePayload(targetConvId) : null;
+      const snap = snapOverride || computeLocalTtlSnapshot(kvTtlState);
+      const turnActive = turnActiveOverride !== null ? Boolean(turnActiveOverride) : isCurrentConversationTurnActive();
+      const isBoundSpecific = Boolean(targetConvId && isSpecificConversationId(targetConvId));
+      const isSubagent = Boolean(ka?.isSubagent === true);
+      const unsupported = Boolean(ka && ka.supported === false);
+      if (!kvTtlState || !snap || !isBoundSpecific || isSubagent || unsupported) {
+        return { visible: false, canClick: false, mode: 'hidden', targetConvId, ka, snap, turnActive };
+      }
+      const sameConvWait = Boolean(
+        manualWarmState.convId === targetConvId &&
+          (manualWarmState.requestInFlight || manualWarmState.waitingAck)
+      );
+      const isBusy = Boolean(sameConvWait || ka?.inFlight === true || ka?.pendingAck === true);
+      const isLeaseRunning = Boolean(
+        ka?.hasLease === true &&
+          ((ka.leasePhase && ka.leasePhase !== 'IDLE') || ka.leaseSubphase === 'stopped_bg_pending')
+      );
+      if (turnActive || isLeaseRunning) {
+        return { visible: true, canClick: false, mode: 'active', targetConvId, ka, snap, turnActive: true };
+      }
+      if (isBusy) {
+        return { visible: true, canClick: false, mode: 'pending', targetConvId, ka, snap, turnActive: false };
+      }
+      if (ka?.coldMissTripped === true) {
+        return { visible: true, canClick: false, mode: 'cold', targetConvId, ka, snap, turnActive: false };
+      }
+      if (ka && ka.hasLease === false) {
+        return { visible: true, canClick: false, mode: 'no_lease', targetConvId, ka, snap, turnActive: false };
+      }
+      if (
+        ka?.hasLease === true &&
+        ((ka.leaseSubphase && ka.leaseSubphase !== 'stopped') ||
+          (ka.leaseStopReason && INELIGIBLE_LEASE_STOP_RE.test(ka.leaseStopReason)))
+      ) {
+        return { visible: true, canClick: false, mode: 'ineligible', targetConvId, ka, snap, turnActive: false };
+      }
+      if (snap.ttlStatus === 'expired' || snap.remainingSec <= 0) {
+        return { visible: true, canClick: false, mode: 'expired', targetConvId, ka, snap, turnActive: false };
+      }
+      const effMinRem =
+        ka && Number.isFinite(Number(ka.effectiveMinRemainSec))
+          ? Math.max(0, Math.floor(Number(ka.effectiveMinRemainSec)))
+          : 0;
+      if (effMinRem > 0 && snap.remainingSec <= effMinRem) {
+        return { visible: true, canClick: true, mode: 'tight', targetConvId, ka, snap, turnActive: false, effMinRem };
+      }
+      return { visible: true, canClick: true, mode: 'ready', targetConvId, ka, snap, turnActive: false, effMinRem };
+    }
+
+    function renderManualWarmControls(snapOverride = null, turnActiveOverride = null) {
+      const btn = document.getElementById('kv-warm-now-btn');
+      const skipBadge = document.getElementById('kv-ttl-auto-skip-badge');
+      const noteEl = document.getElementById('kv-warm-now-note');
+      if (!btn && !skipBadge && !noteEl) return;
+
+      const st = evaluateManualWarmUiState(snapOverride, turnActiveOverride);
+      if (!st.visible) {
+        if (btn) {
+          btn.className = 'warm-now-btn hidden';
+          btn.disabled = true;
+          btn.textContent = '';
+          btn.title = '';
+          if (btn.dataset) btn.dataset.mode = 'hidden';
+        }
+        if (skipBadge) {
+          skipBadge.className = 'meta-tag is-warn hidden';
+          skipBadge.textContent = '';
+          skipBadge.title = '';
+        }
+        if (noteEl) {
+          noteEl.className = 'warm-now-note hidden';
+          noteEl.textContent = '';
+        }
+        return;
+      }
+
+      const { ka, snap } = st;
+      const ttlFmt = fmtSec(snap.cacheTtlSec);
+      const remFmt = fmtSec(snap.remainingSec);
+      const delivSec = ka && Number(ka.deliveryLatencyMs) > 0 ? Math.min(20, Math.ceil(Number(ka.deliveryLatencyMs) / 1000)) : 0;
+      const effMinRem =
+        ka && Number.isFinite(Number(ka.effectiveMinRemainSec))
+          ? Math.max(0, Math.floor(Number(ka.effectiveMinRemainSec)))
+          : 15;
+
+      if (skipBadge) {
+        if (ka?.narrowMarginSkipped === true && !st.turnActive && snap.remainingSec > 0) {
+          skipBadge.className = 'meta-tag is-warn';
+          skipBadge.textContent = t('ttlAutoSkippedBadge');
+          skipBadge.title = t('ttlAutoSkippedTip', { minRem: fmtSec(effMinRem) });
+        } else {
+          skipBadge.className = 'meta-tag is-warn hidden';
+          skipBadge.textContent = '';
+          skipBadge.title = '';
+        }
+      }
+
+      if (btn) {
+        if (btn.dataset) btn.dataset.mode = st.mode;
+        btn.disabled = !st.canClick;
+        if (st.mode === 'active') {
+          btn.className = 'warm-now-btn is-disabled';
+          btn.textContent = t('kvWarmNowBtn');
+          btn.title = t('kvWarmActiveTip');
+        } else if (st.mode === 'pending') {
+          btn.className = 'warm-now-btn is-pending';
+          btn.textContent = t('kvWarmPendingBtn');
+          btn.title = t('kvWarmPendingTip');
+        } else if (st.mode === 'cold') {
+          btn.className = 'warm-now-btn is-blocked';
+          btn.textContent = t('kvWarmColdBtn');
+          btn.title = t('kvWarmColdTip');
+        } else if (st.mode === 'no_lease') {
+          btn.className = 'warm-now-btn is-blocked';
+          btn.textContent = t('kvWarmNoLeaseBtn');
+          btn.title = t('kvWarmNoLeaseTip');
+        } else if (st.mode === 'ineligible') {
+          btn.className = 'warm-now-btn is-blocked';
+          btn.textContent = t('kvWarmBlockedBtn');
+          btn.title = t('kvWarmIneligibleTip');
+        } else if (st.mode === 'expired') {
+          btn.className = 'warm-now-btn is-expired';
+          btn.textContent = t('kvWarmExpiredBtn');
+          btn.title = t('kvWarmExpiredTip', { ttl: ttlFmt });
+        } else if (st.mode === 'tight') {
+          btn.className = 'warm-now-btn is-tight';
+          btn.textContent = t('kvWarmTightBtn');
+          btn.title = t('kvWarmTightTip', {
+            rem: remFmt,
+            minRem: fmtSec(effMinRem),
+            deliv: fmtSec(delivSec)
+          });
+        } else {
+          btn.className = 'warm-now-btn';
+          btn.textContent = t('kvWarmNowBtn');
+          btn.title = t('kvWarmNowTip', { rem: remFmt, ttl: ttlFmt });
+        }
+      }
+
+      if (noteEl) {
+        let noteText = '';
+        let noteTone = '';
+        const isCurrentFeedback = !manualWarmState.convId || manualWarmState.convId === st.targetConvId;
+        if (isCurrentFeedback && manualWarmState.feedbackKey) {
+          if (manualWarmState.feedbackKey === 'kvWarmErrNote') {
+            noteText = t('kvWarmErrNote', { msg: manualWarmState.feedbackRawError || 'error' });
+          } else {
+            noteText = t(manualWarmState.feedbackKey, manualWarmState.feedbackParams || undefined);
+          }
+          noteTone = manualWarmState.feedbackTone || '';
+        } else if (ka && typeof ka.lastError === 'string' && ka.lastError.trim()) {
+          noteText = t('kvWarmErrNote', { msg: ka.lastError.trim() });
+          noteTone = 'danger';
+        }
+        if (noteText) {
+          noteEl.textContent = noteText;
+          noteEl.className = noteTone === 'danger'
+            ? 'warm-now-note is-danger'
+            : noteTone === 'warn'
+              ? 'warm-now-note is-warn'
+              : 'warm-now-note';
+        } else {
+          noteEl.textContent = '';
+          noteEl.className = 'warm-now-note hidden';
+        }
+      }
+    }
+
+    async function triggerManualTtlKeepalive() {
+      const st = evaluateManualWarmUiState();
+      if (!st.visible) return null;
+      if (manualWarmState.requestInFlight || (manualWarmState.waitingAck && manualWarmState.convId === st.targetConvId)) {
+        return null;
+      }
+      if (!st.canClick) {
+        const mappedReason =
+          st.mode === 'active'
+            ? 'turn_active'
+            : st.mode === 'pending'
+              ? 'pending_ack'
+              : st.mode === 'cold'
+                ? 'cold_miss_tripped'
+                : st.mode === 'no_lease'
+                  ? 'no_lease'
+                  : st.mode === 'expired'
+                    ? 'already_expired'
+                    : 'ineligible_stop_state';
+        const fb = mapManualWarmSkipReason(mappedReason, st.snap?.cacheTtlSec);
+        manualWarmState.convId = st.targetConvId;
+        manualWarmState.feedbackKey = fb.key;
+        manualWarmState.feedbackParams = fb.params;
+        manualWarmState.feedbackRawError = fb.rawError || '';
+        manualWarmState.feedbackTone = fb.tone;
+        renderManualWarmControls(st.snap, st.turnActive);
+        return null;
+      }
+
+      const reqConvId = st.targetConvId;
+      const reqHostEpoch = hostSwitchEpoch;
+      const reqScope = currentScope;
+      const myClickSeq = ++manualWarmState.clickSeq;
+      clearManualWarmTimeoutTimer();
+      manualWarmState = {
+        requestInFlight: true,
+        waitingAck: false,
+        convId: reqConvId,
+        clickSeq: myClickSeq,
+        feedbackKey: 'kvWarmDispatchedNote',
+        feedbackParams: null,
+        feedbackRawError: '',
+        feedbackTone: ''
+      };
+      renderManualWarmControls();
+
+      try {
+        if (!isCurrentConversationConfirmed()) {
+          manualWarmState.requestInFlight = false;
+          return null;
+        }
+        const data = await sendWatchdogAction({
+          action: 'manualTtlKeepalive',
+          conversationId: reqConvId,
+          ...(window.sidecar ? { fromSidecarHost: true } : {})
+        });
+        const isStale =
+          manualWarmState.clickSeq !== myClickSeq ||
+          hostSwitchEpoch !== reqHostEpoch ||
+          currentScope !== reqScope ||
+          getManualWarmTargetConversationId() !== reqConvId;
+        if (isStale || data?.cancelled === true) {
+          if (manualWarmState.clickSeq === myClickSeq) {
+            manualWarmState.requestInFlight = false;
+            manualWarmState.waitingAck = false;
+            manualWarmState.feedbackKey = '';
+            renderManualWarmControls();
+          }
+          return null;
+        }
+        manualWarmState.requestInFlight = false;
+        if (data && data.dispatched === true) {
+          manualWarmState.waitingAck = true;
+          manualWarmState.feedbackKey = 'kvWarmDispatchedNote';
+          manualWarmState.feedbackParams = null;
+          manualWarmState.feedbackRawError = '';
+          manualWarmState.feedbackTone = '';
+          clearManualWarmTimeoutTimer();
+          manualWarmTimeoutTimer = setTimeout(() => {
+            manualWarmTimeoutTimer = null;
+            if (
+              manualWarmState.clickSeq !== myClickSeq ||
+              hostSwitchEpoch !== reqHostEpoch ||
+              getManualWarmTargetConversationId() !== reqConvId
+            ) {
+              return;
+            }
+            manualWarmState.waitingAck = false;
+            manualWarmState.feedbackKey = 'kvWarmTimeoutNote';
+            manualWarmState.feedbackParams = null;
+            manualWarmState.feedbackRawError = '';
+            manualWarmState.feedbackTone = 'warn';
+            renderManualWarmControls();
+            refreshData(true);
+          }, MANUAL_WARM_WAIT_TIMEOUT_MS);
+          renderManualWarmControls();
+          return data;
+        }
+        const reason = data?.skippedReason || data?.error || 'blocked';
+        const ttlSec = Number(data?.effectiveTtlSec) || Number(kvTtlState?.cacheTtlSec) || 300;
+        const fb = mapManualWarmSkipReason(reason, ttlSec);
+        manualWarmState.waitingAck = false;
+        manualWarmState.feedbackKey = fb.key;
+        manualWarmState.feedbackParams = fb.params;
+        manualWarmState.feedbackRawError = fb.rawError || '';
+        manualWarmState.feedbackTone = fb.tone;
+        renderManualWarmControls();
+        return data;
+      } catch (err) {
+        const isStale =
+          manualWarmState.clickSeq !== myClickSeq ||
+          hostSwitchEpoch !== reqHostEpoch ||
+          currentScope !== reqScope ||
+          getManualWarmTargetConversationId() !== reqConvId;
+        if (isStale) {
+          return null;
+        }
+        manualWarmState.requestInFlight = false;
+        manualWarmState.waitingAck = false;
+        manualWarmState.feedbackKey = 'kvWarmErrNote';
+        manualWarmState.feedbackParams = null;
+        manualWarmState.feedbackRawError = String(err?.message || err || 'request_failed');
+        manualWarmState.feedbackTone = 'danger';
+        renderManualWarmControls();
+        return null;
       }
     }
 
@@ -10102,6 +10758,7 @@
       stopKvTtlTimer();
       stopWdLiveTimer();
       clearPendingJumpFallbackTimer();
+      clearManualWarmTimeoutTimer();
       if (focusFollowupTimer !== null) {
         clearTimeout(focusFollowupTimer);
         focusFollowupTimer = null;

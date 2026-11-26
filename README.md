@@ -77,13 +77,13 @@ Use **Node.js 22.16.0 or later in the 22.x line, or Node.js 24 or later**. The i
 **Windows (PowerShell):**
 
 ```powershell
-irm https://raw.githubusercontent.com/zou172866/Antigravity-agy-dart/v1.7.4/install.ps1 | iex
+irm https://raw.githubusercontent.com/zou172866/Antigravity-agy-dart/v1.7.5/install.ps1 | iex
 ```
 
 **macOS / Linux:**
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/zou172866/Antigravity-agy-dart/v1.7.4/install.sh | sh
+curl -fsSL https://raw.githubusercontent.com/zou172866/Antigravity-agy-dart/v1.7.5/install.sh | sh
 ```
 
 ### Option 2: Let Antigravity install it
@@ -91,13 +91,13 @@ curl -fsSL https://raw.githubusercontent.com/zou172866/Antigravity-agy-dart/v1.7
 Send this to Antigravity:
 
 ```text
-Clone tag v1.7.4 of https://github.com/zou172866/Antigravity-agy-dart.git to a temp folder, run `node scripts/install.mjs install` (add `--install-rg` on Windows if `rg` is missing), and confirm `doctor` passes.
+Clone tag v1.7.5 of https://github.com/zou172866/Antigravity-agy-dart.git to a temp folder, run `node scripts/install.mjs install` (add `--install-rg` on Windows if `rg` is missing), and confirm `doctor` passes.
 ```
 
 ### Option 3: Clone & install with custom flags
 
 ```powershell
-git clone --branch v1.7.4 --depth 1 https://github.com/zou172866/Antigravity-agy-dart.git
+git clone --branch v1.7.5 --depth 1 https://github.com/zou172866/Antigravity-agy-dart.git
 cd Antigravity-agy-dart
 
 # Windows PowerShell (optional -InstallRg auto-installs ripgrep)
@@ -153,6 +153,10 @@ node scripts/install.mjs tool-loading eager         # All 12 tools eager-loaded
 ---
 
 ## Changelog
+
+### v1.7.5
+- **Auto-Keepalive narrow-margin safety guard & unified expiry countdown**: Added `ttlKeepaliveMinRemainSec` (`AGY_DART_TTL_KEEPALIVE_MIN_REMAIN_SEC`, default `15s`, `0` disables) so adaptive auto-keepalive skips dispatching when remaining margin is too tight for delivery and falls back cleanly to desktop expiry alerts using one unified inference-origin countdown across Watchdog, alerts, and the dashboard.
+- **One-click manual warm (`Warm 1×`) with atomic claim & delayed cold-miss verification**: Added a manual warm button next to the TTL countdown (works even when auto-keepalive is off, without consuming auto-keepalive quota), backed by atomic SQLite claiming, 15s debounce, async rollback on dispatch failure, and Stop/delayed-flush cold-read circuit-breaker verification.
 
 ### v1.7.4
 - **Friendly semantic handoff prompt greeting & opening cue**: Updated the Sidecar dashboard's **Copy Handoff Prompt** templates to open with a warm greeting (`宝宝，` in Chinese / `Sweetie, please ...` in English) and instruct the current window to start the generated handoff brief's very first sentence with the matching opening word (`宝宝，` / `Sweetie,`) while keeping strict no-filler output rules intact.
@@ -258,7 +262,7 @@ Install for Antigravity by default. Select Claude Code or Codex explicitly with 
 For Claude Code and Codex, the installer keeps hashes and undo metadata in `~/.agy-dart/<host>-install.json` to restore the plugin's configuration changes. Reinstalling replaces an older full-config record. Uninstalling removes that host's record.
 
 ```sh
-git clone --branch v1.7.4 --depth 1 https://github.com/zou172866/Antigravity-agy-dart.git
+git clone --branch v1.7.5 --depth 1 https://github.com/zou172866/Antigravity-agy-dart.git
 cd Antigravity-agy-dart
 node bin/agy-dart.mjs install
 node bin/agy-dart.mjs doctor

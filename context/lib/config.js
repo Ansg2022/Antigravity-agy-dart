@@ -67,6 +67,7 @@ export const CONFIG_DEFAULTS = Object.freeze({
   ttlKeepaliveMaxCount: 1,
   ttlKeepaliveIntervalSec: 0,
   ttlKeepaliveLeadSec: 60,
+  ttlKeepaliveMinRemainSec: 15,
   ttlKeepaliveMinContextPct: 15,
   ttlKeepaliveMinTokens: 0,
   watermarkDesktopNotify: null,
@@ -571,6 +572,11 @@ export function getConfigSnapshot(options = {}) {
     clampInt(parsePositiveInt(cfg.ttlKeepaliveLeadSec), 10, 180)
   );
   pick(
+    "ttlKeepaliveMinRemainSec",
+    clampInt(parseNonNegativeInt(env?.AGY_DART_TTL_KEEPALIVE_MIN_REMAIN_SEC), 0, 120),
+    clampInt(parseNonNegativeInt(cfg.ttlKeepaliveMinRemainSec), 0, 120)
+  );
+  pick(
     "ttlKeepaliveMinContextPct",
     clampInt(parseNonNegativeInt(env?.AGY_DART_TTL_KEEPALIVE_MIN_CONTEXT_PCT), 0, 100),
     clampInt(parseNonNegativeInt(cfg.ttlKeepaliveMinContextPct), 0, 100)
@@ -673,7 +679,7 @@ export function formatEffectiveConfigLines(snapshot = getConfigSnapshot(), extra
   lines.push(
     `  - TTL alert     : desktopNotify=${values.ttlDesktopNotify} (${sources.ttlDesktopNotify}), ` +
       `watermarkNotify=${wmNotifyDisplay} (${sources.watermarkDesktopNotify}), ` +
-      `keepalive=${values.ttlKeepalive} (${sources.ttlKeepalive}, max=${values.ttlKeepaliveMaxCount}, interval=${kaIntervalLabel}, lead=${values.ttlKeepaliveLeadSec}s, minCtx=${values.ttlKeepaliveMinContextPct}%), ` +
+      `keepalive=${values.ttlKeepalive} (${sources.ttlKeepalive}, max=${values.ttlKeepaliveMaxCount}, interval=${kaIntervalLabel}, lead=${values.ttlKeepaliveLeadSec}s, minRem=${values.ttlKeepaliveMinRemainSec}s, minCtx=${values.ttlKeepaliveMinContextPct}%), ` +
       `lead=${values.ttlNotifyLeadSec}s, minTokens=${values.ttlNotifyMinTokens}, lang=${values.uiLang} (${sources.uiLang})`
   );
 

@@ -219,7 +219,7 @@ export async function handleStopPayload(payload = {}, options = {}) {
             Boolean(cfgSnap.values.ttlKeepalive) && Number(cfgSnap.values.ttlKeepaliveMaxCount ?? 1) >= 1;
         }
       }
-      if (!txPath && convKaState?.inKeepaliveTurn) {
+      if (!txPath && (convKaState?.inKeepaliveTurn || convKaState?.pendingAck)) {
         txPath = resolveCandidateTranscriptPath(directConvId, {
           summaryDbPath: safeOptions.summaryDbPath || "",
           allowDefaultDb: allowDefaultSummaryDb
@@ -229,7 +229,17 @@ export async function handleStopPayload(payload = {}, options = {}) {
     const watermarkNotifyActive =
       effectiveCfg.watermarkDesktopNotify === true ||
       (effectiveCfg.watermarkDesktopNotify === null && ttlNotifyActive);
-    if (!watchdogActive && !ttlNotifyActive && !ttlKeepaliveExplicit && !watermarkNotifyActive) {
+    const hasManualOrPendingKeepalive = Boolean(
+      convKaState &&
+        (convKaState.inKeepaliveTurn || convKaState.pendingAck || convKaState.pendingColdCheckId)
+    );
+    if (
+      !watchdogActive &&
+      !ttlNotifyActive &&
+      !ttlKeepaliveExplicit &&
+      !watermarkNotifyActive &&
+      !hasManualOrPendingKeepalive
+    ) {
       if (!existing || existing.phase === WATCHDOG_PHASES.IDLE) {
         return { updated: false, reason: "disabled" };
       }
@@ -255,6 +265,69 @@ export async function handleStopPayload(payload = {}, options = {}) {
     let stopWindowTokens = 0;
     let stopModel = "";
     const nowStopMs = Number.isFinite(safeOptions.nowMs) ? Math.floor(safeOptions.nowMs) : Date.now();
+    const pendingCheckToken =
+      convKaState?.lastDispatchId ||
+      (convKaState?.lastSentTs > 0 ? `ts:${convKaState.lastSentTs}:${convKaState.usedCount || 0}` : "");
+    const expectedKaOwnership = convKaState
+      ? {
+          lastDispatchId: convKaState.lastDispatchId || "",
+          lastDispatchMode: convKaState.lastDispatchMode || "",
+          lastSentTs: convKaState.lastSentTs || 0,
+          lastIdleAnchorTs: convKaState.lastIdleAnchorTs || 0,
+          usedCount: convKaState.usedCount || 0,
+          lastColdCheckUsed: convKaState.lastColdCheckUsed || 0,
+          inKeepaliveTurn: Boolean(convKaState.inKeepaliveTurn),
+          pendingAck: Boolean(convKaState.pendingAck),
+          pendingColdCheckId: convKaState.pendingColdCheckId || "",
+          lastColdCheckedId: convKaState.lastColdCheckedId || ""
+        }
+      : null;
+    const writeKeepaliveStateIfOwned = (buildPatch, { requireInKeepaliveTurn = false } = {}) => {
+      if (!expectedKaOwnership || typeof store.setTtlKeepaliveState !== "function") return false;
+      const applyWrite = () => {
+        const curKa =
+          typeof store.getTtlKeepaliveState === "function"
+            ? store.getTtlKeepaliveState(directConvId)
+            : convKaState;
+        if (
+          !curKa ||
+          (requireInKeepaliveTurn && !curKa.inKeepaliveTurn) ||
+          (curKa.lastDispatchId || "") !== expectedKaOwnership.lastDispatchId ||
+          (curKa.lastDispatchMode || "") !== expectedKaOwnership.lastDispatchMode ||
+          (curKa.lastSentTs || 0) !== expectedKaOwnership.lastSentTs ||
+          (curKa.lastIdleAnchorTs || 0) !== expectedKaOwnership.lastIdleAnchorTs ||
+          (curKa.usedCount || 0) !== expectedKaOwnership.usedCount ||
+          (curKa.lastColdCheckUsed || 0) !== expectedKaOwnership.lastColdCheckUsed ||
+          Boolean(curKa.inKeepaliveTurn) !== expectedKaOwnership.inKeepaliveTurn ||
+          Boolean(curKa.pendingAck) !== expectedKaOwnership.pendingAck ||
+          (curKa.pendingColdCheckId || "") !== expectedKaOwnership.pendingColdCheckId ||
+          (curKa.lastColdCheckedId || "") !== expectedKaOwnership.lastColdCheckedId
+        ) {
+          return false;
+        }
+        const patch = buildPatch(curKa);
+        if (!patch || typeof patch !== "object") return false;
+        store.setTtlKeepaliveState(directConvId, patch);
+        return true;
+      };
+      if (typeof store._withWriteTx === "function") {
+        if (typeof store.open === "function") store.open();
+        return Boolean(store._withWriteTx(applyWrite));
+      }
+      return Boolean(applyWrite());
+    };
+    const markPendingColdCheckOnExit = () => {
+      if (convKaState?.inKeepaliveTurn) {
+        writeKeepaliveStateIfOwned(
+          () => ({
+            inKeepaliveTurn: false,
+            ...(pendingCheckToken ? { pendingColdCheckId: pendingCheckToken } : {}),
+            updatedTs: nowStopMs
+          }),
+          { requireInKeepaliveTurn: true }
+        );
+      }
+    };
     if (!detectedSubagent && txPath) {
       try {
         const { steps: tailSteps, mtimeMs: tailMtimeMs } = readWatchdogTranscriptTail(txPath, 32768);
@@ -284,43 +357,50 @@ export async function handleStopPayload(payload = {}, options = {}) {
           if (finalPlannerFlushedForTurn && info.prefillTs > 0) {
             stopCacheOriginTs = info.prefillTs;
           }
+          const hasUncheckedKeepaliveDispatch = Boolean(
+            convKaState &&
+              (convKaState.inKeepaliveTurn ||
+                convKaState.pendingAck ||
+                (convKaState.lastDispatchId && convKaState.lastDispatchId !== convKaState.lastColdCheckedId) ||
+                (convKaState.usedCount > 0 && (convKaState.lastColdCheckUsed || 0) < convKaState.usedCount))
+          );
           const wasKeepaliveTurn = Boolean(
-            convKaState?.inKeepaliveTurn || (finalPlannerFlushedForTurn && info.precededByKeepalivePrompt)
+            convKaState?.inKeepaliveTurn ||
+              (finalPlannerFlushedForTurn && info.precededByKeepalivePrompt && hasUncheckedKeepaliveDispatch)
           );
           if (wasKeepaliveTurn && convKaState && typeof store.setTtlKeepaliveState === "function") {
             const matchesCurrentRound =
-              finalPlannerFlushedForTurn &&
-              info.contextTokens > 0 &&
-              (convKaState.inKeepaliveTurn
-                ? (info.keepaliveRound === null || !convKaState.usedCount || info.keepaliveRound === convKaState.usedCount) &&
-                  (info.prefillTs <= 0 || !convKaState.lastSentTs || info.prefillTs >= convKaState.lastSentTs - 5_000)
-                : isKeepaliveTurnFlushedForRound(info, convKaState));
-            if (matchesCurrentRound) {
+              finalPlannerFlushedForTurn && isKeepaliveTurnFlushedForRound(info, convKaState);
+            if (matchesCurrentRound && info.cacheReadReported === true) {
               const isColdMiss = info.cacheReadTokens === 0;
-              store.setTtlKeepaliveState(directConvId, {
+              writeKeepaliveStateIfOwned((curKa) => ({
                 inKeepaliveTurn: false,
-                lastColdCheckUsed: Math.max(convKaState.usedCount || 0, convKaState.lastColdCheckUsed || 0),
-                ...(isColdMiss ? { coldMissTripped: true } : {}),
+                pendingAck: false,
+                pendingColdCheckId: "",
+                ...(pendingCheckToken ? { lastColdCheckedId: pendingCheckToken } : {}),
+                lastColdCheckUsed: Math.max(curKa.usedCount || 0, curKa.lastColdCheckUsed || 0),
+                ...(curKa.coldMissTripped || isColdMiss ? { coldMissTripped: true } : {}),
                 updatedTs: nowStopMs
-              });
-            } else if (convKaState.inKeepaliveTurn) {
-              store.setTtlKeepaliveState(directConvId, {
-                inKeepaliveTurn: false,
-                updatedTs: nowStopMs
-              });
+              }));
+            } else {
+              markPendingColdCheckOnExit();
             }
           }
-        } else if (convKaState?.inKeepaliveTurn && typeof store.setTtlKeepaliveState === "function") {
-          store.setTtlKeepaliveState(directConvId, { inKeepaliveTurn: false, updatedTs: nowStopMs });
+        } else {
+          markPendingColdCheckOnExit();
         }
-      } catch {}
-    } else if (!detectedSubagent && convKaState?.inKeepaliveTurn && typeof store.setTtlKeepaliveState === "function") {
+      } catch {
+        try {
+          markPendingColdCheckOnExit();
+        } catch {}
+      }
+    } else if (!detectedSubagent) {
       try {
-        store.setTtlKeepaliveState(directConvId, { inKeepaliveTurn: false, updatedTs: nowStopMs });
+        markPendingColdCheckOnExit();
       } catch {}
     }
 
-    const lease = recordHookLeaseTransition(store, "Stop", safePayload, {
+    const stopLeaseOptions = {
       directConvId,
       rootSessionId:
         sessionId && sessionId !== directConvId
@@ -340,8 +420,48 @@ export async function handleStopPayload(payload = {}, options = {}) {
       ...(safeOptions.stopReason !== undefined ? { stopReason: safeOptions.stopReason } : {}),
       ...(safeOptions.fullyIdle !== undefined ? { fullyIdle: safeOptions.fullyIdle } : {}),
       ...(safeOptions.error !== undefined ? { error: safeOptions.error } : {})
-    });
-    return { updated: Boolean(lease), lease };
+    };
+    const commitStopLease = () => {
+      const curLease = readWatchdogLease(store, directConvId);
+      if (existing && !curLease) {
+        return { skipped: true, reason: "lease_deleted", lease: null };
+      }
+      if (!existing && curLease) {
+        return { skipped: true, reason: "superseded_by_newer_turn", lease: curLease };
+      }
+      if (existing && curLease) {
+        const supersededByNewerTurn = Boolean(
+          (curLease.startedTs || 0) !== (existing.startedTs || 0) ||
+            (existing.phase !== WATCHDOG_PHASES.IDLE && curLease.phase === WATCHDOG_PHASES.IDLE) ||
+            (existing.phase !== WATCHDOG_PHASES.IDLE &&
+              Boolean(existing.lastUserInput) &&
+              Boolean(curLease.lastUserInput) &&
+              curLease.lastUserInput !== existing.lastUserInput) ||
+            (curLease.phase === WATCHDOG_PHASES.IDLE &&
+              (curLease.idleAnchorTs || 0) > (existing.idleAnchorTs || 0)) ||
+            (existing.phase === WATCHDOG_PHASES.IDLE &&
+              (curLease.phase !== WATCHDOG_PHASES.IDLE ||
+                (curLease.subphase || "") !== (existing.subphase || "") ||
+                (curLease.stopReason || "") !== (existing.stopReason || "") ||
+                (curLease.idleAnchorTs || 0) !== (existing.idleAnchorTs || 0) ||
+                (curLease.updatedTs || 0) !== (existing.updatedTs || 0) ||
+                (curLease.phaseChangedTs || 0) !== (existing.phaseChangedTs || 0) ||
+                (curLease.hookEvent || "") !== (existing.hookEvent || "")))
+        );
+        if (supersededByNewerTurn) {
+          return { skipped: true, reason: "superseded_by_newer_turn", lease: curLease };
+        }
+      }
+      return { skipped: false, lease: recordHookLeaseTransition(store, "Stop", safePayload, stopLeaseOptions) };
+    };
+    const leaseCommit =
+      typeof store._withWriteTx === "function"
+        ? (typeof store.open === "function" ? store.open() : undefined, store._withWriteTx(commitStopLease))
+        : commitStopLease();
+    if (leaseCommit.skipped) {
+      return { updated: false, reason: leaseCommit.reason || "superseded_by_newer_turn", lease: leaseCommit.lease };
+    }
+    return { updated: Boolean(leaseCommit.lease), lease: leaseCommit.lease };
   } catch {
     return { updated: false, reason: "fail_open" };
   } finally {
