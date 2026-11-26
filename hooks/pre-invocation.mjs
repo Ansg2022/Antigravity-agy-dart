@@ -1101,7 +1101,16 @@ async function main() {
           !isBackgroundWakeup &&
           !isMidTurnContinuation &&
           kaState &&
-          (kaState.usedCount > 0 || kaState.pendingAck || kaState.coldMissTripped || kaState.inKeepaliveTurn) &&
+          (kaState.usedCount > 0 ||
+            kaState.pendingAck ||
+            kaState.coldMissTripped ||
+            kaState.inKeepaliveTurn ||
+            Boolean(kaState.lastDispatchId) ||
+            Boolean(kaState.pendingColdCheckId) ||
+            kaState.lastIdleAnchorTs > 0 ||
+            kaState.lastSentTs > 0 ||
+            kaState.lastAttemptTs > 0 ||
+            Boolean(kaState.lastError)) &&
           typeof store.resetTtlKeepaliveState === "function"
         ) {
           store.resetTtlKeepaliveState(targetConvId);
@@ -1174,7 +1183,7 @@ async function main() {
     }
 
     if (
-      (watchdogActive || ttlNotifyActive || ttlKeepaliveExplicit || watermarkNotifyActive) &&
+      (watchdogActive || ttlNotifyActive || ttlKeepaliveExplicit || watermarkNotifyActive || isKeepaliveTurn) &&
       targetConvId &&
       targetConvId !== "default" &&
       watchdogLeaseMod?.recordHookLeaseTransition

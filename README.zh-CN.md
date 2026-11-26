@@ -62,7 +62,7 @@ AI 要搜好几个词时一次同时搜完，要改多个文件时一次改完�
 6. **密钥打码、敏感文件与 Git 沙盒防护**：日志或网页里的 API Key、口令自动打码；可拦截 AI 误读 `.env` 等配置文件，并封堵陌生仓库 `.git/config` 挂载外部命令的入口。
 7. **单次返回卡在 8.8 KB 以内（智能匀配额）**：Antigravity 工具单次返回超过约 10 KB 会自动落成临时文件让 AI 多读一轮；插件把返回内容控制在 8.8 KB 内，并自动把短检查省下的空间让给真正报错的长堆栈。
 8. **面板细分统计与离线测算**：右侧面板能查看上下文花在读文件、终端输出还是子智能体上，以及最近 15 轮缓存命中走势和失效原因；可选开启大文件修改后只读改动行（默认关闭）；命令行支持拿历史记录测算缓存命中与自动续期账本。
-9. **与 Agent Skills 生态正交互补，支持全环境 Skills 体检**：可与 Antigravity / Claude Code / Codex 各类业务 Skill 无缝叠加——业务 Skill 负责工作流编排，插件在底层兜底拦截盲读大文件、裁剪刷屏输出并守护缓存；运行 `node bin/agy-dart.mjs audit skills` 可一键审计所有已安装 Skills 的 Turn-0 前缀税与渐进式披露结构。
+9. **和各类 Skill 放心叠加，还能体检它们占了多少额度**：平时装的各类 Skill 照常管流程，插件在底层负责防盲读大文件、压刷屏日志和保缓存，互不打架；跑一句 `node bin/agy-dart.mjs audit skills`，就能一键查出本机装的所有 Skill 各自占了多少开场上下文、有没有把大段参考资料全塞进主说明里。
 
 > Antigravity 官方更新很勤，可以点一下右上角 **Star** 方便跟进后续兼容更新。
 
@@ -77,13 +77,13 @@ AI 要搜好几个词时一次同时搜完，要改多个文件时一次改完�
 **Windows（PowerShell）：**
 
 ```powershell
-irm https://raw.githubusercontent.com/zou172866/Antigravity-agy-dart/v1.7.4/install.ps1 | iex
+irm https://raw.githubusercontent.com/zou172866/Antigravity-agy-dart/v1.7.5/install.ps1 | iex
 ```
 
 **macOS / Linux：**
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/zou172866/Antigravity-agy-dart/v1.7.4/install.sh | sh
+curl -fsSL https://raw.githubusercontent.com/zou172866/Antigravity-agy-dart/v1.7.5/install.sh | sh
 ```
 
 ### 方法二：直接发给 Antigravity 装
@@ -91,13 +91,13 @@ curl -fsSL https://raw.githubusercontent.com/zou172866/Antigravity-agy-dart/v1.7
 复制这句发给 Antigravity：
 
 ```text
-请将 https://github.com/zou172866/Antigravity-agy-dart.git 的 v1.7.4 标签克隆到临时目录，运行其中的 scripts/install.mjs install 完成全局安装并跑 doctor 自检（Windows 如未安装 rg 请同时传 --install-rg）。
+请将 https://github.com/zou172866/Antigravity-agy-dart.git 的 v1.7.5 标签克隆到临时目录，运行其中的 scripts/install.mjs install 完成全局安装并跑 doctor 自检（Windows 如未安装 rg 请同时传 --install-rg）。
 ```
 
 ### 方法三：克隆仓库自定义安装
 
 ```powershell
-git clone --branch v1.7.4 --depth 1 https://github.com/zou172866/Antigravity-agy-dart.git
+git clone --branch v1.7.5 --depth 1 https://github.com/zou172866/Antigravity-agy-dart.git
 cd Antigravity-agy-dart
 
 # Windows PowerShell（加 -InstallRg 可顺手自动安装快速搜索工具 rg）
@@ -126,7 +126,7 @@ node scripts/install.mjs uninstall                   # 卸载
 
 ## 设置调节
 
-自动加热默认关闭。需要时，在右侧 **agy-dart Context** 面板为当前窗口打开“自动续温”。“全局加热”控制所有跟随全局设置的窗口默认次数与触发策略（支持 **动态(现方案)**、**固定 4min / 9min / 15min** 或 **自定义 1–60min**，也可通过 `ttlKeepaliveIntervalSec` / `AGY_DART_TTL_KEEPALIVE_INTERVAL_SEC` 配置）。关闭当前窗口的自动续温后，缓存即将过期和续温次数用尽都不会弹出桌面提醒。任务卡死弹窗也默认关闭，可在面板中单独开启。每次加热都会请求模型回复 `OK` 并产生输入用量，缓存未命中时可能重新处理整段历史。面板也可设置桌面提醒、暂停保护、清理旧记录和调整文件大小限制。
+自动续温默认关闭。需要时，在右侧 **agy-dart Context** 面板给当前窗口打开“自动续温”，也可以随时点倒计时旁的「续温 1×」手动续一次。「全局续温」用来统一设置默认次数和间隔（支持 **动态（自动估算）**、**固定 4 / 9 / 15 分钟** 或 **自定义 1–60 分钟**）。关掉当前窗口的自动续温后，快过期和次数用完都不会再弹桌面提醒。任务卡死弹窗也默认关闭，可在面板里单独开启。每次续温都会让模型回一个 `OK` 并消耗一点输入额度，如果缓存已经失效，会重新处理整段历史。面板里也能调桌面提醒、暂停保护、清理旧记录和文件大小上限。
 
 也可以用命令切拦截档位与工具加载方式：
 
@@ -146,34 +146,37 @@ node scripts/install.mjs tool-loading eager         # 12 个工具全部预载
 
 ## 更新日志
 
+### v1.7.5
+- **面板新增一键「续温 1×」按钮**：缓存倒计时旁边可以直接手动点一次续温。就算平时关着自动续温也能随时点，而且不扣自动续温次数（防连点，发送失败也不白算）。
+- **快过期时不白续，倒计时统一**：缓存只剩最后十几秒、来不及送达时会自动放弃续温以免白花 token，改弹桌面提醒；同时面板、后台监控和弹窗提醒统一用同一个倒计时，不再两边对不上。如果缓存其实已经失效，也会及时停手不再空续。
+
 ### v1.7.4
-- **「复制给当前窗口的交接指令」支持亲昵称呼与首词延续**：中文交接指令新增「宝宝，」开头称呼，英文对应新增 `Sweetie, please ...`，并要求当前窗口模型生成的交接单正文第一句第一个词也以对应称呼（`宝宝，` / `Sweetie,`）开头，同时保留“仅输出交接单正文、不加寒暄”的紧凑约束。
+- **交接指令话术更自然**：点「复制给当前窗口的交接指令」时，中英文模板加上了更亲切的开头称呼（中文「宝宝，」、英文 `Sweetie,`），并让 AI 生成的交接单直接按同样开头起笔，依然只吐正文、不带废话。
 
 ### v1.7.3
-- **自动续温支持自选时间档位**：全局和单个窗口都能选 **动态(现方案)**、**固定 4min / 9min / 15min** 或 **自定义(1–60min)**，单窗口改完后点「随全局」即可恢复默认；原有防浪费护栏（次数上限、最小上下文门槛、冷断熔断、跳过子智能体）照常生效。
-- **修好检查超时误报和面板误判通过**：命令只是超时不再误报“反复改错”；只跑过无关测试或单个用例，不会清掉之前失败的完整测试；后台测试报错在改了别的文件后也不会被漏掉；批次日志被截断导致明细缺失时，会一直提醒重跑原批次确认。
-- **交接简报与缓存诊断更好用**：换窗或压缩前可一键复制更清晰的交接简报（自动打码敏感信息），面板也能更准确标出缓存失效原因。
+- **自动续温支持自选间隔**：全局和单个窗口都能选 **动态（自动估算）**、**固定 4 / 9 / 15 分钟** 或 **自定义（1–60 分钟）**，单窗口改完点「随全局」即可恢复默认；原有的省钱保护（次数上限、对话太短不续、缓存失效即停、跳过后台子任务）照常生效。
+- **修好测试超时误报和面板误判通过**：命令只是跑超时了，不再误报“AI 在反复改错”；只跑过无关测试或单个用例，不会盖掉之前失败的完整测试；后台测试报错后就算改了别的文件也不会漏掉；测试日志太长被截断、看不清哪条没过时，面板会一直提醒重跑，不会当成已通过。
+- **换新对话更好交接，缓存失效原因更清楚**：换窗或压缩前可一键复制更干净的进度摘要（自动打码密钥和口令），面板也能更准确标出为什么没命中缓存。
 
 ### v1.7.2
-- **Agent Skills 渐进披露结构与首轮前缀税审计**：为 `skills/agy-dart/` 拆分按需加载的 `examples/`（`ctx_trace_summary.py`、`filters.json`）与 `references/error-playbook.md` 并同步适配 Antigravity、Claude Code 与 Codex；新增 `node bin/agy-dart.mjs audit skills` 审计已装 Skills 的首轮 frontmatter 开销与渐进披露结构，并在 `prefix:budget` 中分离统计按需附件体积。
-- **内置净身角色 `dart-coder` / `dart-reviewer` 短检查引导**：在保持 `inheritMcp: false` 与 `inheritCustomizations: false` 零外部前缀税的前提下，明确短检查优先走 `run_checks`（长耗时/异步任务仍用 `run_command`），减少原生终端输出超 10 KB 落盘。
-- **测试隔离与打包卫生加固**：修复 `v1.2-persist-prefix.test.mjs` 对本机 `~/.agy-dart/config.json`（如 `stablePrefixOnly: true`）的读取隔离，并在 `.gitignore` 与 `package.json` 中排除 `__pycache__` / `*.py[cod]` 产物。
+- **给插件自带说明「瘦身」，新增 Skills 体检命令**：把示例脚本和排错手册拆成用到再读，平时不白占开场上下文；新增 `node bin/agy-dart.mjs audit skills`，一键查出本机所有已装 Skill 各自占了多少开场额度、有没有把大段资料全塞进主说明里。
+- **自带的两个轻量子助手更省输出**：内置的改代码助手（`dart-coder`）和审查助手（`dart-reviewer`）继续保持轻装上阵（不额外背一堆工具和全局规则），现在跑快速检查也会自动精简输出，减少把超长日志直接倒进对话。
 
 ### v1.7.1
-- **修好侧边栏「已挡冗余」长期显示 0 的问题（补齐 `agy-dart_fast` 真实埋点）**：`read_slices`、`run_checks`、`batch_search` 现按真实裁剪/压缩字节差值记账（绝不虚报），并在匿名共享 MCP 下精准归属到当前对话，不串会话、不重复计数。
-- **修复 Windows / PowerShell 终端过滤漏判**：`cli-filter` 支持跳过 `npm --prefix`、`pnpm -C`、`yarn --cwd` 等前置参数，并在确保跨 Shell 安全的前提下放行常见 `--` 路径/参数分隔符。
-- **补全 MCP 回执归属与子代理统计汇总**：将回执认领从 `ctx_execute` 扩展至 `ctx_index`、`ctx_batch` 并同步认领 `sources`/`chunks`（数据库 schema 升级至 `v155`）；全链路统一按主对话 `rootSessionId` 汇总子代理节省量。
+- **修好面板「已挡废话」一直显示 0 的问题**：以前按段读代码、批量搜代码、精简检查输出省下来的字数没记进面板，现在按实际省下的大小如实统计，多开窗口也不会算串或重复计数。
+- **后台子任务省下的额度汇总到主对话**：存长文档、批量查资料以及子任务省下来的 token，现在统一归到主对话里展示，账目更准。
+- **修好 Windows 下部分命令没被精简的问题**：像 `npm --prefix`、`pnpm -C`、`yarn --cwd` 以及带 `--` 参数的命令，现在在 Windows / PowerShell 下也能正常过滤刷屏日志。
 
 ### v1.7.0
-- **紧凑函数签名大纲与首次盲读内联骨架**：新增紧凑函数签名大纲，拦截大文件首次整读时直接附带带行号的核心结构骨架。
-- **统一 CLI 与多宿主适配**：新增 `bin/agy-dart.mjs`（支持 Antigravity 及 `--target claude|codex`、大纲与会话用量对比命令）、内置 `dart-coder` / `dart-reviewer` 角色定义，并加固工作区隔离与 Node.js 22.16+ / 24+ SQLite FTS5 校验。
+- **拦住整篇硬读大文件时，顺手把目录递给 AI**：AI 第一次想整篇读大代码文件被拦下时，插件会直接附上一份带行号的函数和类清单，AI 不用再多问一轮目录，直接挑要看的那几行去读。
+- **新增统一命令行工具，支持装到 Claude Code 和 Codex**：用 `node bin/agy-dart.mjs` 可安装到 Antigravity、Claude Code 或 Codex，还能直接查看代码大纲、对比不同对话花了多少 token；同时内置了轻量的改代码 / 审查子助手，并加强了多项目隔离和 Node.js 环境检查。
 
 ### v1.6.0
-- **常用 4 个工具改为默认直连，修好多文件修改偶发丢内容问题**：批量搜索、看目录、改文件、跑检查 4 个高频工具默认直接预载，避开中转层偶尔把多文件改动清空的问题；其余 8 个大日志工具保持按需加载省初始额度（可用 `tool-loading` 切换）。
-- **修好缓存自动续期失效，彻底跳过后台子智能体**：清理旧面板进程残留的全局关闭冲突并加防重锁，更新插件后后台面板会自动重启生效；`/boost`、浏览器、工作流派出的子智能体和已关闭的旧对话一律不再发续期请求，也不再挤占面板顶部的续期状态栏。
-- **子智能体读文件直接放行，防误改插件目录**：后台子智能体读大文件或重读文件不再弹红字拦截；未传路径误落入插件安装目录时直接拦住，防止误搜或误改插件自身文件。
-- **支持一行命令免下载直装**：新增 PowerShell 与 Shell 一行安装命令，不用先手动克隆仓库。
-- 换用跨平台通用钩子启动方式；短检查省下的字数额度自动让给长报错堆栈；Git 查询限制只读防外部挂载命令；修 Windows 退出卡死，升级保留 `rules/*.local.md`，补安全说明与深浅色架构图。
+- **常用 4 个工具改为直连，修好多文件修改偶发丢内容**：把最常用的 4 个功能（批量搜、看大纲、改文件、跑检查）改成直接预载，避开以前偶尔把多文件改动清空的坑；另外 8 个处理大日志的工具继续用到再加载，省开场额度。
+- **修好自动续温偶尔失效，后台子任务不再乱续温**：更新插件后后台面板会自动重启，不再被旧进程卡住；`/boost`、浏览器、工作流派出去的后台子任务和已经关掉的旧对话，一律不再发续温请求，也不再挤占面板顶部状态栏。
+- **后台子任务读文件直接放行，防止 AI 误改插件自身**：子任务读大文件或重读文件不再弹红字卡住；漏传路径误落进插件安装目录时直接拦住，防止误搜或误改插件自身。
+- **支持终端一行命令直装**：不用手动克隆仓库，复制一行 PowerShell 或 Shell 命令就能装好。
+- **其他优化**：短检查省下的输出额度会自动让给真正报错的长堆栈；限制 Git 只读查询，防止陌生仓库偷跑外部命令；修好 Windows 退出卡死；升级保留个人规则（`rules/*.local.md`），补齐安全说明与深浅色架构图。
 
 ### v1.5.4
 - **点击提醒直达对应会话**：点右下角弹窗或右侧面板里的跨窗口告警，自动切出对应项目窗口并跳进那段对话；面板新增多窗口会话切换栏。
@@ -228,7 +231,7 @@ npm run verify:pkg                          # 检查安装包文件完整性
 npm run prefix:budget                       # 分别估算 Antigravity 配置的首轮占用和全部工具加载后的占用
 npm run brief:check                         # 检查 AI_REVIEW_BRIEF.md 里的行数和测试数是不是最新的
 node scripts/cache-audit.mjs --workspace . --no-live
-node bin/agy-dart.mjs audit skills --workspace .   # 审计全环境 Skills 的 Turn-0 前缀税与渐进式披露结构
+node bin/agy-dart.mjs audit skills --workspace .   # 检查本机已装 Skills 的开场上下文占用和文件拆分情况
 npm run cache:simulate
 ```
 
@@ -247,14 +250,14 @@ npm run cache:simulate
 
 [MIT 协议](LICENSE) 开源。部分代码整合改造自同为 MIT 协议的 [INK-Q/agy-fast](https://github.com/INK-Q/agy-fast) 与 [Domush/antigravity-plugin-context-mode](https://github.com/Domush/antigravity-plugin-context-mode)，完整第三方声明见 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)。
 
-## v1.7 CLI
+## 命令行工具（支持 Antigravity / Claude Code / Codex）
 
-默认安装到 Antigravity。显式使用 `--target claude` 或 `--target codex` 选择其他宿主。`outline <文件>` 输出签名与行号，`session <ID>` 和 `compare <前> <后>` 分析会话账单。
+用 `node bin/agy-dart.mjs` 默认装到 Antigravity，加上 `--target claude` 或 `--target codex` 可以装到 Claude Code 或 Codex。平时也能直接用来查大文件目录（`outline <文件>`）、看某次对话花了多少 token（`session <ID>`），或对比两次对话的消耗（`compare <前> <后>`）。
 
-Claude Code 和 Codex 的安装器会在 `~/.agy-dart/<host>-install.json` 中保存哈希及撤销插件改动所需的信息。重装会替换旧版的整份配置备份，卸载会移除该宿主的安装记录。
+装到 Claude Code 或 Codex 时，安装器会把改动记录存在 `~/.agy-dart/<宿主名>-install.json` 里，方便以后卸载时干净还原，不会弄乱你原本的配置。
 
 ```sh
-git clone --branch v1.7.4 --depth 1 https://github.com/zou172866/Antigravity-agy-dart.git
+git clone --branch v1.7.5 --depth 1 https://github.com/zou172866/Antigravity-agy-dart.git
 cd Antigravity-agy-dart
 node bin/agy-dart.mjs install
 node bin/agy-dart.mjs doctor

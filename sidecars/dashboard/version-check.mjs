@@ -6,6 +6,7 @@ export const REPO = "zou172866/Antigravity-agy-dart";
 export const RELEASES_URL = `https://github.com/${REPO}/releases`;
 export const LATEST_RELEASE_API = `https://api.github.com/repos/${REPO}/releases/latest`;
 export const VERSION_ROUTE = "/api/version";
+const RELEASE_DOWNLOAD_PREFIX = `https://github.com/${REPO}/releases/download/`;
 
 const MAX_UNSPECIFIED_RATE_LIMITS = 4;
 const MANUAL_DEDUPE_MS = 5000;
@@ -100,6 +101,28 @@ function getRetryAt(headers, currentNow) {
 }
 
 /**
+ * Select the published release npm-pack .tgz asset when GitHub provides a valid SHA-256 digest.
+ */
+export function selectReleasePackageAsset(assets, version) {
+  if (!Array.isArray(assets) || !version) return null;
+  const expectedName = `agy-dart-${version}.tgz`;
+  for (const asset of assets) {
+    if (!asset || asset.name !== expectedName) continue;
+    const url = typeof asset.browser_download_url === "string" ? asset.browser_download_url.trim() : "";
+    if (!url.startsWith(RELEASE_DOWNLOAD_PREFIX)) continue;
+    const digest = typeof asset.digest === "string" ? asset.digest.trim() : "";
+    const match = /^sha256:([0-9a-f]{64})$/i.exec(digest);
+    if (!match) continue;
+    return {
+      assetName: expectedName,
+      assetUrl: url,
+      assetSha256: match[1].toLowerCase()
+    };
+  }
+  return null;
+}
+
+/**
  * Create a rate-limit-aware, single-flight GitHub Releases version checker.
  */
 export function createVersionChecker({
@@ -157,12 +180,14 @@ export function createVersionChecker({
       const releaseTag = data.tag_name.trim();
       const releaseUrl = `${RELEASES_URL}/tag/${encodeURIComponent(releaseTag)}`;
       const isNewer = compareVersions(latest.version, currentVersion) > 0;
+      const pkgAsset = selectReleasePackageAsset(data?.assets, latest.version);
       if (isNewer) {
         return makeResult("update", {
           latestVersion: latest.version,
           releaseTag,
           releaseUrl,
-          publishedAt: typeof data?.published_at === "string" ? data.published_at : ""
+          publishedAt: typeof data?.published_at === "string" ? data.published_at : "",
+          ...(pkgAsset ? pkgAsset : {})
         });
       }
       return makeResult("current", {
@@ -205,7 +230,7 @@ export function createVersionChecker({
       dedupeManual &&
       !inFlight &&
       cached &&
-      cached.reason !== "rateLimit" &&
+      cached.status !== "error" &&
       cached.currentVersion === currentVersion &&
       now() < manualReuseUntil
     ) {
@@ -239,7 +264,7 @@ export function createVersionChecker({
     }
 
     const value = await (inFlight || cached);
-    if (dedupeManual && value.reason !== "rateLimit") {
+    if (dedupeManual && value.status !== "error") {
       manualReuseUntil = now() + MANUAL_DEDUPE_MS;
     }
     if (automatic && value.status === "error") {

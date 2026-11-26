@@ -51,6 +51,7 @@ import {
   formatWorkspaceWindowLabel,
   getToolTimeoutTier,
   getWatchdogLeaseKey,
+  hasPendingKeepaliveColdCheck,
   inspectLatestTurnInSteps,
   isHeadlessWorkerPrompt,
   isHighReasoningModel,
@@ -64,6 +65,7 @@ import {
   lookupConversationTitle,
   normalizeWatchdogLease,
   parseMaybeJsonObj,
+  parseStepPrefillTimestampInfo,
   parseStepPrefillTimestampMs,
   readWatchdogLease,
   readWatchdogTranscriptTail,
@@ -79,8 +81,10 @@ import {
 export {
   HEADLESS_FINISH_PROMPT_RE,
   WATCHDOG_LEASE_PREFIX,
+  hasPendingKeepaliveColdCheck,
   inspectLatestTurnInSteps,
   isKeepaliveTurnFlushedForRound,
+  parseStepPrefillTimestampInfo,
   parseStepPrefillTimestampMs,
   readWatchdogTranscriptTail,
   WATCHDOG_PHASES,
@@ -120,6 +124,10 @@ export const PENDING_JUMP_META_KEY = "watchdog:pending_jump";
 export const DEFAULT_PENDING_JUMP_TTL_MS = 20_000;
 
 export const DEFAULT_STALE_LEASE_MS = 2 * 60 * 60 * 1000; // 2 hours
+export const MANUAL_KEEPALIVE_COOLDOWN_MS = 15_000;
+export const KEEPALIVE_PENDING_ACK_WINDOW_MS = 60_000;
+export const INELIGIBLE_KEEPALIVE_STOP_REASON_RE =
+  /^(?:EXECUTOR_TERMINATION_REASON_)?(?:USER_CANCELED|USER_CANCELLED|CANCELED|CANCELLED|ABORTED|ERROR|watchdog_disabled|stale_|orphan_)/i;
 
 const RESERVED_CHECKPOINT_SESSION_IDS = new Set([
   "default",
@@ -132,6 +140,91 @@ const RESERVED_CHECKPOINT_SESSION_IDS = new Set([
   "null",
   "undefined"
 ]);
+
+export function resolveLeaseCacheOriginTs(lease, idleAnchorTs) {
+  const safeAnchor =
+    Number.isFinite(Number(idleAnchorTs)) && Number(idleAnchorTs) > 0
+      ? Math.floor(Number(idleAnchorTs))
+      : 0;
+  const rawOrigin = Number(lease?.cacheOriginTs);
+  if (
+    Number.isFinite(rawOrigin) &&
+    rawOrigin > 0 &&
+    safeAnchor > 0 &&
+    rawOrigin <= safeAnchor &&
+    safeAnchor - rawOrigin <= 30 * 60 * 1000
+  ) {
+    return Math.floor(rawOrigin);
+  }
+  return safeAnchor;
+}
+
+export function computeLeaseTtlTiming(lease, { effectiveTtlSec, nowWallMs } = {}) {
+  const safeNow = Number.isFinite(Number(nowWallMs)) ? Math.floor(Number(nowWallMs)) : Date.now();
+  const safeTtl =
+    Number.isFinite(Number(effectiveTtlSec)) && Number(effectiveTtlSec) > 0
+      ? Math.floor(Number(effectiveTtlSec))
+      : 0;
+  const idleAnchorTs =
+    (Number.isFinite(Number(lease?.idleAnchorTs)) && Number(lease.idleAnchorTs) > 0
+      ? Math.floor(Number(lease.idleAnchorTs))
+      : 0) ||
+    (Number.isFinite(Number(lease?.phaseChangedTs)) && Number(lease.phaseChangedTs) > 0
+      ? Math.floor(Number(lease.phaseChangedTs))
+      : 0) ||
+    (Number.isFinite(Number(lease?.updatedTs)) && Number(lease.updatedTs) > 0
+      ? Math.floor(Number(lease.updatedTs))
+      : 0) ||
+    0;
+  if (idleAnchorTs <= 0 || safeNow < idleAnchorTs || safeTtl <= 0) {
+    return {
+      valid: false,
+      idleAnchorTs,
+      originTs: 0,
+      effectiveTtlSec: safeTtl,
+      estimatedExpireTs: 0,
+      idleSec: null,
+      remSec: null
+    };
+  }
+  const originTs = resolveLeaseCacheOriginTs(lease, idleAnchorTs);
+  const idleSec = Math.floor((safeNow - originTs) / 1000);
+  const remSec = safeTtl - idleSec;
+  return {
+    valid: true,
+    idleAnchorTs,
+    originTs,
+    effectiveTtlSec: safeTtl,
+    estimatedExpireTs: originTs + safeTtl * 1000,
+    idleSec,
+    remSec
+  };
+}
+
+export function computeEffectiveKeepaliveMinRemainSec(
+  minRemainSec,
+  deliveryCompSec,
+  effectiveTriggerLeadSec
+) {
+  const baseMin = Math.min(120, Math.max(0, Math.floor(Number(minRemainSec) || 0)));
+  if (baseMin <= 0) return 0;
+  const safeDelivery = Math.min(20, Math.max(0, Math.floor(Number(deliveryCompSec) || 0)));
+  const safeLead = Math.max(0, Math.floor(Number(effectiveTriggerLeadSec) || 0));
+  return Math.max(safeDelivery, Math.min(Math.floor(safeLead / 2), baseMin + safeDelivery));
+}
+
+export function isKeepalivePendingAckActive(kaState, nowWallMs = Date.now()) {
+  if (!kaState || !kaState.pendingAck) return false;
+  const lastSentTs = Number(kaState.lastSentTs || 0);
+  const safeNow = Number.isFinite(Number(nowWallMs)) ? Math.floor(Number(nowWallMs)) : Date.now();
+  return lastSentTs > 0 && safeNow - lastSentTs < KEEPALIVE_PENDING_ACK_WINDOW_MS;
+}
+
+export function buildManualKeepaliveMessage(uiLang = "en") {
+  return uiLang === "zh"
+    ? "[agy-dart TTL保活 手动] 仅回复 OK 以保持上下文缓存热度，请勿调用任何工具或修改任何内容。"
+    : "[agy-dart TTL Keepalive Manual] Reply OK only to keep the prompt cache warm. Do not call any tools or modify any files.";
+}
 
 /**
  * Single source of truth for resolving a confirmed conversation's trusted checkpoint sessionId
@@ -1618,7 +1711,8 @@ export class WatchdogMonitor {
     this._lastEvaluated = new Map();
     this._ttlNotifiedKeys = new Map();
     this._turn0BackfillChecked = new Map();
-    this._keepaliveInFlight = new Set();
+    this._narrowMarginSkipped = new Map();
+    this._keepaliveInFlight = new Map();
     this._subagentIdentityCache = new Map();
     this._lastTtlNotifyGlobalTs = 0;
     this._fallbackPendingJump = null;
@@ -1627,6 +1721,8 @@ export class WatchdogMonitor {
     this.notificationCount = 0;
     this.ttlNotificationCount = 0;
     this.ttlKeepaliveCount = 0;
+    this.ttlKeepaliveNarrowSkippedCount = 0;
+    this.manualKeepaliveCount = 0;
     this.watermarkNotificationCount = 0;
   }
 
@@ -2356,6 +2452,169 @@ export class WatchdogMonitor {
     return profileFloor;
   }
 
+  _resolveTtlKeepaliveMinRemainSec(cfg) {
+    const raw = cfg?.ttlKeepaliveMinRemainSec;
+    if (raw !== undefined && raw !== null && raw !== "" && typeof raw !== "boolean") {
+      const n = Number(raw);
+      if (Number.isFinite(n) && n >= 0) {
+        return Math.min(120, Math.max(0, Math.floor(n)));
+      }
+    }
+    return 15;
+  }
+
+  _pruneNarrowMarginSkipped(leases) {
+    if (!this._narrowMarginSkipped || this._narrowMarginSkipped.size === 0) return;
+    const leaseById = new Map();
+    for (const l of leases || []) {
+      if (l && l.conversationId) leaseById.set(l.conversationId, l);
+    }
+    for (const [id, entry] of this._narrowMarginSkipped.entries()) {
+      const l = leaseById.get(id);
+      if (!l || l.phase !== WATCHDOG_PHASES.IDLE) {
+        this._narrowMarginSkipped.delete(id);
+        continue;
+      }
+      const anchor = l.idleAnchorTs || l.phaseChangedTs || l.updatedTs || 0;
+      if (!anchor || anchor !== entry.idleAnchorTs) {
+        this._narrowMarginSkipped.delete(id);
+      }
+    }
+  }
+
+  _runDelayedColdMissCheck(store, convId, lease, kaState, nowWallMs) {
+    if (
+      !store ||
+      !convId ||
+      !lease?.transcriptPath ||
+      typeof this.readTailFn !== "function" ||
+      !hasPendingKeepaliveColdCheck(kaState)
+    ) {
+      return { checked: false, coldTripped: Boolean(kaState?.coldMissTripped) };
+    }
+    const expectedDispatchId = kaState.lastDispatchId || "";
+    const expectedDispatchMode = kaState.lastDispatchMode || "";
+    const expectedPendingId = kaState.pendingColdCheckId || "";
+    const expectedLastSentTs = kaState.lastSentTs || 0;
+    const expectedUsed = kaState.usedCount || 0;
+    let coldTrippedNow = false;
+    let verified = false;
+    try {
+      this.tailReadCount += 1;
+      const tailSteps = this._hasCustomReadTail
+        ? this.readTailFn(lease.transcriptPath, 32768)
+        : readWatchdogTranscriptTail(lease.transcriptPath, 32768).steps;
+      const info = inspectLatestTurnInSteps(tailSteps);
+      if (isKeepaliveTurnFlushedForRound(info, kaState) && info.cacheReadReported === true) {
+        const isCold = info.cacheReadTokens === 0;
+        const applyResult = () => {
+          const curKa =
+            typeof store.getTtlKeepaliveState === "function" ? store.getTtlKeepaliveState(convId) : kaState;
+          if (
+            curKa.lastDispatchId !== expectedDispatchId ||
+            curKa.lastDispatchMode !== expectedDispatchMode ||
+            curKa.pendingColdCheckId !== expectedPendingId ||
+            curKa.lastSentTs !== expectedLastSentTs ||
+            curKa.usedCount !== expectedUsed ||
+            curKa.pendingAck ||
+            curKa.inKeepaliveTurn
+          ) {
+            return { applied: false, cold: Boolean(curKa.coldMissTripped) };
+          }
+          const checkedId = expectedPendingId || expectedDispatchId;
+          const nextCold = Boolean(curKa.coldMissTripped || isCold);
+          store.setTtlKeepaliveState?.(convId, {
+            coldMissTripped: nextCold,
+            pendingColdCheckId: "",
+            ...(checkedId ? { lastColdCheckedId: checkedId } : {}),
+            lastColdCheckUsed: Math.max(curKa.usedCount || 0, curKa.lastColdCheckUsed || 0),
+            updatedTs: nowWallMs
+          });
+          return { applied: true, cold: nextCold };
+        };
+        const txRes =
+          typeof store._withWriteTx === "function"
+            ? (store.open?.(), store._withWriteTx(applyResult))
+            : applyResult();
+        verified = Boolean(txRes?.applied);
+        coldTrippedNow = Boolean(txRes?.cold);
+      }
+    } catch {}
+    return { checked: verified, coldTripped: coldTrippedNow };
+  }
+
+  _rollbackKeepaliveClaimIfOwned(store, convId, claimMeta, errMsg, { mode = "error" } = {}) {
+    const {
+      dispatchId,
+      isManual,
+      prevUsed,
+      prevAnchor,
+      prevLastSentTs = 0,
+      prevDispatchId,
+      prevDispatchMode,
+      prevPendingColdCheckId = "",
+      sentAtMs
+    } = claimMeta;
+    const execRollback = () => {
+      const curKa =
+        typeof store.getTtlKeepaliveState === "function" ? store.getTtlKeepaliveState(convId) : null;
+      if (
+        !curKa ||
+        curKa.lastDispatchId !== dispatchId ||
+        curKa.pendingAck !== true ||
+        curKa.inKeepaliveTurn === true
+      ) {
+        return false;
+      }
+      store.setTtlKeepaliveState?.(convId, {
+        ...(isManual ? {} : { usedCount: prevUsed }),
+        lastIdleAnchorTs: prevAnchor,
+        lastSentTs: prevLastSentTs,
+        lastAttemptTs: Math.max(curKa.lastAttemptTs || 0, sentAtMs || 0),
+        pendingAck: false,
+        inKeepaliveTurn: false,
+        lastDispatchId: prevDispatchId,
+        lastDispatchMode: prevDispatchMode,
+        pendingColdCheckId: prevPendingColdCheckId,
+        lastError: String(errMsg || "keepalive_send_failed").slice(0, 180),
+        updatedTs: this.nowFn()
+      });
+      return true;
+    };
+    let rolledBack = false;
+    try {
+      if (typeof store._withWriteTx === "function") {
+        if (typeof store.open === "function") store.open();
+        rolledBack = Boolean(store._withWriteTx(execRollback));
+      } else {
+        rolledBack = Boolean(execRollback());
+      }
+    } catch {}
+    if (rolledBack && mode === "subagent") {
+      this._rememberSubagentIdentity(convId, true, { definitive: true });
+      try {
+        const curLease = readWatchdogLease(store, convId);
+        if (curLease && !curLease.isSubagent) {
+          writeWatchdogLeaseIfUnchanged(store, curLease.updatedTs, curLease.phase, {
+            ...curLease,
+            isSubagent: true
+          });
+        }
+      } catch {}
+    } else if (rolledBack && mode === "killed") {
+      try {
+        const curLease = readWatchdogLease(store, convId);
+        if (curLease && curLease.stopReason !== "USER_CANCELED") {
+          writeWatchdogLeaseIfUnchanged(store, curLease.updatedTs, curLease.phase, {
+            ...curLease,
+            stopReason: "USER_CANCELED"
+          });
+        }
+      } catch {}
+    }
+    return rolledBack;
+  }
+
   _evaluateIdleTtlKeepalive(
     store,
     leases,
@@ -2363,6 +2622,7 @@ export class WatchdogMonitor {
   ) {
     const coveredConvIds = new Set();
     const exhaustedConvMap = new Map();
+    const updatedLeasesById = new Map();
     if (
       typeof this.keepaliveSendFn !== "function" ||
       this._isTtlKeepaliveForcedOffByEnv() ||
@@ -2370,7 +2630,7 @@ export class WatchdogMonitor {
       !Array.isArray(leases) ||
       leases.length === 0
     ) {
-      return { coveredConvIds, exhaustedConvMap };
+      return { coveredConvIds, exhaustedConvMap, updatedLeasesById };
     }
 
     const rawMinTok = cfg.ttlKeepaliveMinTokens;
@@ -2379,12 +2639,13 @@ export class WatchdogMonitor {
         ? Math.min(500000, Math.max(0, Math.floor(Number(rawMinTok))))
         : 0;
     const leadSec = Math.min(180, Math.max(10, Math.floor(Number(cfg.ttlKeepaliveLeadSec) || 60)));
+    const minRemainSec = this._resolveTtlKeepaliveMinRemainSec(cfg);
     const deliveryMs =
       typeof store.getTtlKeepaliveDeliveryMs === "function" ? store.getTtlKeepaliveDeliveryMs() : 0;
     const deliveryCompSec = deliveryMs > 0 ? Math.min(20, Math.ceil(deliveryMs / 1000)) : 0;
 
     if (sleepJumpMs !== 0) {
-      return { coveredConvIds, exhaustedConvMap };
+      return { coveredConvIds, exhaustedConvMap, updatedLeasesById };
     }
 
     for (const lease of leases) {
@@ -2397,11 +2658,7 @@ export class WatchdogMonitor {
       }
       if (lease.subphase !== "stopped") continue;
       const stopReason = String(lease.stopReason || "").trim();
-      if (
-        /^(?:EXECUTOR_TERMINATION_REASON_)?(?:USER_CANCELED|USER_CANCELLED|CANCELED|CANCELLED|ABORTED|ERROR|watchdog_disabled|stale_|orphan_)/i.test(
-          stopReason
-        )
-      ) {
+      if (INELIGIBLE_KEEPALIVE_STOP_REASON_RE.test(stopReason)) {
         continue;
       }
       if (!this._resolveTtlKeepaliveEnabled(store, cfg, lease.conversationId, lease)) continue;
@@ -2415,10 +2672,11 @@ export class WatchdogMonitor {
       const intervalSec = this._resolveTtlKeepaliveIntervalSec(store, cfg, lease.conversationId);
       const isFixedInterval = intervalSec > 0;
 
-      const effectiveTtlSec = this._resolveLeaseEffectiveTtlSec(store, lease, cfg, nowWallMs);
-      const effectiveLeadSec = Math.min(leadSec, Math.max(5, Math.floor(effectiveTtlSec * 0.5)));
+      let workingLease = lease;
+      let effectiveTtlSec = this._resolveLeaseEffectiveTtlSec(store, workingLease, cfg, nowWallMs);
+      let effectiveLeadSec = Math.min(leadSec, Math.max(5, Math.floor(effectiveTtlSec * 0.5)));
       if (!isFixedInterval && !(effectiveTtlSec > effectiveLeadSec)) continue;
-      const effectiveTriggerLeadSec = Math.min(
+      let effectiveTriggerLeadSec = Math.min(
         Math.max(5, Math.floor(effectiveTtlSec * 0.75)),
         effectiveLeadSec + deliveryCompSec
       );
@@ -2426,44 +2684,50 @@ export class WatchdogMonitor {
       const fixedMaxWindowSec = isFixedInterval
         ? Math.max(Math.round(intervalSec * 1.5), intervalSec + 120)
         : 0;
+      let effectiveMinRemainSec = computeEffectiveKeepaliveMinRemainSec(
+        minRemainSec,
+        deliveryCompSec,
+        effectiveTriggerLeadSec
+      );
 
-      const idleAnchorTs = lease.idleAnchorTs || lease.phaseChangedTs || lease.updatedTs || 0;
-      if (idleAnchorTs <= 0 || nowWallMs < idleAnchorTs) continue;
-      let originTs =
-        lease.cacheOriginTs > 0 &&
-        lease.cacheOriginTs <= idleAnchorTs &&
-        idleAnchorTs - lease.cacheOriginTs <= 30 * 60 * 1000
-          ? lease.cacheOriginTs
-          : idleAnchorTs;
-      let idleSec = Math.floor((nowWallMs - originTs) / 1000);
-      let remSec = effectiveTtlSec - idleSec;
+      let timing = computeLeaseTtlTiming(workingLease, { effectiveTtlSec, nowWallMs });
+      if (!timing.valid) continue;
       if (isFixedInterval) {
-        if (idleSec > fixedMaxWindowSec) continue;
-      } else if (remSec <= 0) {
+        if (timing.idleSec > fixedMaxWindowSec) continue;
+      } else if (timing.remSec <= 0) {
         continue;
       }
+      const idleAnchorTs = timing.idleAnchorTs;
 
-      const kaState =
+      let kaState =
         typeof store.getTtlKeepaliveState === "function"
           ? store.getTtlKeepaliveState(lease.conversationId)
           : {
               usedCount: 0,
               lastIdleAnchorTs: 0,
               lastSentTs: 0,
+              lastAttemptTs: 0,
               pendingAck: false,
               coldMissTripped: false,
-              lastColdCheckUsed: 0
+              inKeepaliveTurn: false,
+              lastColdCheckUsed: 0,
+              lastDispatchId: "",
+              lastDispatchMode: "",
+              pendingColdCheckId: "",
+              lastColdCheckedId: ""
             };
 
       if (kaState.coldMissTripped) continue;
 
       // Lazy Turn-0 post-Stop flush backfill (0 fs.statSync): if Stop ran before the first
       // PLANNER_RESPONSE flushed to disk, inspect the tail once when entering the trigger window.
-      const isDueForBackfill = isFixedInterval ? idleSec >= fixedTriggerAtSec : remSec <= effectiveTriggerLeadSec;
+      const isDueForBackfill = isFixedInterval
+        ? timing.idleSec >= fixedTriggerAtSec
+        : timing.remSec <= effectiveTriggerLeadSec;
       if (
         effectiveMinTokens > 0 &&
         leaseContextTokens === 0 &&
-        lease.transcriptPath &&
+        workingLease.transcriptPath &&
         kaState.usedCount < maxCount &&
         isDueForBackfill &&
         this._turn0BackfillChecked.get(lease.conversationId) !== idleAnchorTs
@@ -2472,8 +2736,8 @@ export class WatchdogMonitor {
         try {
           this.tailReadCount += 1;
           const tailSteps = this._hasCustomReadTail
-            ? this.readTailFn(lease.transcriptPath, 32768)
-            : readWatchdogTranscriptTail(lease.transcriptPath, 32768).steps;
+            ? this.readTailFn(workingLease.transcriptPath, 32768)
+            : readWatchdogTranscriptTail(workingLease.transcriptPath, 32768).steps;
           const info = inspectLatestTurnInSteps(tailSteps);
           if (info.hasPlanner && !info.hasPromptAfterLastPlanner && info.contextTokens > 0) {
             leaseContextTokens = info.contextTokens;
@@ -2482,148 +2746,248 @@ export class WatchdogMonitor {
               info.prefillTs <= idleAnchorTs &&
               idleAnchorTs - info.prefillTs <= 30 * 60 * 1000
                 ? info.prefillTs
-                : lease.cacheOriginTs || idleAnchorTs;
+                : workingLease.cacheOriginTs || idleAnchorTs;
             const enrichedLease = {
-              ...lease,
+              ...workingLease,
               contextTokens: info.contextTokens,
               ...(info.maxTokens > 0 ? { windowTokens: info.maxTokens } : {}),
               ...(info.model ? { model: info.model } : {}),
               cacheOriginTs: nextBackfilledOrigin
             };
-            writeWatchdogLeaseIfUnchanged(store, lease.updatedTs, lease.phase, enrichedLease);
+            writeWatchdogLeaseIfUnchanged(store, workingLease.updatedTs, workingLease.phase, enrichedLease);
+            workingLease = enrichedLease;
+            updatedLeasesById.set(lease.conversationId, enrichedLease);
             ({ pctMinTokens } = this._resolveLeaseKeepaliveMinContext(store, cfg, enrichedLease, {
               isCustomOverride
             }));
             effectiveMinTokens = isCustomOverride ? 0 : Math.max(minTokens, pctMinTokens);
-            originTs = nextBackfilledOrigin;
-            idleSec = Math.floor((nowWallMs - originTs) / 1000);
-            remSec = effectiveTtlSec - idleSec;
+            effectiveTtlSec = this._resolveLeaseEffectiveTtlSec(store, workingLease, cfg, nowWallMs);
+            effectiveLeadSec = Math.min(leadSec, Math.max(5, Math.floor(effectiveTtlSec * 0.5)));
+            if (!isFixedInterval && !(effectiveTtlSec > effectiveLeadSec)) continue;
+            effectiveTriggerLeadSec = Math.min(
+              Math.max(5, Math.floor(effectiveTtlSec * 0.75)),
+              effectiveLeadSec + deliveryCompSec
+            );
+            effectiveMinRemainSec = computeEffectiveKeepaliveMinRemainSec(
+              minRemainSec,
+              deliveryCompSec,
+              effectiveTriggerLeadSec
+            );
+            timing = computeLeaseTtlTiming(workingLease, { effectiveTtlSec, nowWallMs });
           }
         } catch {}
       }
+      if (!timing.valid) continue;
       if (isFixedInterval) {
-        if (idleSec > fixedMaxWindowSec) continue;
-      } else if (remSec <= 0) {
+        if (timing.idleSec > fixedMaxWindowSec) continue;
+      } else if (timing.remSec <= 0) {
         continue;
       }
       if (effectiveMinTokens > 0 && leaseContextTokens < effectiveMinTokens) continue;
 
+      const remSec = timing.remSec;
       const sentOnCurrentIdleCycle =
         kaState.lastIdleAnchorTs === idleAnchorTs ||
         this._keepaliveInFlight.has(lease.conversationId) ||
-        Boolean(kaState.pendingAck && kaState.lastSentTs > 0 && nowWallMs - kaState.lastSentTs < 60_000);
+        isKeepalivePendingAckActive(kaState, nowWallMs);
 
-      if (kaState.usedCount < maxCount || sentOnCurrentIdleCycle) {
-        // Suppress all TTL popups during auto-warming cycles 1..maxCount (including while #maxCount is in transit)
+      if (sentOnCurrentIdleCycle) {
+        this._narrowMarginSkipped.delete(lease.conversationId);
         coveredConvIds.add(lease.conversationId);
-      } else if (kaState.lastIdleAnchorTs > 0 && kaState.lastIdleAnchorTs !== idleAnchorTs) {
-        // Auto-warming #maxCount has finished and its renewed cycle is now running -> eligible to alert once expiring
-        exhaustedConvMap.set(lease.conversationId, {
-          usedCount: kaState.usedCount,
-          maxCount
-        });
+        continue;
       }
 
-      if (kaState.usedCount >= maxCount) continue;
-      if (isFixedInterval ? idleSec < fixedTriggerAtSec : remSec > effectiveTriggerLeadSec) continue;
+      if (kaState.usedCount >= maxCount) {
+        if (kaState.lastIdleAnchorTs > 0 && kaState.lastIdleAnchorTs !== idleAnchorTs) {
+          exhaustedConvMap.set(lease.conversationId, {
+            usedCount: kaState.usedCount,
+            maxCount
+          });
+        }
+        continue;
+      }
 
-      if (this._keepaliveInFlight.has(lease.conversationId)) continue;
-      if (kaState.lastIdleAnchorTs === idleAnchorTs) continue;
-      if (kaState.lastSentTs > 0 && nowWallMs - kaState.lastSentTs < 25_000) continue;
+      if (isFixedInterval ? timing.idleSec < fixedTriggerAtSec : remSec > effectiveTriggerLeadSec) {
+        coveredConvIds.add(lease.conversationId);
+        continue;
+      }
 
-      // Layer-3 cold-miss circuit breaker (0 fs.statSync): if a prior keepalive round's transcript
-      // flushed AFTER Stop hook ran, verify its cache_read_tokens before firing round 2+.
-      if (
-        kaState.usedCount >= 1 &&
-        (kaState.lastColdCheckUsed || 0) < kaState.usedCount &&
-        lease.transcriptPath &&
-        typeof this.readTailFn === "function"
-      ) {
-        let coldTrippedNow = false;
-        try {
-          this.tailReadCount += 1;
-          const tailSteps = this._hasCustomReadTail
-            ? this.readTailFn(lease.transcriptPath, 32768)
-            : readWatchdogTranscriptTail(lease.transcriptPath, 32768).steps;
-          const info = inspectLatestTurnInSteps(tailSteps);
-          if (isKeepaliveTurnFlushedForRound(info, kaState)) {
-            coldTrippedNow = info.cacheReadTokens === 0;
-            store.setTtlKeepaliveState?.(lease.conversationId, {
-              coldMissTripped: coldTrippedNow,
-              lastColdCheckUsed: kaState.usedCount,
-              updatedTs: nowWallMs
-            });
-          }
-        } catch {}
-        if (coldTrippedNow) {
-          coveredConvIds.delete(lease.conversationId);
+      // Layer-3 cold-miss circuit breaker (0 fs.statSync): verify any unverified auto or manual
+      // keepalive round whose transcript flushed AFTER Stop hook ran.
+      if (hasPendingKeepaliveColdCheck(kaState)) {
+        const delayed = this._runDelayedColdMissCheck(store, lease.conversationId, workingLease, kaState, nowWallMs);
+        if (delayed.coldTripped) {
           continue;
+        }
+        if (delayed.checked && typeof store.getTtlKeepaliveState === "function") {
+          kaState = store.getTtlKeepaliveState(lease.conversationId);
         }
       }
 
+      const lastAutoCooldownTs = Math.max(kaState.lastSentTs || 0, kaState.lastAttemptTs || 0);
+      if (lastAutoCooldownTs > 0 && nowWallMs - lastAutoCooldownTs < 25_000) {
+        coveredConvIds.add(lease.conversationId);
+        continue;
+      }
+
       if (
-        this._isConversationSubagent(store, lease.conversationId, lease, { requireDefinitive: true }) ||
-        this._isConversationKilled(store, lease.conversationId, lease)
+        this._isConversationSubagent(store, lease.conversationId, workingLease, { requireDefinitive: true }) ||
+        this._isConversationKilled(store, lease.conversationId, workingLease)
       ) {
-        coveredConvIds.delete(lease.conversationId);
         exhaustedConvMap.delete(lease.conversationId);
         continue;
       }
 
+      coveredConvIds.add(lease.conversationId);
+
       const convId = lease.conversationId;
+      const readAutoNowMs = () => {
+        const cur = Number(this.nowFn());
+        return Number.isFinite(cur) && cur > 0 ? Math.floor(cur) : nowWallMs;
+      };
       const runAtomicClaim = () => {
+        const txNowWallMs = readAutoNowMs();
+        let freshLeaseForTx = workingLease;
+        let freshTiming = timing;
+        let freshTtl = effectiveTtlSec;
+        let freshTriggerLead = effectiveTriggerLeadSec;
+        let freshMinRem = effectiveMinRemainSec;
         if (typeof store.getMeta === "function") {
           const freshLease = readWatchdogLease(store, convId);
-          if (freshLease) {
-            const freshStop = String(freshLease.stopReason || "").trim();
-            if (
-              freshLease.phase !== WATCHDOG_PHASES.IDLE ||
-              freshLease.isSubagent ||
-              freshLease.subphase !== "stopped" ||
-              /^(?:EXECUTOR_TERMINATION_REASON_)?(?:USER_CANCELED|USER_CANCELLED|CANCELED|CANCELLED|ABORTED|ERROR|watchdog_disabled|stale_|orphan_)/i.test(
-                freshStop
-              )
-            ) {
-              return { claimed: false };
-            }
+          if (!freshLease) {
+            return { claimed: false, unCover: false, clearNarrowSkip: true };
           }
+          freshLeaseForTx = freshLease;
+          const freshStop = String(freshLease.stopReason || "").trim();
+          if (
+            freshLease.phase !== WATCHDOG_PHASES.IDLE ||
+            freshLease.isSubagent ||
+            freshLease.subphase !== "stopped" ||
+            INELIGIBLE_KEEPALIVE_STOP_REASON_RE.test(freshStop)
+          ) {
+            return { claimed: false, unCover: false, clearNarrowSkip: true };
+          }
+          freshTtl = this._resolveLeaseEffectiveTtlSec(store, freshLease, cfg, txNowWallMs);
+          freshTiming = computeLeaseTtlTiming(freshLease, { effectiveTtlSec: freshTtl, nowWallMs: txNowWallMs });
+          if (freshTiming.idleAnchorTs > 0 && freshTiming.idleAnchorTs !== idleAnchorTs) {
+            return { claimed: false, unCover: false, clearNarrowSkip: true };
+          }
+          const freshEffLead = Math.min(leadSec, Math.max(5, Math.floor(freshTtl * 0.5)));
+          freshTriggerLead = Math.min(
+            Math.max(5, Math.floor(freshTtl * 0.75)),
+            freshEffLead + deliveryCompSec
+          );
+          freshMinRem = computeEffectiveKeepaliveMinRemainSec(
+            minRemainSec,
+            deliveryCompSec,
+            freshTriggerLead
+          );
         }
+        // Re-check persisted keepalive enablement, quota, and state BEFORE narrow-margin skip
+        // (for both initial <= M and lock-wait drift into <= M) so a concurrent manual/auto
+        // claim, toggle-off, quota change, or cooldown never records a spurious narrow skip or
+        // reminder, while genuine narrow skip itself writes 0 DB rows.
+        if (!this._resolveTtlKeepaliveEnabled(store, cfg, convId, freshLeaseForTx)) {
+          return { claimed: false, unCover: false, clearNarrowSkip: true };
+        }
+        const freshMaxCount = this._resolveTtlKeepaliveMaxCount(store, cfg, convId);
         const freshKa =
           typeof store.getTtlKeepaliveState === "function"
             ? store.getTtlKeepaliveState(convId)
             : kaState;
+        const freshCooldownTs = Math.max(freshKa.lastSentTs || 0, freshKa.lastAttemptTs || 0);
+        if (freshKa.coldMissTripped) {
+          return { claimed: false, unCover: true, clearNarrowSkip: true };
+        }
         if (
-          freshKa.coldMissTripped ||
-          freshKa.usedCount >= maxCount ||
           freshKa.lastIdleAnchorTs === idleAnchorTs ||
-          Boolean(freshKa.pendingAck && freshKa.lastSentTs > 0 && nowWallMs - freshKa.lastSentTs < 60_000) ||
-          (freshKa.lastSentTs > 0 && nowWallMs - freshKa.lastSentTs < 25_000)
+          this._keepaliveInFlight.has(convId) ||
+          isKeepalivePendingAckActive(freshKa, txNowWallMs)
         ) {
-          return { claimed: false };
+          return { claimed: false, unCover: false, clearNarrowSkip: true };
+        }
+        if (freshKa.usedCount >= freshMaxCount) {
+          return {
+            claimed: false,
+            unCover: true,
+            clearNarrowSkip: true,
+            ...(freshKa.lastIdleAnchorTs > 0 && freshKa.lastIdleAnchorTs !== idleAnchorTs
+              ? { exhausted: { usedCount: freshKa.usedCount, maxCount: freshMaxCount } }
+              : {})
+          };
+        }
+        if (freshCooldownTs > 0 && txNowWallMs - freshCooldownTs < 25_000) {
+          return { claimed: false, unCover: false, clearNarrowSkip: true };
+        }
+        const freshIntervalSec = this._resolveTtlKeepaliveIntervalSec(store, cfg, convId);
+        const freshIsFixed = freshIntervalSec > 0;
+        const freshFixedTriggerAt = freshIsFixed ? Math.max(30, freshIntervalSec - deliveryCompSec) : 0;
+        const freshFixedMaxWindow = freshIsFixed
+          ? Math.max(Math.round(freshIntervalSec * 1.5), freshIntervalSec + 120)
+          : 0;
+        if (!freshTiming.valid) {
+          return { claimed: false, unCover: false, clearNarrowSkip: true };
+        }
+        if (freshIsFixed) {
+          if (freshTiming.idleSec > freshFixedMaxWindow) {
+            return { claimed: false, unCover: false, clearNarrowSkip: true };
+          }
+          if (freshTiming.idleSec < freshFixedTriggerAt) {
+            return { claimed: false, unCover: false };
+          }
+        } else {
+          if (freshTiming.remSec <= 0) {
+            return { claimed: false, unCover: false, clearNarrowSkip: true };
+          }
+          if (freshTiming.remSec > freshTriggerLead) {
+            return { claimed: false, unCover: false };
+          }
+          if (freshMinRem > 0 && freshTiming.remSec <= freshMinRem) {
+            return {
+              claimed: false,
+              unCover: true,
+              narrowSkipInfo: {
+                idleAnchorTs: freshTiming.idleAnchorTs,
+                originTs: freshTiming.originTs,
+                remSec: freshTiming.remSec,
+                minRemainSec: freshMinRem,
+                effectiveTtlSec: freshTtl,
+                atMs: txNowWallMs
+              }
+            };
+          }
         }
         const claimedNextUsed = freshKa.usedCount + 1;
+        const txDispatchId = `ka_${txNowWallMs.toString(36)}_${crypto.randomBytes(4).toString("hex")}`;
         store.setTtlKeepaliveState?.(convId, {
           usedCount: claimedNextUsed,
           lastIdleAnchorTs: idleAnchorTs,
-          lastSentTs: nowWallMs,
+          lastSentTs: txNowWallMs,
+          lastAttemptTs: txNowWallMs,
           pendingAck: true,
+          inKeepaliveTurn: false,
+          lastDispatchId: txDispatchId,
+          lastDispatchMode: "auto",
+          pendingColdCheckId: "",
           lastError: "",
-          updatedTs: nowWallMs
+          updatedTs: txNowWallMs
         });
         return {
           claimed: true,
+          dispatchId: txDispatchId,
+          sentAtMs: txNowWallMs,
           nextUsed: claimedNextUsed,
+          maxCount: freshMaxCount,
           prevUsed: freshKa.usedCount,
-          prevAnchor: freshKa.lastIdleAnchorTs
+          prevAnchor: freshKa.lastIdleAnchorTs,
+          prevLastSentTs: freshKa.lastSentTs || 0,
+          prevDispatchId: freshKa.lastDispatchId || "",
+          prevDispatchMode: freshKa.lastDispatchMode || "",
+          prevPendingColdCheckId: freshKa.pendingColdCheckId || ""
         };
       };
 
-      let claimRes = {
-        claimed: true,
-        nextUsed: kaState.usedCount + 1,
-        prevUsed: kaState.usedCount,
-        prevAnchor: kaState.lastIdleAnchorTs
-      };
+      let claimRes = { claimed: false };
       try {
         if (typeof store._withWriteTx === "function") {
           if (typeof store.open === "function") store.open();
@@ -2631,57 +2995,81 @@ export class WatchdogMonitor {
         } else {
           claimRes = runAtomicClaim();
         }
-      } catch {}
+      } catch {
+        claimRes = { claimed: false };
+      }
       if (!claimRes || !claimRes.claimed) {
+        if (claimRes?.clearNarrowSkip) {
+          this._narrowMarginSkipped.delete(convId);
+        }
+        if (claimRes?.exhausted) {
+          exhaustedConvMap.set(convId, claimRes.exhausted);
+        }
+        if (claimRes?.narrowSkipInfo) {
+          const prevSkip = this._narrowMarginSkipped.get(convId);
+          if (!prevSkip || prevSkip.idleAnchorTs !== claimRes.narrowSkipInfo.idleAnchorTs) {
+            this.ttlKeepaliveNarrowSkippedCount += 1;
+          }
+          this._narrowMarginSkipped.set(convId, claimRes.narrowSkipInfo);
+        }
+        if (claimRes?.unCover) {
+          coveredConvIds.delete(convId);
+        }
         continue;
       }
 
+      const dispatchId = claimRes.dispatchId;
       const nextUsed = claimRes.nextUsed;
-      const prevUsed = claimRes.prevUsed;
-      const prevAnchor = claimRes.prevAnchor;
+      const claimedMaxCount = claimRes.maxCount || maxCount;
       const isZh = uiLang === "zh";
       const message = isZh
-        ? `[agy-dart TTL保活 ${nextUsed}/${maxCount}] 仅回复 OK 以保持上下文缓存热度，请勿调用任何工具或修改任何内容。`
-        : `[agy-dart TTL Keepalive ${nextUsed}/${maxCount}] Reply OK only to keep the prompt cache warm. Do not call any tools or modify any files.`;
+        ? `[agy-dart TTL保活 ${nextUsed}/${claimedMaxCount}] 仅回复 OK 以保持上下文缓存热度，请勿调用任何工具或修改任何内容。`
+        : `[agy-dart TTL Keepalive ${nextUsed}/${claimedMaxCount}] Reply OK only to keep the prompt cache warm. Do not call any tools or modify any files.`;
+      const claimMeta = {
+        dispatchId,
+        isManual: false,
+        prevUsed: claimRes.prevUsed,
+        prevAnchor: claimRes.prevAnchor,
+        prevLastSentTs: claimRes.prevLastSentTs || 0,
+        prevDispatchId: claimRes.prevDispatchId,
+        prevDispatchMode: claimRes.prevDispatchMode,
+        prevPendingColdCheckId: claimRes.prevPendingColdCheckId || "",
+        sentAtMs: claimRes.sentAtMs
+      };
 
-      this._keepaliveInFlight.add(convId);
+      this._narrowMarginSkipped.delete(convId);
+      this._keepaliveInFlight.set(convId, dispatchId);
 
       Promise.resolve()
         .then(() =>
           this.keepaliveSendFn({
             conversationId: convId,
             message,
+            dispatchId,
             usedCount: nextUsed,
-            maxCount,
-            cwd: lease.cwd || ""
+            maxCount: claimedMaxCount,
+            cwd: workingLease.cwd || ""
           })
         )
         .then((res) => {
           if (res && res.skippedSubagent === true) {
-            this._rememberSubagentIdentity(convId, true, { definitive: true });
-            try {
-              const curLease = readWatchdogLease(store, convId);
-              if (curLease && !curLease.isSubagent) {
-                writeWatchdogLeaseIfUnchanged(store, curLease.updatedTs, curLease.phase, {
-                  ...curLease,
-                  isSubagent: true
-                });
-              }
-              store.deleteMeta?.(`cache:ttl_keepalive_state:${convId}`);
-            } catch {}
+            this._rollbackKeepaliveClaimIfOwned(
+              store,
+              convId,
+              claimMeta,
+              res.error || "subagent_keepalive_suppressed",
+              { mode: "subagent" }
+            );
             return;
           }
           if (res && res.skippedKilled === true) {
-            try {
-              const curLease = readWatchdogLease(store, convId);
-              if (curLease && curLease.stopReason !== "USER_CANCELED") {
-                writeWatchdogLeaseIfUnchanged(store, curLease.updatedTs, curLease.phase, {
-                  ...curLease,
-                  stopReason: "USER_CANCELED"
-                });
-              }
-              store.deleteMeta?.(`cache:ttl_keepalive_state:${convId}`);
-            } catch {}
+            this._rollbackKeepaliveClaimIfOwned(
+              store,
+              convId,
+              claimMeta,
+              res.error || "killed_conversation_keepalive_suppressed",
+              { mode: "killed" }
+            );
             return;
           }
           if (res && res.ok === false) {
@@ -2690,23 +3078,451 @@ export class WatchdogMonitor {
           this.ttlKeepaliveCount += 1;
         })
         .catch((err) => {
-          try {
-            store.setTtlKeepaliveState?.(convId, {
-              usedCount: prevUsed,
-              lastIdleAnchorTs: prevAnchor,
-              lastSentTs: nowWallMs,
-              pendingAck: false,
-              lastError: String(err?.message || err || "keepalive_send_failed").slice(0, 180),
-              updatedTs: this.nowFn()
-            });
-          } catch {}
+          this._rollbackKeepaliveClaimIfOwned(
+            store,
+            convId,
+            claimMeta,
+            String(err?.message || err || "keepalive_send_failed")
+          );
         })
         .finally(() => {
-          this._keepaliveInFlight.delete(convId);
+          if (this._keepaliveInFlight.get(convId) === dispatchId) {
+            this._keepaliveInFlight.delete(convId);
+          }
         });
     }
 
-    return { coveredConvIds, exhaustedConvMap };
+    return { coveredConvIds, exhaustedConvMap, updatedLeasesById };
+  }
+
+  /**
+   * Synchronous entry for manual 1x cache warming (works even when Auto-Keepalive is OFF).
+   * Validates eligibility, atomically claims the idle cycle inside a write tx, and dispatches
+   * asynchronously via `keepaliveSendFn` without consuming auto `usedCount`.
+   */
+  triggerManualKeepalive(conversationId, { nowMs, uiLang } = {}) {
+    const rawId = typeof conversationId === "string" ? conversationId.trim() : "";
+    const lowerId = rawId.toLowerCase();
+    const isInvalidOrUnbound =
+      !rawId ||
+      lowerId === "__unbound__" ||
+      RESERVED_CHECKPOINT_SESSION_IDS.has(lowerId) ||
+      /^-/.test(rawId) ||
+      !isSafeConversationId(rawId);
+    if (isInvalidOrUnbound) {
+      return { ok: false, status: 400, dispatched: false, error: "Invalid or unbound conversationId" };
+    }
+    const convId = rawId;
+    const store = this.getStore?.();
+    if (!store || typeof this.keepaliveSendFn !== "function") {
+      return { ok: true, dispatched: false, skippedReason: "unsupported", conversationId: convId };
+    }
+    const hasExplicitNow = Number.isFinite(Number(nowMs)) && Number(nowMs) > 0;
+    const readNowMs = () => {
+      if (hasExplicitNow) return Math.floor(Number(nowMs));
+      const cur = Number(this.nowFn());
+      return Number.isFinite(cur) && cur > 0 ? Math.floor(cur) : Date.now();
+    };
+    const nowWallMs = readNowMs();
+    const cfg = this.getConfig() || {};
+    const lease = readWatchdogLease(store, convId);
+
+    if (this._isConversationSubagent(store, convId, lease, { requireDefinitive: true })) {
+      return { ok: true, dispatched: false, skippedReason: "subagent", conversationId: convId };
+    }
+    if (this._isConversationKilled(store, convId, lease)) {
+      return { ok: true, dispatched: false, skippedReason: "killed", conversationId: convId };
+    }
+    if (!lease) {
+      return { ok: true, dispatched: false, skippedReason: "no_lease", conversationId: convId };
+    }
+    if (lease.phase !== WATCHDOG_PHASES.IDLE || lease.subphase === "stopped_bg_pending") {
+      return { ok: true, dispatched: false, skippedReason: "turn_active", conversationId: convId };
+    }
+    if (lease.subphase !== "stopped") {
+      return { ok: true, dispatched: false, skippedReason: "ineligible_stop_state", conversationId: convId };
+    }
+    const stopReason = String(lease.stopReason || "").trim();
+    if (INELIGIBLE_KEEPALIVE_STOP_REASON_RE.test(stopReason)) {
+      return { ok: true, dispatched: false, skippedReason: "ineligible_stop_reason", conversationId: convId };
+    }
+
+    const effectiveTtlSec = this._resolveLeaseEffectiveTtlSec(store, lease, cfg, nowWallMs);
+    const timing = computeLeaseTtlTiming(lease, { effectiveTtlSec, nowWallMs });
+    if (!timing.valid) {
+      return {
+        ok: true,
+        dispatched: false,
+        skippedReason: "no_time_anchor",
+        conversationId: convId,
+        effectiveTtlSec
+      };
+    }
+    if (timing.remSec <= 0) {
+      return {
+        ok: true,
+        dispatched: false,
+        skippedReason: "already_expired",
+        conversationId: convId,
+        remSec: timing.remSec,
+        effectiveTtlSec,
+        cacheOriginTs: timing.originTs,
+        estimatedExpireTs: timing.estimatedExpireTs
+      };
+    }
+
+    let kaState =
+      typeof store.getTtlKeepaliveState === "function"
+        ? store.getTtlKeepaliveState(convId)
+        : {
+            usedCount: 0,
+            lastIdleAnchorTs: 0,
+            lastSentTs: 0,
+            lastAttemptTs: 0,
+            pendingAck: false,
+            coldMissTripped: false,
+            inKeepaliveTurn: false,
+            lastColdCheckUsed: 0,
+            lastDispatchId: "",
+            lastDispatchMode: "",
+            pendingColdCheckId: "",
+            lastColdCheckedId: "",
+            lastError: ""
+          };
+    if (!kaState.coldMissTripped && hasPendingKeepaliveColdCheck(kaState)) {
+      const delayed = this._runDelayedColdMissCheck(store, convId, lease, kaState, nowWallMs);
+      if (delayed.coldTripped) {
+        kaState =
+          typeof store.getTtlKeepaliveState === "function"
+            ? store.getTtlKeepaliveState(convId)
+            : { ...kaState, coldMissTripped: true };
+      }
+    }
+    if (kaState.coldMissTripped) {
+      return {
+        ok: true,
+        dispatched: false,
+        skippedReason: "cold_miss_tripped",
+        conversationId: convId,
+        remSec: timing.remSec,
+        effectiveTtlSec,
+        cacheOriginTs: timing.originTs,
+        estimatedExpireTs: timing.estimatedExpireTs
+      };
+    }
+    if (this._keepaliveInFlight.has(convId)) {
+      return {
+        ok: true,
+        dispatched: false,
+        skippedReason: "in_flight",
+        conversationId: convId,
+        remSec: timing.remSec,
+        effectiveTtlSec,
+        cacheOriginTs: timing.originTs,
+        estimatedExpireTs: timing.estimatedExpireTs
+      };
+    }
+    if (isKeepalivePendingAckActive(kaState, nowWallMs)) {
+      return {
+        ok: true,
+        dispatched: false,
+        skippedReason: "pending_ack",
+        conversationId: convId,
+        remSec: timing.remSec,
+        effectiveTtlSec,
+        cacheOriginTs: timing.originTs,
+        estimatedExpireTs: timing.estimatedExpireTs
+      };
+    }
+    if (kaState.lastIdleAnchorTs === timing.idleAnchorTs) {
+      return {
+        ok: true,
+        dispatched: false,
+        skippedReason: "already_dispatched",
+        conversationId: convId,
+        remSec: timing.remSec,
+        effectiveTtlSec,
+        cacheOriginTs: timing.originTs,
+        estimatedExpireTs: timing.estimatedExpireTs
+      };
+    }
+    const lastManualCooldownTs = Math.max(kaState.lastSentTs || 0, kaState.lastAttemptTs || 0);
+    if (lastManualCooldownTs > 0 && nowWallMs - lastManualCooldownTs < MANUAL_KEEPALIVE_COOLDOWN_MS) {
+      return {
+        ok: true,
+        dispatched: false,
+        skippedReason: "cooldown",
+        conversationId: convId,
+        remSec: timing.remSec,
+        effectiveTtlSec,
+        cacheOriginTs: timing.originTs,
+        estimatedExpireTs: timing.estimatedExpireTs
+      };
+    }
+
+    const deliveryMs =
+      typeof store.getTtlKeepaliveDeliveryMs === "function" ? store.getTtlKeepaliveDeliveryMs() : 0;
+    const deliveryCompSec = deliveryMs > 0 ? Math.min(20, Math.ceil(deliveryMs / 1000)) : 0;
+    const leadSec = Math.min(180, Math.max(10, Math.floor(Number(cfg.ttlKeepaliveLeadSec) || 60)));
+    const minRemainSec = this._resolveTtlKeepaliveMinRemainSec(cfg);
+
+    const expectedIdleAnchorTs = timing.idleAnchorTs;
+    const expectedStartedTs = Number.isFinite(Number(lease.startedTs)) && lease.startedTs > 0 ? Math.floor(lease.startedTs) : 0;
+    const runAtomicManualClaim = () => {
+      const txNowWallMs = readNowMs();
+      const freshLease = readWatchdogLease(store, convId);
+      if (!freshLease) return { claimed: false, skippedReason: "no_lease" };
+      if (
+        freshLease.isSubagent ||
+        (freshLease.parentConversationId && freshLease.parentConversationId !== convId) ||
+        (freshLease.rootSessionId && freshLease.rootSessionId !== convId)
+      ) {
+        return { claimed: false, skippedReason: "subagent" };
+      }
+      if (freshLease.phase !== WATCHDOG_PHASES.IDLE || freshLease.subphase === "stopped_bg_pending") {
+        return { claimed: false, skippedReason: "turn_active" };
+      }
+      if (freshLease.subphase !== "stopped") {
+        return { claimed: false, skippedReason: "ineligible_stop_state" };
+      }
+      const freshStop = String(freshLease.stopReason || "").trim();
+      if (INELIGIBLE_KEEPALIVE_STOP_REASON_RE.test(freshStop)) {
+        return { claimed: false, skippedReason: "ineligible_stop_reason" };
+      }
+      const freshTtlSec = this._resolveLeaseEffectiveTtlSec(store, freshLease, cfg, txNowWallMs);
+      const freshTiming = computeLeaseTtlTiming(freshLease, { effectiveTtlSec: freshTtlSec, nowWallMs: txNowWallMs });
+      const freshStartedTs =
+        Number.isFinite(Number(freshLease.startedTs)) && freshLease.startedTs > 0 ? Math.floor(freshLease.startedTs) : 0;
+      if (
+        (freshTiming.idleAnchorTs > 0 && freshTiming.idleAnchorTs !== expectedIdleAnchorTs) ||
+        (expectedStartedTs > 0 && freshStartedTs > 0 && freshStartedTs !== expectedStartedTs)
+      ) {
+        return {
+          claimed: false,
+          skippedReason: "idle_cycle_changed",
+          ...(freshTiming.valid
+            ? {
+                remSec: freshTiming.remSec,
+                cacheOriginTs: freshTiming.originTs,
+                estimatedExpireTs: freshTiming.estimatedExpireTs
+              }
+            : {}),
+          effectiveTtlSec: freshTtlSec
+        };
+      }
+      if (!freshTiming.valid) {
+        return { claimed: false, skippedReason: "no_time_anchor", effectiveTtlSec: freshTtlSec };
+      }
+      if (freshTiming.remSec <= 0) {
+        return {
+          claimed: false,
+          skippedReason: "already_expired",
+          remSec: freshTiming.remSec,
+          effectiveTtlSec: freshTtlSec,
+          cacheOriginTs: freshTiming.originTs,
+          estimatedExpireTs: freshTiming.estimatedExpireTs
+        };
+      }
+      const freshKa =
+        typeof store.getTtlKeepaliveState === "function" ? store.getTtlKeepaliveState(convId) : kaState;
+      if (freshKa.coldMissTripped) {
+        return {
+          claimed: false,
+          skippedReason: "cold_miss_tripped",
+          remSec: freshTiming.remSec,
+          effectiveTtlSec: freshTtlSec,
+          cacheOriginTs: freshTiming.originTs,
+          estimatedExpireTs: freshTiming.estimatedExpireTs
+        };
+      }
+      if (this._keepaliveInFlight.has(convId)) {
+        return {
+          claimed: false,
+          skippedReason: "in_flight",
+          remSec: freshTiming.remSec,
+          effectiveTtlSec: freshTtlSec
+        };
+      }
+      if (isKeepalivePendingAckActive(freshKa, txNowWallMs)) {
+        return {
+          claimed: false,
+          skippedReason: "pending_ack",
+          remSec: freshTiming.remSec,
+          effectiveTtlSec: freshTtlSec
+        };
+      }
+      if (freshKa.lastIdleAnchorTs === freshTiming.idleAnchorTs) {
+        return {
+          claimed: false,
+          skippedReason: "already_dispatched",
+          remSec: freshTiming.remSec,
+          effectiveTtlSec: freshTtlSec
+        };
+      }
+      const freshManualCooldownTs = Math.max(freshKa.lastSentTs || 0, freshKa.lastAttemptTs || 0);
+      if (freshManualCooldownTs > 0 && txNowWallMs - freshManualCooldownTs < MANUAL_KEEPALIVE_COOLDOWN_MS) {
+        return {
+          claimed: false,
+          skippedReason: "cooldown",
+          remSec: freshTiming.remSec,
+          effectiveTtlSec: freshTtlSec
+        };
+      }
+      const txDispatchId = `ka_${txNowWallMs.toString(36)}_${crypto.randomBytes(4).toString("hex")}`;
+      store.setTtlKeepaliveState?.(convId, {
+        lastIdleAnchorTs: freshTiming.idleAnchorTs,
+        lastSentTs: txNowWallMs,
+        lastAttemptTs: txNowWallMs,
+        pendingAck: true,
+        inKeepaliveTurn: false,
+        lastDispatchId: txDispatchId,
+        lastDispatchMode: "manual",
+        pendingColdCheckId: "",
+        lastError: "",
+        updatedTs: txNowWallMs
+      });
+      return {
+        claimed: true,
+        dispatchId: txDispatchId,
+        sentAtMs: txNowWallMs,
+        lease: freshLease,
+        timing: freshTiming,
+        effectiveTtlSec: freshTtlSec,
+        usedCount: freshKa.usedCount,
+        prevAnchor: freshKa.lastIdleAnchorTs,
+        prevLastSentTs: freshKa.lastSentTs || 0,
+        prevDispatchId: freshKa.lastDispatchId || "",
+        prevDispatchMode: freshKa.lastDispatchMode || "",
+        prevPendingColdCheckId: freshKa.pendingColdCheckId || ""
+      };
+    };
+
+    let claimRes = { claimed: false, skippedReason: "tx_failed" };
+    try {
+      if (typeof store._withWriteTx === "function") {
+        if (typeof store.open === "function") store.open();
+        claimRes = store._withWriteTx(runAtomicManualClaim);
+      } else {
+        claimRes = runAtomicManualClaim();
+      }
+    } catch (err) {
+      return {
+        ok: false,
+        status: 500,
+        dispatched: false,
+        skippedReason: "tx_failed",
+        error: String(err?.message || err || "keepalive_claim_tx_failed").slice(0, 180),
+        conversationId: convId
+      };
+    }
+
+    if (!claimRes || !claimRes.claimed) {
+      return {
+        ok: true,
+        dispatched: false,
+        skippedReason: claimRes?.skippedReason || "cooldown",
+        conversationId: convId,
+        ...(claimRes?.remSec !== undefined ? { remSec: claimRes.remSec } : {}),
+        ...(claimRes?.effectiveTtlSec !== undefined ? { effectiveTtlSec: claimRes.effectiveTtlSec } : {}),
+        ...(claimRes?.cacheOriginTs !== undefined ? { cacheOriginTs: claimRes.cacheOriginTs } : {}),
+        ...(claimRes?.estimatedExpireTs !== undefined ? { estimatedExpireTs: claimRes.estimatedExpireTs } : {})
+      };
+    }
+
+    const dispatchId = claimRes.dispatchId;
+    const claimedTtlSec = claimRes.effectiveTtlSec;
+    const claimedTiming = claimRes.timing;
+    const effLeadSec = Math.min(leadSec, Math.max(5, Math.floor(claimedTtlSec * 0.5)));
+    const effTriggerLeadSec = Math.min(
+      Math.max(5, Math.floor(claimedTtlSec * 0.75)),
+      effLeadSec + deliveryCompSec
+    );
+    const effMinRemSec = computeEffectiveKeepaliveMinRemainSec(minRemainSec, deliveryCompSec, effTriggerLeadSec);
+    const tightMargin = Boolean(effMinRemSec > 0 && claimedTiming.remSec <= effMinRemSec);
+
+    const resolvedLang =
+      uiLang === "zh" || uiLang === "en" ? uiLang : this._resolveUiLangInfo(store, cfg).lang;
+    const message = buildManualKeepaliveMessage(resolvedLang);
+    const claimMeta = {
+      dispatchId,
+      isManual: true,
+      prevUsed: claimRes.usedCount,
+      prevAnchor: claimRes.prevAnchor,
+      prevLastSentTs: claimRes.prevLastSentTs || 0,
+      prevDispatchId: claimRes.prevDispatchId,
+      prevDispatchMode: claimRes.prevDispatchMode,
+      prevPendingColdCheckId: claimRes.prevPendingColdCheckId || "",
+      sentAtMs: claimRes.sentAtMs
+    };
+
+    this._narrowMarginSkipped.delete(convId);
+    this._keepaliveInFlight.set(convId, dispatchId);
+
+    Promise.resolve()
+      .then(() =>
+        this.keepaliveSendFn({
+          conversationId: convId,
+          message,
+          manual: true,
+          dispatchId,
+          usedCount: claimRes.usedCount,
+          maxCount: this._resolveTtlKeepaliveMaxCount(store, cfg, convId),
+          cwd: claimRes.lease?.cwd || ""
+        })
+      )
+      .then((res) => {
+        if (res && res.skippedSubagent === true) {
+          this._rollbackKeepaliveClaimIfOwned(
+            store,
+            convId,
+            claimMeta,
+            res.error || "subagent_keepalive_suppressed",
+            { mode: "subagent" }
+          );
+          return;
+        }
+        if (res && res.skippedKilled === true) {
+          this._rollbackKeepaliveClaimIfOwned(
+            store,
+            convId,
+            claimMeta,
+            res.error || "killed_conversation_keepalive_suppressed",
+            { mode: "killed" }
+          );
+          return;
+        }
+        if (res && res.ok === false) {
+          throw new Error(res.error || "keepalive_send_failed");
+        }
+        this.manualKeepaliveCount += 1;
+      })
+      .catch((err) => {
+        this._rollbackKeepaliveClaimIfOwned(
+          store,
+          convId,
+          claimMeta,
+          String(err?.message || err || "keepalive_send_failed")
+        );
+      })
+      .finally(() => {
+        if (this._keepaliveInFlight.get(convId) === dispatchId) {
+          this._keepaliveInFlight.delete(convId);
+        }
+      });
+
+    return {
+      ok: true,
+      dispatched: true,
+      skippedReason: "",
+      conversationId: convId,
+      dispatchId,
+      remSec: claimedTiming.remSec,
+      effectiveTtlSec: claimedTtlSec,
+      cacheOriginTs: claimedTiming.originTs,
+      estimatedExpireTs: claimedTiming.estimatedExpireTs,
+      effectiveMinRemainSec: effMinRemSec,
+      tightMargin
+    };
   }
 
   _evaluateIdleTtlNotifications(
@@ -2720,6 +3536,7 @@ export class WatchdogMonitor {
       sleepJumpMs,
       coveredConvIds = null,
       exhaustedConvMap = null,
+      updatedLeasesById = null,
       activeChildParents = null
     }
   ) {
@@ -2730,7 +3547,8 @@ export class WatchdogMonitor {
     const leadSec = Math.min(300, Math.max(15, Math.floor(Number(cfg.ttlNotifyLeadSec) || 60)));
 
     if (sleepJumpMs !== 0) {
-      for (const lease of leases) {
+      for (const rawLease of leases) {
+        const lease = (rawLease && updatedLeasesById?.get(rawLease.conversationId)) || rawLease;
         if (!lease || lease.phase !== WATCHDOG_PHASES.IDLE || lease.isSubagent) continue;
         const idleAnchorTs = lease.idleAnchorTs || lease.phaseChangedTs || lease.updatedTs || 0;
         if (idleAnchorTs > 0) {
@@ -2747,7 +3565,8 @@ export class WatchdogMonitor {
       return `${sec}s`;
     };
 
-    for (const lease of leases) {
+    for (const rawLease of leases) {
+      const lease = (rawLease && updatedLeasesById?.get(rawLease.conversationId)) || rawLease;
       if (
         !lease ||
         lease.phase !== WATCHDOG_PHASES.IDLE ||
@@ -2770,10 +3589,10 @@ export class WatchdogMonitor {
       const effectiveTtlSec = this._resolveLeaseEffectiveTtlSec(store, lease, cfg, nowWallMs);
       if (!(effectiveTtlSec > leadSec)) continue;
 
-      const idleAnchorTs = lease.idleAnchorTs || lease.phaseChangedTs || lease.updatedTs || 0;
-      if (idleAnchorTs <= 0 || nowWallMs < idleAnchorTs) continue;
-      const idleSec = Math.floor((nowWallMs - idleAnchorTs) / 1000);
-      const remSec = effectiveTtlSec - idleSec;
+      const timing = computeLeaseTtlTiming(lease, { effectiveTtlSec, nowWallMs });
+      if (!timing.valid) continue;
+      const idleAnchorTs = timing.idleAnchorTs;
+      const remSec = timing.remSec;
       if (!(remSec > 0 && remSec <= leadSec)) continue;
 
       const dedupKey = `${lease.conversationId}:${idleAnchorTs}`;
@@ -2786,26 +3605,45 @@ export class WatchdogMonitor {
       if (!this._resolveTtlKeepaliveEnabled(store, cfg, lease.conversationId, lease)) continue;
       if (store && (typeof store.getTimedMeta === "function" || typeof store.getMeta === "function")) {
         const claimTtlPopup = () => {
+          if (typeof store.getMeta === "function") {
+            const liveLease = readWatchdogLease(store, lease.conversationId);
+            if (
+              !liveLease ||
+              liveLease.phase !== WATCHDOG_PHASES.IDLE ||
+              liveLease.subphase !== "stopped" ||
+              (liveLease.idleAnchorTs || liveLease.phaseChangedTs || liveLease.updatedTs || 0) !== idleAnchorTs
+            ) {
+              return { claimed: false, alreadyNotified: false };
+            }
+          }
+          if (typeof store.getTtlKeepaliveState === "function") {
+            const liveKa = store.getTtlKeepaliveState(lease.conversationId);
+            if (liveKa && liveKa.lastIdleAnchorTs === idleAnchorTs) {
+              return { claimed: false, alreadyNotified: false };
+            }
+          }
           const prev =
             typeof store.getTimedMeta === "function"
               ? store.getTimedMeta(ttlAlertMetaKey, "")
               : store.getMeta(ttlAlertMetaKey, "");
-          if (prev === dedupKey) return false;
+          if (prev === dedupKey) return { claimed: false, alreadyNotified: true };
           if (typeof store.setTimedMeta === "function") store.setTimedMeta(ttlAlertMetaKey, dedupKey);
           else if (typeof store.setMeta === "function") store.setMeta(ttlAlertMetaKey, dedupKey);
-          return true;
+          return { claimed: true, alreadyNotified: false };
         };
-        let claimedPopup = true;
+        let popupClaim = { claimed: false, alreadyNotified: false };
         try {
           if (typeof store._withWriteTx === "function") {
             if (typeof store.open === "function") store.open();
-            claimedPopup = store._withWriteTx(claimTtlPopup);
+            popupClaim = store._withWriteTx(claimTtlPopup);
           } else {
-            claimedPopup = claimTtlPopup();
+            popupClaim = claimTtlPopup();
           }
-        } catch {}
-        if (!claimedPopup) {
-          this._ttlNotifiedKeys.set(lease.conversationId, dedupKey);
+        } catch { popupClaim = { claimed: false, alreadyNotified: false }; }
+        if (!popupClaim?.claimed) {
+          if (popupClaim?.alreadyNotified) {
+            this._ttlNotifiedKeys.set(lease.conversationId, dedupKey);
+          }
           continue;
         }
       }
@@ -3062,7 +3900,8 @@ export class WatchdogMonitor {
       for (const id of this._turn0BackfillChecked.keys()) {
         if (!liveIds.has(id)) this._turn0BackfillChecked.delete(id);
       }
-      const { coveredConvIds, exhaustedConvMap } = this._evaluateIdleTtlKeepalive(store, leases, {
+      this._pruneNarrowMarginSkipped(leases);
+      const { coveredConvIds, exhaustedConvMap, updatedLeasesById } = this._evaluateIdleTtlKeepalive(store, leases, {
         nowWallMs,
         cfg,
         ttlKeepaliveEnabled,
@@ -3078,6 +3917,7 @@ export class WatchdogMonitor {
         sleepJumpMs,
         coveredConvIds,
         exhaustedConvMap,
+        updatedLeasesById,
         activeChildParents: initialChildActivity.activeChildParents
       });
       this._evaluateWatermarkNotifications(store, leases, {
@@ -3137,7 +3977,8 @@ export class WatchdogMonitor {
       for (const id of this._turn0BackfillChecked.keys()) {
         if (!liveIds.has(id)) this._turn0BackfillChecked.delete(id);
       }
-      const { coveredConvIds, exhaustedConvMap } = this._evaluateIdleTtlKeepalive(store, leases, {
+      this._pruneNarrowMarginSkipped(leases);
+      const { coveredConvIds, exhaustedConvMap, updatedLeasesById } = this._evaluateIdleTtlKeepalive(store, leases, {
         nowWallMs,
         cfg,
         ttlKeepaliveEnabled,
@@ -3145,6 +3986,11 @@ export class WatchdogMonitor {
         uiLang,
         sleepJumpMs
       });
+      if (updatedLeasesById.size > 0) {
+        for (const [cid, enriched] of updatedLeasesById.entries()) {
+          this._lastEvaluated.set(cid, this._buildIdleEvaluation(enriched, nowWallMs));
+        }
+      }
       this._evaluateIdleTtlNotifications(store, leases, {
         nowWallMs,
         cfg,
@@ -3153,6 +3999,7 @@ export class WatchdogMonitor {
         sleepJumpMs,
         coveredConvIds,
         exhaustedConvMap,
+        updatedLeasesById,
         activeChildParents: initialChildActivity.activeChildParents
       });
       this._evaluateWatermarkNotifications(store, leases, {
@@ -3292,9 +4139,10 @@ export class WatchdogMonitor {
     for (const id of this._turn0BackfillChecked.keys()) {
       if (!seenIds.has(id)) this._turn0BackfillChecked.delete(id);
     }
+    this._pruneNarrowMarginSkipped(leases);
 
     const idleLeases = leases.filter((l) => l.phase === WATCHDOG_PHASES.IDLE);
-    const { coveredConvIds, exhaustedConvMap } = this._evaluateIdleTtlKeepalive(store, idleLeases, {
+    const { coveredConvIds, exhaustedConvMap, updatedLeasesById } = this._evaluateIdleTtlKeepalive(store, idleLeases, {
       nowWallMs,
       cfg,
       ttlKeepaliveEnabled,
@@ -3302,6 +4150,11 @@ export class WatchdogMonitor {
       uiLang,
       sleepJumpMs
     });
+    if (updatedLeasesById.size > 0) {
+      for (const [cid, enriched] of updatedLeasesById.entries()) {
+        evaluatedById.set(cid, this._buildIdleEvaluation(enriched, nowWallMs));
+      }
+    }
     this._evaluateIdleTtlNotifications(store, idleLeases, {
       nowWallMs,
       cfg,
@@ -3310,6 +4163,7 @@ export class WatchdogMonitor {
       sleepJumpMs,
       coveredConvIds,
       exhaustedConvMap,
+      updatedLeasesById,
       activeChildParents: mergedChildActivity.activeChildParents
     });
     this._evaluateWatermarkNotifications(store, leases, {
@@ -4093,9 +4947,13 @@ export class WatchdogMonitor {
         typeof store.hasCustomTtlKeepaliveOverride === "function" &&
         store.hasCustomTtlKeepaliveOverride(kaTargetConvId)
     );
+    const persistedTargetLease =
+      kaTargetConvId && kaTargetConvId !== "__unbound__" && store
+        ? readWatchdogLease(store, kaTargetConvId)
+        : null;
     const targetLeaseForCtx =
+      persistedTargetLease ||
       (kaTargetConvId && this._lastEvaluated.get(kaTargetConvId)) ||
-      (kaTargetConvId && store ? readWatchdogLease(store, kaTargetConvId) : null) ||
       current ||
       null;
     const minCtxInfo = this._resolveLeaseKeepaliveMinContext(store, cfg, targetLeaseForCtx, {
@@ -4105,6 +4963,91 @@ export class WatchdogMonitor {
       store && typeof store.getTtlKeepaliveDeliveryMs === "function"
         ? store.getTtlKeepaliveDeliveryMs()
         : 0;
+    const deliveryCompSec = deliveryLatencyMs > 0 ? Math.min(20, Math.ceil(deliveryLatencyMs / 1000)) : 0;
+    const minRemainSec = this._resolveTtlKeepaliveMinRemainSec(cfg);
+    const effectiveTtlSec = persistedTargetLease
+      ? this._resolveLeaseEffectiveTtlSec(store, persistedTargetLease, cfg, nowWallMs)
+      : targetLeaseForCtx
+        ? this._resolveLeaseEffectiveTtlSec(store, targetLeaseForCtx, cfg, nowWallMs)
+        : Number.isFinite(cfg.cacheTtlSec) && cfg.cacheTtlSec > 0
+          ? Math.floor(cfg.cacheTtlSec)
+          : resolveModelProfile(null).ttlSec;
+    const effectiveLeadSec = Math.min(ttlKeepaliveLeadSec, Math.max(5, Math.floor(effectiveTtlSec * 0.5)));
+    const effectiveTriggerLeadSec = Math.min(
+      Math.max(5, Math.floor(effectiveTtlSec * 0.75)),
+      effectiveLeadSec + deliveryCompSec
+    );
+    const effectiveMinRemainSec = computeEffectiveKeepaliveMinRemainSec(
+      minRemainSec,
+      deliveryCompSec,
+      effectiveTriggerLeadSec
+    );
+
+    const hasLease = Boolean(persistedTargetLease);
+    const leasePhase = persistedTargetLease?.phase || "";
+    const leaseSubphase = persistedTargetLease?.subphase || "";
+    const leaseStopReason = persistedTargetLease?.stopReason || "";
+    const inFlight = Boolean(
+      !isKaTargetSubagent &&
+        kaTargetConvId &&
+        kaTargetConvId !== "__unbound__" &&
+        this._keepaliveInFlight.has(kaTargetConvId)
+    );
+    const pendingAck = Boolean(!isKaTargetSubagent && isKeepalivePendingAckActive(kaState, nowWallMs));
+    let cacheOriginTs = 0;
+    let estimatedExpireTs = 0;
+    let remainingSec = null;
+    let narrowMarginSkipped = false;
+    let narrowMarginRemSec = null;
+    if (persistedTargetLease) {
+      if (persistedTargetLease.phase === WATCHDOG_PHASES.IDLE && persistedTargetLease.subphase === "stopped") {
+        const timing = computeLeaseTtlTiming(persistedTargetLease, { effectiveTtlSec, nowWallMs });
+        if (timing.valid) {
+          cacheOriginTs = timing.originTs;
+          estimatedExpireTs = timing.estimatedExpireTs;
+          remainingSec = Math.max(0, timing.remSec);
+          const skipEntry =
+            kaTargetConvId && kaTargetConvId !== "__unbound__"
+              ? this._narrowMarginSkipped.get(kaTargetConvId)
+              : null;
+          if (
+            skipEntry &&
+            skipEntry.idleAnchorTs === timing.idleAnchorTs &&
+            !inFlight &&
+            !pendingAck &&
+            kaState.lastIdleAnchorTs !== timing.idleAnchorTs
+          ) {
+            narrowMarginSkipped = true;
+            narrowMarginRemSec = skipEntry.remSec;
+          }
+        } else if (persistedTargetLease.cacheOriginTs > 0) {
+          cacheOriginTs = Math.floor(persistedTargetLease.cacheOriginTs);
+          estimatedExpireTs = cacheOriginTs + effectiveTtlSec * 1000;
+        }
+      } else if (persistedTargetLease.phase === WATCHDOG_PHASES.IDLE) {
+        if (persistedTargetLease.cacheOriginTs > 0) {
+          cacheOriginTs = Math.floor(persistedTargetLease.cacheOriginTs);
+          estimatedExpireTs = cacheOriginTs + effectiveTtlSec * 1000;
+          if (nowWallMs >= cacheOriginTs) {
+            remainingSec = Math.max(0, effectiveTtlSec - Math.floor((nowWallMs - cacheOriginTs) / 1000));
+          }
+        }
+      } else {
+        const activeOrigin =
+          persistedTargetLease.cacheOriginTs > 0
+            ? Math.floor(persistedTargetLease.cacheOriginTs)
+            : persistedTargetLease.lastLlmStartTs > 0
+              ? Math.floor(persistedTargetLease.lastLlmStartTs)
+              : 0;
+        if (activeOrigin > 0) {
+          cacheOriginTs = activeOrigin;
+          estimatedExpireTs = activeOrigin + effectiveTtlSec * 1000;
+          if (nowWallMs >= activeOrigin) {
+            remainingSec = Math.max(0, effectiveTtlSec - Math.floor((nowWallMs - activeOrigin) / 1000));
+          }
+        }
+      }
+    }
 
     const alertingSessions = sessions.filter((s) => s.severity === "stalled" || s.severity === "suspect");
     const activeCount = sessions.filter((s) => s.phase !== WATCHDOG_PHASES.IDLE).length;
@@ -4167,6 +5110,22 @@ export class WatchdogMonitor {
         coldMissTripped: Boolean(kaState.coldMissTripped),
         deliveryLatencyMs,
         leadSec: ttlKeepaliveLeadSec,
+        minRemainSec,
+        effectiveMinRemainSec,
+        cacheOriginTs,
+        effectiveTtlSec,
+        estimatedExpireTs,
+        remainingSec,
+        narrowMarginSkipped,
+        narrowMarginRemSec,
+        inFlight,
+        pendingAck,
+        hasLease,
+        leasePhase,
+        leaseSubphase,
+        leaseStopReason,
+        narrowSkippedCount: this.ttlKeepaliveNarrowSkippedCount,
+        manualKeepaliveCount: this.manualKeepaliveCount,
         lastSentTs: kaState.lastSentTs || 0,
         lastError: kaState.lastError || ""
       },
@@ -4207,6 +5166,8 @@ export class WatchdogMonitor {
         notificationCount: this.notificationCount,
         ttlNotificationCount: this.ttlNotificationCount,
         ttlKeepaliveCount: this.ttlKeepaliveCount,
+        ttlKeepaliveNarrowSkippedCount: this.ttlKeepaliveNarrowSkippedCount,
+        manualKeepaliveCount: this.manualKeepaliveCount,
         watermarkNotificationCount: this.watermarkNotificationCount
       }
     };

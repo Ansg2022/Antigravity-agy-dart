@@ -1,3 +1,4 @@
+import { createHash, timingSafeEqual } from "node:crypto";
 import { promisify } from "node:util";
 import { gunzip } from "node:zlib";
 
@@ -12,7 +13,8 @@ const ALLOWED_HOSTS = new Set([
   "api.github.com",
   "github.com",
   "codeload.github.com",
-  "objects.githubusercontent.com"
+  "objects.githubusercontent.com",
+  "release-assets.githubusercontent.com"
 ]);
 const REDIRECT_STATUSES = new Set([301, 302, 303, 307, 308]);
 const unzip = promisify(gunzip);
@@ -28,12 +30,31 @@ function getHeader(headers, name) {
 }
 
 /**
- * Download a GitHub release tarball with strict HTTPS host allowlist, manual redirect checks,
- * timeout and bounded byte size.
+ * Verify a downloaded archive buffer against an expected hex SHA-256 digest.
+ */
+export function verifyArchiveSha256(buffer, expectedSha256) {
+  if (typeof expectedSha256 !== "string" || !/^[0-9a-f]{64}$/i.test(expectedSha256)) {
+    throw new UpdateError("integrity");
+  }
+  const actual = createHash("sha256").update(buffer).digest();
+  const expected = Buffer.from(expectedSha256.toLowerCase(), "hex");
+  if (actual.length !== expected.length || !timingSafeEqual(actual, expected)) {
+    throw new UpdateError("integrity");
+  }
+}
+
+/**
+ * Download a GitHub release archive with strict HTTPS host allowlist, manual redirect checks,
+ * timeout, bounded byte size, and optional SHA-256 digest verification.
  */
 export async function downloadArchive(
   startUrl,
-  { fetchImpl = (...args) => fetch(...args), timeoutMs = 30_000, maxBytes = 16 * 1024 * 1024 } = {}
+  {
+    fetchImpl = (...args) => fetch(...args),
+    timeoutMs = 30_000,
+    maxBytes = 16 * 1024 * 1024,
+    expectedSha256 = ""
+  } = {}
 ) {
   const signal = AbortSignal.timeout(timeoutMs);
 
@@ -94,6 +115,7 @@ export async function downloadArchive(
         if (typeof res.arrayBuffer === "function") {
           const buf = Buffer.from(await res.arrayBuffer());
           if (buf.byteLength > maxBytes) throw new UpdateError("size");
+          if (expectedSha256) verifyArchiveSha256(buf, expectedSha256);
           return buf;
         }
         throw new UpdateError("download");
@@ -106,7 +128,11 @@ export async function downloadArchive(
         while (true) {
           signal.throwIfAborted();
           const { value, done } = await reader.read();
-          if (done) return Buffer.concat(chunks, size);
+          if (done) {
+            const buf = Buffer.concat(chunks, size);
+            if (expectedSha256) verifyArchiveSha256(buf, expectedSha256);
+            return buf;
+          }
           size += value.byteLength;
           if (size > maxBytes) throw new UpdateError("size");
           chunks.push(Buffer.from(value));
@@ -164,7 +190,7 @@ function safePath(rawPath) {
 
 const ALLOWED_PAX_KEYS = new Set(["path", "mtime", "ctime", "atime", "size"]);
 
-function parsePaxRecords(buf) {
+function parsePaxRecords(buf, maxBytes) {
   const result = {};
   let offset = 0;
   while (offset < buf.length) {
@@ -176,7 +202,12 @@ function parsePaxRecords(buf) {
     if (recordLen <= 0 || offset + recordLen > buf.length) throw new UpdateError("archive");
     const record = buf.subarray(spaceIdx + 1, offset + recordLen);
     if (record[record.length - 1] !== 0x0a) throw new UpdateError("archive");
-    const line = utf8.decode(record.subarray(0, record.length - 1));
+    let line;
+    try {
+      line = utf8.decode(record.subarray(0, record.length - 1));
+    } catch {
+      throw new UpdateError("archive");
+    }
     const eqIdx = line.indexOf("=");
     if (eqIdx <= 0) throw new UpdateError("archive");
     const key = line.slice(0, eqIdx);
@@ -190,6 +221,13 @@ function parsePaxRecords(buf) {
     }
     if (key === "path") {
       result.path = val;
+    } else if (key === "size") {
+      if (!/^\d+$/.test(val)) throw new UpdateError("archive");
+      const parsedSize = Number(val);
+      if (!Number.isSafeInteger(parsedSize) || parsedSize < 0 || parsedSize > maxBytes) {
+        throw new UpdateError("archive");
+      }
+      result.size = parsedSize;
     }
     offset += recordLen;
   }
@@ -213,11 +251,18 @@ export async function readReleaseArchive(compressed, maxBytes = 48 * 1024 * 1024
   const block = 512;
   let archiveRoot;
   let nextPaxPath = null;
+  let nextPaxSize = null;
 
   for (let pos = 0; pos + block <= tar.length; ) {
     const header = tar.subarray(pos, pos + block);
     if (header.every((byte) => byte === 0)) {
-      if (tar.length - pos >= 2 * block && tar.length % block === 0 && tar.subarray(pos).every((b) => b === 0)) {
+      if (
+        nextPaxPath === null &&
+        nextPaxSize === null &&
+        tar.length - pos >= 2 * block &&
+        tar.length % block === 0 &&
+        tar.subarray(pos).every((b) => b === 0)
+      ) {
         return files;
       }
       break;
@@ -229,26 +274,36 @@ export async function readReleaseArchive(compressed, maxBytes = 48 * 1024 * 1024
     for (let i = 0; i < block; i++) checksum += i >= 148 && i < 156 ? 32 : header[i];
     if (checksum !== octal(header.subarray(148, 156))) break;
 
-    const size = octal(header.subarray(124, 136));
+    const type = header[156];
+    const isPaxHeader = type === 103 || type === 120;
+    const headerSize = octal(header.subarray(124, 136));
+    const size = !isPaxHeader && nextPaxSize !== null ? nextPaxSize : headerSize;
+    if (!isPaxHeader) nextPaxSize = null;
+    if (size > maxBytes) throw new UpdateError("size");
     const start = pos + block;
     const end = start + Math.ceil(size / block) * block;
     if (end > tar.length) break;
 
     const contents = Buffer.from(tar.subarray(start, start + size));
-    const type = header[156];
     const isFirst = pos === 0;
     pos = end;
 
-    // GitHub global pax comment header (52 comment=<40-hex-sha>\n)
-    if (type === 103 && isFirst && size === 52 && /^52 comment=[0-9a-f]{40}\n$/.test(contents.toString("latin1"))) {
+    // GitHub global pax comment header (40-hex SHA-1 or 64-hex SHA-256 commit comment)
+    if (
+      type === 103 &&
+      isFirst &&
+      size <= 256 &&
+      /^(?:52 comment=[0-9a-f]{40}|76 comment=[0-9a-f]{64})\n$/.test(contents.toString("latin1"))
+    ) {
       continue;
     }
 
-    // Per-entry pax extended header (used for long paths > 255 bytes)
+    // Per-entry pax extended header (used for long paths > 255 bytes or large sizes)
     if (type === 120) {
       if (size > 16 * 1024) throw new UpdateError("archive");
-      const pax = parsePaxRecords(contents);
+      const pax = parsePaxRecords(contents, maxBytes);
       nextPaxPath = pax.path ?? null;
+      nextPaxSize = pax.size ?? null;
       continue;
     }
 

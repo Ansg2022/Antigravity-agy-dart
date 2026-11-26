@@ -1337,7 +1337,7 @@ test("v1.6.1-4: Suppress false-idle TTL alerts during stopped_bg_pending, active
           stStop,
           "Stop",
           { conversationId: "conv-sidecar-live", terminationReason: "NO_TOOL_CALL" },
-          { nowMs: realNowMs }
+          { nowMs: realNowMs - 420_000 }
         );
         // Also verify `cleanupStaleLeasesOnStartup` retires a prior-app `stopped_bg_pending` lease
         writeWatchdogLease(stStop, {

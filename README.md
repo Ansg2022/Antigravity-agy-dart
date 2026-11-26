@@ -62,7 +62,7 @@ With multiple project windows open, if a background window is nearly out of cont
 6. **Secret masking & sensitive-file blocking**: Masks API keys and tokens in logs or fetched pages, blocks accidental reads of `.env` files when configured, and sandboxes read-only `git` queries against untrusted `.git/config` hooks.
 7. **Hard 8.8 KB response cap with dynamic quota**: Antigravity spills tool outputs above ~10 KB into a temp file that costs an extra read turn; all plugin responses stay within 8.8 KB, dynamically giving short passing checks' unused space to failing stack traces.
 8. **Detailed panel breakdown & offline simulation**: Inspect context usage across file reads, terminal output, and subagents, check 15-turn cache hit trends and miss causes, optionally read only changed lines after edits (off by default), or replay past chat history via CLI to measure cache hit rates and keepalive cost.
-9. **Complements Agent Skills & audits Skills prefix tax**: Works orthogonally alongside domain Agent Skills in Antigravity, Claude Code, and Codex — Skills guide task workflows while `agy-dart` handles low-level read guards, log filtering, and KV-cache hygiene underneath; run `node bin/agy-dart.mjs audit skills` to inspect Turn-0 frontmatter overhead and progressive-disclosure structure across installed skills.
+9. **Works smoothly alongside your Skills, plus a Skills bloat check**: Use it with any Skills in Antigravity, Claude Code, or Codex — your Skills guide the workflow while `agy-dart` quietly blocks giant file reads, trims noisy logs, and looks after your cache; run `node bin/agy-dart.mjs audit skills` to see how much startup context each installed Skill uses and spot oversized main files.
 
 > Antigravity updates frequently — click **Star** at the top right to follow compatibility updates.
 
@@ -77,13 +77,13 @@ Use **Node.js 22.16.0 or later in the 22.x line, or Node.js 24 or later**. The i
 **Windows (PowerShell):**
 
 ```powershell
-irm https://raw.githubusercontent.com/zou172866/Antigravity-agy-dart/v1.7.4/install.ps1 | iex
+irm https://raw.githubusercontent.com/zou172866/Antigravity-agy-dart/v1.7.5/install.ps1 | iex
 ```
 
 **macOS / Linux:**
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/zou172866/Antigravity-agy-dart/v1.7.4/install.sh | sh
+curl -fsSL https://raw.githubusercontent.com/zou172866/Antigravity-agy-dart/v1.7.5/install.sh | sh
 ```
 
 ### Option 2: Let Antigravity install it
@@ -91,13 +91,13 @@ curl -fsSL https://raw.githubusercontent.com/zou172866/Antigravity-agy-dart/v1.7
 Send this to Antigravity:
 
 ```text
-Clone tag v1.7.4 of https://github.com/zou172866/Antigravity-agy-dart.git to a temp folder, run `node scripts/install.mjs install` (add `--install-rg` on Windows if `rg` is missing), and confirm `doctor` passes.
+Clone tag v1.7.5 of https://github.com/zou172866/Antigravity-agy-dart.git to a temp folder, run `node scripts/install.mjs install` (add `--install-rg` on Windows if `rg` is missing), and confirm `doctor` passes.
 ```
 
 ### Option 3: Clone & install with custom flags
 
 ```powershell
-git clone --branch v1.7.4 --depth 1 https://github.com/zou172866/Antigravity-agy-dart.git
+git clone --branch v1.7.5 --depth 1 https://github.com/zou172866/Antigravity-agy-dart.git
 cd Antigravity-agy-dart
 
 # Windows PowerShell (optional -InstallRg auto-installs ripgrep)
@@ -126,7 +126,7 @@ Global uninstall also removes the Gemini/T3 copies recorded by the installer. If
 
 ## Settings
 
-Automatic cache keepalive is off by default. To opt in for one chat, turn on **Auto-Keepalive** in the **agy-dart Context** panel. **Global Warm** sets the default count and schedule (**Auto** adaptive TTL, **Fixed 4min / 9min / 15min**, or **Custom** 1–60min; also configurable via `ttlKeepaliveIntervalSec` / `AGY_DART_TTL_KEEPALIVE_INTERVAL_SEC`) for chats without a per-window override. Turning off warming for a chat silences its cache-expiry and keepalive-limit desktop alerts. Desktop alerts for stalled tasks default to off and can be enabled separately. Each keepalive requests an `OK` reply and consumes model input, including the full prompt on a cache miss. The panel also controls desktop alerts, protection, local cleanup, and file-size limits.
+Automatic cache warming is off by default. To turn it on for a chat, enable **Auto-Keepalive** in the **agy-dart Context** panel — or click **Warm 1×** next to the countdown anytime for a single manual ping. **Global Warm** sets the default count and timing (**Auto**, **Fixed 4 / 9 / 15 min**, or **Custom 1–60 min**) for chats that haven't picked their own. Turning warming off for a chat silences its expiry and limit desktop alerts. Desktop alerts for stalled chats are also off by default and can be enabled separately. Each warm-up asks the model for a short `OK` reply and uses input tokens (or the full conversation if the cache already expired). The panel also controls desktop alerts, pausing protection, local cleanup, and file-size limits.
 
 Preset modes & tool-loading modes via CLI:
 
@@ -154,34 +154,37 @@ node scripts/install.mjs tool-loading eager         # All 12 tools eager-loaded
 
 ## Changelog
 
+### v1.7.5
+- **One-click manual `Warm 1×` button in the panel**: Added a manual warm-up button right next to the cache countdown. It works even when Auto-Keepalive is off and doesn't use up your automatic warm-up limit (with double-click protection and rollback if sending fails).
+- **Skip hopeless last-second warm-ups & unified countdown**: When only a few seconds are left and a warm-up ping won't arrive in time, the plugin skips it to avoid wasting tokens and falls back to a desktop alert instead. The panel, background monitor, and alerts now all share the same expiry countdown, and warming stops right away if the cache has already expired.
+
 ### v1.7.4
-- **Friendly semantic handoff prompt greeting & opening cue**: Updated the Sidecar dashboard's **Copy Handoff Prompt** templates to open with a warm greeting (`宝宝，` in Chinese / `Sweetie, please ...` in English) and instruct the current window to start the generated handoff brief's very first sentence with the matching opening word (`宝宝，` / `Sweetie,`) while keeping strict no-filler output rules intact.
+- **Warmer wording for "Copy Handoff Prompt"**: Updated the handoff prompt templates with a friendlier opening (`宝宝，` in Chinese / `Sweetie,` in English) and asked the AI to start its generated handoff summary the same way — still body-only, with no filler.
 
 ### v1.7.3
-- **Selectable Auto-Keepalive intervals**: Pick **Auto** (existing adaptive mode), **Fixed 4min / 9min / 15min**, or **Custom (1–60min)** globally or per chat, with one-click **Global** reset; existing safety guards (max count, minimum context threshold, cold-miss stop, subagent skip) still apply.
-- **No more false warnings on check timeouts or partial test passes**: Timed-out commands no longer trigger "repeated edit-fail" alerts; passing an unrelated test or single case won't clear an earlier suite failure; background test failures stay visible after editing other files; truncated failing check batches stay flagged until re-run.
-- **Cleaner Handoff Brief & cache-miss diagnostics**: One-click cache-friendly handoff briefs with automatic secret redaction, plus clearer cache-miss cause breakdowns.
+- **Custom Auto-Keepalive intervals**: Pick **Auto**, **Fixed 4 / 9 / 15 min**, or **Custom (1–60 min)** globally or per chat, with one-click reset back to **Global**. All existing safety guards (max count, skipping short chats, stopping after a cache miss, and skipping background subagents) stay on.
+- **Fixed false warnings on timeouts and partial test runs**: Timed-out commands no longer trigger "repeated edit-fail" alerts; passing an unrelated test or a single test case won't erase an earlier full-suite failure; background test errors stay visible even after editing other files; and if a failing check log gets cut off, the panel keeps flagging it until you re-run it.
+- **Cleaner handoff summaries & clearer cache-miss reasons**: Copy cleaner progress summaries before switching chats or compacting (with secrets auto-masked), and see more accurate reasons when the cache misses.
 
 ### v1.7.2
-- **Agent Skills progressive disclosure & prefix-tax audit**: Restructured `skills/agy-dart/` with on-demand `examples/` (`ctx_trace_summary.py`, `filters.json`) and `references/error-playbook.md` synced cleanly across Antigravity, Claude Code, and Codex; added `node bin/agy-dart.mjs audit skills` to inspect Turn-0 frontmatter tax and progressive-disclosure hygiene, and separated on-demand skill assets in `prefix:budget`.
-- **Scoped `dart-coder` / `dart-reviewer` check routing**: Guided built-in minimal agents to prefer `run_checks` for short checks (keeping `run_command` for `>60s` or async tasks) so command outputs stay within 8.8 KB without losing `inheritMcp: false` / `inheritCustomizations: false` isolation.
-- **Test & packaging hardening**: Isolated `AGY_DART_CONFIG_PATH` in `v1.2-persist-prefix.test.mjs` so local `~/.agy-dart/config.json` overrides (such as `stablePrefixOnly: true`) never interfere with unit tests, and excluded Python bytecode artifacts (`__pycache__`, `*.py[cod]`) from Git and package manifests.
+- **Lighter built-in skill docs & a Skills bloat check**: Moved sample scripts and troubleshooting notes into on-demand files so they don't eat startup context when unused; added `node bin/agy-dart.mjs audit skills` to check how much startup context each installed Skill uses and spot oversized main files.
+- **Leaner output from built-in helper agents**: The built-in coding (`dart-coder`) and review (`dart-reviewer`) subagents stay lightweight without carrying extra external tools or global rules, and now route quick checks through output trimming instead of dumping long terminal logs into the chat.
 
 ### v1.7.1
-- **Accurate "Guard Saved" accounting for `agy-dart_fast` tools**: `read_slices`, `run_checks`, and `batch_search` now record strictly non-inflated byte savings (only when raw input/output genuinely exceeds returned bytes) and attribute anonymous shared MCP calls cleanly to the active conversation without cross-session stealing.
-- **Expanded Windows / PowerShell CLI filtering**: `cli-filter` now recognizes leading package-manager flags (`npm --prefix`, `pnpm -C`, `yarn --cwd`, etc.) and safe `--` argument/path separators while preserving cross-shell safety guards.
-- **Complete MCP receipt claiming & subagent rollup**: Extended receipt claiming to `ctx_index` and `ctx_batch` alongside `ctx_execute`, synced `sources`/`chunks` ownership (`schema v155` + `idx_sources_origin_session`), and unified `rootSessionId` rollup so subagent savings roll up into parent conversation stats without double-counting.
+- **Fixed the panel's "Blocked Noise" counter staying at 0**: Bytes saved by sliced file reads, batched searches, and trimmed check outputs are now counted accurately in the panel, without mixing up windows or double-counting.
+- **Roll up subagent savings into the main chat**: Savings from saved long docs, batch lookups, and background subagents now roll up under the main conversation so panel totals stay accurate.
+- **Fixed missed log filtering on Windows / PowerShell**: Commands using flags like `npm --prefix`, `pnpm -C`, `yarn --cwd`, or `--` separators now trim noisy output properly on Windows and PowerShell too.
 
 ### v1.7.0
-- **Compact signature outlines & inline read-guard outlines**: Added compact function-signature outlines and inline line-number outlines when a large un-ranged file read is intercepted on first blind read.
-- **Multi-host CLI (`bin/agy-dart.mjs`) & scoped subagents**: Added `agy-dart` CLI with `--target claude|codex`, `outline`, `session`, and `compare` commands, shipped `dart-coder` / `dart-reviewer` role definitions, and hardened workspace isolation & Node.js 22.16+ / 24+ SQLite FTS5 checks.
+- **Hand the AI a file map when blocking a full large-file read**: When the AI tries to read a huge code file all at once for the first time, the block message now includes a line-numbered list of functions and classes so it can jump straight to the lines it needs without an extra turn.
+- **Unified CLI with Claude Code & Codex support**: Added `node bin/agy-dart.mjs` to install for Antigravity, Claude Code, or Codex, print file outlines, and compare token usage across chats; also shipped lightweight built-in coding/review subagents and stronger workspace & Node.js checks.
 
 ### v1.6.0
-- **4 core fast tools preloaded directly, fixing occasional multi-file edit drops**: Batch search, outlines, multi-file edits, and concurrent checks now preload directly instead of going through the wrapper tool that occasionally emptied multi-file edit arrays; the other 8 large-log tools stay on-demand to save initial context (switchable via `tool-loading`).
-- **Fixed automatic cache keepalive & skipped all subagents**: Cleared legacy global-off state conflicts from old panel processes, added duplicate-send locks, and auto-restarts the background panel after plugin updates; subagents spawned by `/boost`, browser tasks, or workflows — plus closed chats — no longer trigger keepalives or take over the top keepalive bar.
-- **Direct file reads for subagents, plugin-folder write protection**: Background subagents can read large or repeated files directly without red-text blocks; calls missing a project path that land inside the installed plugin folder are blocked so the plugin never searches or edits its own files.
-- **One-line install without cloning**: Added single-line PowerShell and Shell install commands.
-- Cross-platform hook launcher; unused quota from short checks shifts to long error traces; read-only Git sandboxing against external `.git/config` hooks; clean Windows exit, preserved `rules/*.local.md` on upgrade, plus `SECURITY.md` and light/dark architecture diagrams.
+- **4 core tools preloaded directly, fixing occasional dropped multi-file edits**: Batch search, file outlines, multi-file edits, and quick checks now load directly instead of going through an extra layer that sometimes emptied multi-file edits; the other 8 large-log tools stay on-demand to save startup context.
+- **Fixed Auto-Keepalive stalls & skipped all background subagents**: The background panel now restarts cleanly after plugin updates so stale processes don't interfere; subagents spawned by `/boost`, browser tasks, or workflows — plus closed chats — never send keepalive pings or crowd the top status bar.
+- **Let subagents read freely & protect the plugin folder**: Background subagents can read large or repeated files without hitting red block messages, and any call missing a project path that lands inside the plugin's own install folder is blocked so the AI won't search or edit the plugin by mistake.
+- **One-line install without cloning**: Added single-line PowerShell and Shell commands so you don't have to clone the repo first.
+- **Other polish**: Unused output budget from short checks automatically shifts to long error traces; read-only Git queries block untrusted external commands; fixed Windows hang on exit; upgrades preserve your custom `rules/*.local.md` files; added a security policy and light/dark architecture diagrams.
 
 ### v1.5.4
 - **Click alerts to jump to that chat**: Clicking a desktop popup or cross-window panel alert brings the matching project window to the front and opens that conversation; added a multi-window session switcher bar in the panel.
@@ -236,7 +239,7 @@ npm run verify:pkg                          # Verify installer file list
 npm run prefix:budget                       # Estimate configured Antigravity startup and full-catalog token usage
 npm run brief:check                         # Check that AI_REVIEW_BRIEF.md line/test counts are up to date
 node scripts/cache-audit.mjs --workspace . --no-live
-node bin/agy-dart.mjs audit skills --workspace .   # Audit Skills Turn-0 frontmatter tax & progressive disclosure
+node bin/agy-dart.mjs audit skills --workspace .   # Check startup context usage and structure of installed Skills
 npm run cache:simulate
 ```
 
@@ -251,14 +254,14 @@ After adding, removing, or editing modules or tests, keep these three places in 
 
 [MIT License](LICENSE). Incorporates and adapts MIT-licensed code from [INK-Q/agy-fast](https://github.com/INK-Q/agy-fast) and [Domush/antigravity-plugin-context-mode](https://github.com/Domush/antigravity-plugin-context-mode); full third-party notices are in [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
 
-## v1.7 CLI
+## CLI (Antigravity / Claude Code / Codex)
 
-Install for Antigravity by default. Select Claude Code or Codex explicitly with `--target claude|codex`. Use `outline <file>` for a compact signature map and `session <id>` or `compare <before> <after>` for transcript usage.
+`node bin/agy-dart.mjs` installs for Antigravity by default; pass `--target claude` or `--target codex` for Claude Code or Codex. You can also run `outline <file>` to print a file's function map with line numbers, `session <id>` to inspect one chat's token bill, or `compare <before> <after>` to compare two chats.
 
-For Claude Code and Codex, the installer keeps hashes and undo metadata in `~/.agy-dart/<host>-install.json` to restore the plugin's configuration changes. Reinstalling replaces an older full-config record. Uninstalling removes that host's record.
+When installing for Claude Code or Codex, the installer saves an undo record in `~/.agy-dart/<host>-install.json` so uninstalling cleanly restores your original config.
 
 ```sh
-git clone --branch v1.7.4 --depth 1 https://github.com/zou172866/Antigravity-agy-dart.git
+git clone --branch v1.7.5 --depth 1 https://github.com/zou172866/Antigravity-agy-dart.git
 cd Antigravity-agy-dart
 node bin/agy-dart.mjs install
 node bin/agy-dart.mjs doctor

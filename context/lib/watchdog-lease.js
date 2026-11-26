@@ -348,22 +348,42 @@ function firstLeasePosOrNonNeg(...vals) {
   return sawZero ? 0 : null;
 }
 
-export function parseStepPrefillTimestampMs(step) {
-  if (!step || typeof step !== "object") return 0;
+const ISO_SUBSECOND_RE = /:\d{2}\.\d+/;
+
+export function parseStepPrefillTimestampInfo(step) {
+  if (!step || typeof step !== "object") return { ms: 0, subSecond: false };
   for (const field of ["created_at", "timestamp", "ts", "completed_at", "updated_at"]) {
     const v = step[field];
-    if (typeof v === "number" && Number.isFinite(v) && v > 1e11) return Math.floor(v);
+    if (typeof v === "number" && Number.isFinite(v) && v > 1e11) {
+      return { ms: Math.floor(v), subSecond: true };
+    }
     if (typeof v === "string" && v.trim()) {
-      const ms = Date.parse(v);
-      if (Number.isFinite(ms) && ms > 0) return Math.floor(ms);
+      const trimmed = v.trim();
+      const ms = Date.parse(trimmed);
+      if (Number.isFinite(ms) && ms > 0) {
+        const floorMs = Math.floor(ms);
+        const subSecond = ISO_SUBSECOND_RE.test(trimmed) || floorMs % 1000 !== 0;
+        return { ms: floorMs, subSecond };
+      }
     }
   }
-  return 0;
+  return { ms: 0, subSecond: false };
+}
+
+export function parseStepPrefillTimestampMs(step) {
+  return parseStepPrefillTimestampInfo(step).ms;
 }
 
 function extractLightweightStepUsage(step) {
   if (!step || typeof step !== "object") {
-    return { contextTokens: 0, cacheReadTokens: 0, cacheCreationTokens: 0, maxTokens: 0, model: "" };
+    return {
+      contextTokens: 0,
+      cacheReadTokens: 0,
+      cacheReadReported: false,
+      cacheCreationTokens: 0,
+      maxTokens: 0,
+      model: ""
+    };
   }
   const usage =
     (step.usage && typeof step.usage === "object" ? step.usage : null) ||
@@ -383,18 +403,19 @@ function extractLightweightStepUsage(step) {
       toLeaseNonNegNum(usage.cachedContentTokenCount) !== null ||
       toLeaseNonNegNum(usage.cached_content_token_count) !== null ||
       toLeaseNonNegNum(usage.prompt_cache_hit_tokens) !== null);
-  const cacheReadTokens =
-    firstLeasePosOrNonNeg(
-      step.cache_read_tokens,
-      step.cache_read_input_tokens,
-      usage.cache_read_tokens,
-      usage.cache_read_input_tokens,
-      usage.cachedContentTokenCount,
-      usage.cached_content_token_count,
-      usage.prompt_tokens_details?.cached_tokens,
-      usage.input_tokens_details?.cached_tokens,
-      usage.prompt_cache_hit_tokens
-    ) ?? 0;
+  const rawCacheRead = firstLeasePosOrNonNeg(
+    step.cache_read_tokens,
+    step.cache_read_input_tokens,
+    usage.cache_read_tokens,
+    usage.cache_read_input_tokens,
+    usage.cachedContentTokenCount,
+    usage.cached_content_token_count,
+    usage.prompt_tokens_details?.cached_tokens,
+    usage.input_tokens_details?.cached_tokens,
+    usage.prompt_cache_hit_tokens
+  );
+  const cacheReadReported = rawCacheRead !== null;
+  const cacheReadTokens = rawCacheRead ?? 0;
   const cacheCreate1h =
     firstLeasePosOrNonNeg(step.cache_creation_1h_tokens, usage.cache_creation?.ephemeral_1h_input_tokens) ?? 0;
   const cacheCreate5m = firstLeasePosOrNonNeg(usage.cache_creation?.ephemeral_5m_input_tokens) ?? 0;
@@ -444,10 +465,11 @@ function extractLightweightStepUsage(step) {
     }
   }
   const model = typeof step.model === "string" && step.model.trim() ? step.model.trim().slice(0, 96) : "";
-  return { contextTokens, cacheReadTokens, cacheCreationTokens, maxTokens, model };
+  return { contextTokens, cacheReadTokens, cacheReadReported, cacheCreationTokens, maxTokens, model };
 }
 
 const TTL_KEEPALIVE_ROUND_RE = /\[agy-dart TTL(?:保活| Keepalive)\s+(\d+)\/\d+\]/i;
+const TTL_KEEPALIVE_MANUAL_RE = /\[agy-dart TTL(?:保活\s*手动| Keepalive\s+Manual)(?:\s|\])/i;
 
 function isEmbeddedSubagentStepLite(step) {
   if (!step || typeof step !== "object") return false;
@@ -495,21 +517,28 @@ export function inspectLatestTurnInSteps(steps = []) {
   const empty = {
     hasPlanner: false,
     prefillTs: 0,
+    prefillSubSecond: false,
     contextTokens: 0,
     cacheReadTokens: 0,
+    cacheReadReported: false,
     cacheCreationTokens: 0,
     maxTokens: 0,
     model: "",
     hasPromptAfterLastPlanner: false,
     hasToolContinuationAfterLastPlanner: false,
     precededByKeepalivePrompt: false,
-    keepaliveRound: null
+    precededByGenuineUser: false,
+    keepaliveRound: null,
+    keepaliveMode: "",
+    keepalivePromptTs: 0,
+    keepalivePromptSubSecond: false
   };
   if (!Array.isArray(steps) || steps.length === 0) return empty;
 
   let lastPlannerIdx = -1;
   let lastPlannerUsage = null;
   let lastPlannerPrefillTs = 0;
+  let lastPlannerPrefillSubSecond = false;
   let latestMaxTokens = 0;
   let latestModel = "";
 
@@ -528,7 +557,9 @@ export function inspectLatestTurnInSteps(steps = []) {
     if (tUpper === "PLANNER_RESPONSE" || ((rLower === "assistant" || rLower === "model") && usage.contextTokens > 0)) {
       lastPlannerIdx = i;
       lastPlannerUsage = usage;
-      lastPlannerPrefillTs = parseStepPrefillTimestampMs(s);
+      const tsInfo = parseStepPrefillTimestampInfo(s);
+      lastPlannerPrefillTs = tsInfo.ms;
+      lastPlannerPrefillSubSecond = tsInfo.subSecond;
     }
   }
 
@@ -570,7 +601,11 @@ export function inspectLatestTurnInSteps(steps = []) {
 
   let sawKeepaliveBeforePlanner = false;
   let sawGenuineUserBeforePlanner = false;
+  let sawGenuineUserAfterKeepalive = false;
   let keepaliveRound = null;
+  let keepaliveMode = "";
+  let keepalivePromptTs = 0;
+  let keepalivePromptSubSecond = false;
   for (let i = lastPlannerIdx - 1; i >= 0; i--) {
     const s = steps[i];
     if (!s || typeof s !== "object" || isEmbeddedSubagentStepLite(s)) continue;
@@ -581,13 +616,17 @@ export function inspectLatestTurnInSteps(steps = []) {
     const tUpper = String(s.type || "").toUpperCase();
     const rLower = String(s.role || "").toLowerCase();
     if (tUpper === "PLANNER_RESPONSE" || rLower === "assistant" || rLower === "model") {
+      if (sawKeepaliveBeforePlanner || sawGenuineUserBeforePlanner) {
+        break;
+      }
       const prevUsage = extractLightweightStepUsage(s);
       const hasToolCalls =
+        stepHasActiveNonFinishCallsLite(s) ||
         Array.isArray(s.tool_calls) ||
         Array.isArray(s.toolCalls) ||
         Array.isArray(s.function_calls) ||
         Array.isArray(s.functionCalls);
-      if (tUpper === "PLANNER_RESPONSE" || (prevUsage.contextTokens > 0 && !hasToolCalls)) {
+      if (!hasToolCalls && (tUpper === "PLANNER_RESPONSE" || prevUsage.contextTokens > 0)) {
         break;
       }
       continue;
@@ -596,15 +635,36 @@ export function inspectLatestTurnInSteps(steps = []) {
       const txt = extractGenesisStepText(s).trim();
       if (!txt) continue;
       if (isTtlKeepalivePrompt(txt)) {
-        sawKeepaliveBeforePlanner = true;
-        if (keepaliveRound === null) {
+        if (!sawKeepaliveBeforePlanner) {
+          sawKeepaliveBeforePlanner = true;
+          const promptTsInfo = parseStepPrefillTimestampInfo(s);
+          if (promptTsInfo.ms > 0) {
+            keepalivePromptTs = promptTsInfo.ms;
+            keepalivePromptSubSecond = promptTsInfo.subSecond;
+          }
           const roundMatch = txt.match(TTL_KEEPALIVE_ROUND_RE);
           if (roundMatch && Number.isFinite(Number(roundMatch[1])) && Number(roundMatch[1]) >= 1) {
             keepaliveRound = Math.floor(Number(roundMatch[1]));
+            keepaliveMode = "auto";
+          } else if (TTL_KEEPALIVE_MANUAL_RE.test(txt)) {
+            keepaliveMode = "manual";
           }
         }
       } else if (tUpper === "USER_INPUT" || rLower === "user") {
+        const userTs = parseStepPrefillTimestampMs(s);
+        if (
+          sawKeepaliveBeforePlanner &&
+          !sawGenuineUserBeforePlanner &&
+          keepalivePromptTs > 0 &&
+          userTs > 0 &&
+          keepalivePromptTs - userTs > 30_000
+        ) {
+          break;
+        }
         sawGenuineUserBeforePlanner = true;
+        if (!sawKeepaliveBeforePlanner) {
+          sawGenuineUserAfterKeepalive = true;
+        }
       }
     }
   }
@@ -613,16 +673,36 @@ export function inspectLatestTurnInSteps(steps = []) {
   return {
     hasPlanner: true,
     prefillTs: lastPlannerPrefillTs,
+    prefillSubSecond: lastPlannerPrefillSubSecond,
     contextTokens: lastPlannerUsage.contextTokens,
     cacheReadTokens: lastPlannerUsage.cacheReadTokens,
+    cacheReadReported: Boolean(lastPlannerUsage.cacheReadReported),
     cacheCreationTokens: lastPlannerUsage.cacheCreationTokens,
     maxTokens: lastPlannerUsage.maxTokens || latestMaxTokens,
     model: lastPlannerUsage.model || latestModel,
     hasPromptAfterLastPlanner,
     hasToolContinuationAfterLastPlanner: Boolean(lastPlannerHasActiveToolCalls || sawToolResultAfterLastPlanner),
     precededByKeepalivePrompt,
-    keepaliveRound: precededByKeepalivePrompt ? keepaliveRound : null
+    precededByGenuineUser: sawGenuineUserAfterKeepalive,
+    keepaliveRound: precededByKeepalivePrompt ? keepaliveRound : null,
+    keepaliveMode: precededByKeepalivePrompt ? keepaliveMode : "",
+    keepalivePromptTs: precededByKeepalivePrompt ? keepalivePromptTs : 0,
+    keepalivePromptSubSecond: precededByKeepalivePrompt ? keepalivePromptSubSecond : false
   };
+}
+
+export function hasPendingKeepaliveColdCheck(kaState) {
+  if (!kaState || typeof kaState !== "object") return false;
+  if (kaState.coldMissTripped) return false;
+  if (kaState.pendingAck || kaState.inKeepaliveTurn) return false;
+  const pendingId = typeof kaState.pendingColdCheckId === "string" ? kaState.pendingColdCheckId.trim() : "";
+  const checkedId = typeof kaState.lastColdCheckedId === "string" ? kaState.lastColdCheckedId.trim() : "";
+  if (pendingId && pendingId !== checkedId) return true;
+  const usedCount = Number.isFinite(Number(kaState.usedCount)) ? Math.floor(Number(kaState.usedCount)) : 0;
+  const lastColdCheckUsed = Number.isFinite(Number(kaState.lastColdCheckUsed))
+    ? Math.floor(Number(kaState.lastColdCheckUsed))
+    : 0;
+  return usedCount >= 1 && lastColdCheckUsed < usedCount;
 }
 
 export function isKeepaliveTurnFlushedForRound(info, kaState) {
@@ -631,22 +711,75 @@ export function isKeepaliveTurnFlushedForRound(info, kaState) {
     !info.hasPlanner ||
     info.hasPromptAfterLastPlanner ||
     info.hasToolContinuationAfterLastPlanner ||
+    info.precededByGenuineUser ||
+    !info.precededByKeepalivePrompt ||
     !(info.contextTokens > 0)
   ) {
     return false;
   }
   const usedCount = Number.isFinite(Number(kaState?.usedCount)) ? Math.floor(Number(kaState.usedCount)) : 0;
   const lastSentTs = Number.isFinite(Number(kaState?.lastSentTs)) ? Math.floor(Number(kaState.lastSentTs)) : 0;
-  if (info.prefillTs > 0 && lastSentTs > 0 && info.prefillTs < lastSentTs - 5_000) {
+  const lastIdleAnchorTs = Number.isFinite(Number(kaState?.lastIdleAnchorTs))
+    ? Math.floor(Number(kaState.lastIdleAnchorTs))
+    : 0;
+  const prefillTs = Number.isFinite(Number(info.prefillTs)) ? Math.floor(Number(info.prefillTs)) : 0;
+  const promptTs = Number.isFinite(Number(info.keepalivePromptTs)) ? Math.floor(Number(info.keepalivePromptTs)) : 0;
+  const dispatchMode =
+    kaState?.lastDispatchMode === "manual" || kaState?.lastDispatchMode === "auto"
+      ? kaState.lastDispatchMode
+      : "";
+  const causalFloor = Math.max(lastIdleAnchorTs, lastSentTs);
+  const toInterval = (ts, subSecond) => {
+    if (!(ts > 0)) return null;
+    const isExact = subSecond !== false;
+    return { lo: ts, hi: isExact ? ts : ts + 999, isExact };
+  };
+  const prefillRange = toInterval(prefillTs, info.prefillSubSecond);
+  const promptRange = toInterval(promptTs, info.keepalivePromptSubSecond);
+
+  // Hard exclusion: treat second-level timestamps as [ts, ts + 999] intervals and exact
+  // sub-second timestamps as [ts, ts]. Any timestamp whose upper bound is strictly earlier
+  // than causalFloor cannot belong to this dispatch / idle cycle.
+  if (causalFloor > 0) {
+    if (prefillRange && prefillRange.hi < causalFloor) {
+      return false;
+    }
+    if (promptRange && promptRange.hi < causalFloor) {
+      return false;
+    }
+  }
+  if (dispatchMode === "manual" && info.keepaliveRound !== null) {
+    return false;
+  }
+  if (dispatchMode === "auto" && info.keepaliveMode === "manual") {
     return false;
   }
   if (info.keepaliveRound !== null && usedCount > 0 && info.keepaliveRound !== usedCount) {
     return false;
   }
-  return Boolean(
-    info.precededByKeepalivePrompt ||
-      (info.prefillTs > 0 && lastSentTs > 0 && info.prefillTs >= lastSentTs - 5_000)
+  // Positive causal evidence: at least one timestamp's lower bound must provably fall at/after
+  // causalFloor (and strictly after the cycle boundary when only second-level precision exists).
+  const isProvablyInRound = (range) => {
+    if (!range || causalFloor <= 0) return false;
+    if (range.lo < causalFloor) return false;
+    if (!range.isExact && range.lo <= causalFloor) return false;
+    return true;
+  };
+  const hasTimestampEvidence = Boolean(
+    causalFloor > 0 && (isProvablyInRound(prefillRange) || isProvablyInRound(promptRange))
   );
+  // Require positive timestamp causality whenever causalFloor > 0 so an untimestamped or
+  // same-second-ambiguous prior round on disk can never be attributed to a newer dispatch.
+  if (dispatchMode === "manual" || info.keepaliveMode === "manual") {
+    return Boolean(hasTimestampEvidence && info.keepaliveRound === null);
+  }
+  if (info.keepaliveRound !== null && usedCount > 0) {
+    if (causalFloor > 0) {
+      return Boolean(hasTimestampEvidence && info.keepaliveRound === usedCount);
+    }
+    return info.keepaliveRound === usedCount;
+  }
+  return hasTimestampEvidence;
 }
 
 export function computeCausalTurnLlmFloorTs(lease, nowMs) {

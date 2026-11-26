@@ -1806,9 +1806,12 @@ export class SettingsMaintenanceMethods {
       cur.usedCount === 0 &&
       !cur.lastIdleAnchorTs &&
       !cur.lastSentTs &&
+      !cur.lastAttemptTs &&
       !cur.pendingAck &&
       !cur.coldMissTripped &&
       !cur.inKeepaliveTurn &&
+      !cur.lastDispatchId &&
+      !cur.pendingColdCheckId &&
       !cur.lastError
     ) {
       this.deleteMeta(metaKey);
@@ -1842,10 +1845,15 @@ export class SettingsMaintenanceMethods {
       usedCount: 0,
       lastIdleAnchorTs: 0,
       lastSentTs: 0,
+      lastAttemptTs: 0,
       pendingAck: false,
       coldMissTripped: false,
       inKeepaliveTurn: false,
       lastColdCheckUsed: 0,
+      lastDispatchId: "",
+      lastDispatchMode: "",
+      pendingColdCheckId: "",
+      lastColdCheckedId: "",
       lastError: "",
       updatedTs: 0
     };
@@ -1892,6 +1900,7 @@ export class SettingsMaintenanceMethods {
         usedCount: Number.isFinite(Number(parsed.usedCount)) && Number(parsed.usedCount) >= 0 ? Math.floor(Number(parsed.usedCount)) : 0,
         lastIdleAnchorTs: Number.isFinite(Number(parsed.lastIdleAnchorTs)) && Number(parsed.lastIdleAnchorTs) > 0 ? Math.floor(Number(parsed.lastIdleAnchorTs)) : 0,
         lastSentTs: Number.isFinite(Number(parsed.lastSentTs)) && Number(parsed.lastSentTs) > 0 ? Math.floor(Number(parsed.lastSentTs)) : 0,
+        lastAttemptTs: Number.isFinite(Number(parsed.lastAttemptTs)) && Number(parsed.lastAttemptTs) > 0 ? Math.floor(Number(parsed.lastAttemptTs)) : 0,
         pendingAck: Boolean(parsed.pendingAck),
         coldMissTripped: Boolean(parsed.coldMissTripped),
         inKeepaliveTurn: Boolean(parsed.inKeepaliveTurn),
@@ -1899,6 +1908,16 @@ export class SettingsMaintenanceMethods {
           Number.isFinite(Number(parsed.lastColdCheckUsed)) && Number(parsed.lastColdCheckUsed) >= 0
             ? Math.floor(Number(parsed.lastColdCheckUsed))
             : 0,
+        lastDispatchId:
+          typeof parsed.lastDispatchId === "string" ? parsed.lastDispatchId.trim().slice(0, 64) : "",
+        lastDispatchMode:
+          parsed.lastDispatchMode === "auto" || parsed.lastDispatchMode === "manual"
+            ? parsed.lastDispatchMode
+            : "",
+        pendingColdCheckId:
+          typeof parsed.pendingColdCheckId === "string" ? parsed.pendingColdCheckId.trim().slice(0, 64) : "",
+        lastColdCheckedId:
+          typeof parsed.lastColdCheckedId === "string" ? parsed.lastColdCheckedId.trim().slice(0, 64) : "",
         lastError: typeof parsed.lastError === "string" ? parsed.lastError.slice(0, 180) : "",
         updatedTs
       };
@@ -1978,10 +1997,15 @@ export class SettingsMaintenanceMethods {
           usedCount: 0,
           lastIdleAnchorTs: 0,
           lastSentTs: 0,
+          lastAttemptTs: 0,
           pendingAck: false,
           coldMissTripped: false,
           inKeepaliveTurn: false,
           lastColdCheckUsed: 0,
+          lastDispatchId: "",
+          lastDispatchMode: "",
+          pendingColdCheckId: "",
+          lastColdCheckedId: "",
           lastError: "",
           updatedTs: safeNow
         };
@@ -2039,6 +2063,10 @@ export class SettingsMaintenanceMethods {
         safePatch.lastSentTs !== undefined
           ? Math.max(0, Math.floor(Number(safePatch.lastSentTs) || 0))
           : cur.lastSentTs,
+      lastAttemptTs:
+        safePatch.lastAttemptTs !== undefined
+          ? Math.max(0, Math.floor(Number(safePatch.lastAttemptTs) || 0))
+          : cur.lastAttemptTs,
       pendingAck: safePatch.pendingAck !== undefined ? Boolean(safePatch.pendingAck) : cur.pendingAck,
       coldMissTripped:
         safePatch.coldMissTripped !== undefined ? Boolean(safePatch.coldMissTripped) : cur.coldMissTripped,
@@ -2048,6 +2076,24 @@ export class SettingsMaintenanceMethods {
         safePatch.lastColdCheckUsed !== undefined
           ? Math.max(0, Math.floor(Number(safePatch.lastColdCheckUsed) || 0))
           : cur.lastColdCheckUsed,
+      lastDispatchId:
+        safePatch.lastDispatchId !== undefined
+          ? String(safePatch.lastDispatchId || "").trim().slice(0, 64)
+          : cur.lastDispatchId,
+      lastDispatchMode:
+        safePatch.lastDispatchMode !== undefined
+          ? safePatch.lastDispatchMode === "auto" || safePatch.lastDispatchMode === "manual"
+            ? safePatch.lastDispatchMode
+            : ""
+          : cur.lastDispatchMode,
+      pendingColdCheckId:
+        safePatch.pendingColdCheckId !== undefined
+          ? String(safePatch.pendingColdCheckId || "").trim().slice(0, 64)
+          : cur.pendingColdCheckId,
+      lastColdCheckedId:
+        safePatch.lastColdCheckedId !== undefined
+          ? String(safePatch.lastColdCheckedId || "").trim().slice(0, 64)
+          : cur.lastColdCheckedId,
       lastError:
         safePatch.lastError !== undefined ? String(safePatch.lastError || "").slice(0, 180) : cur.lastError,
       updatedTs:
@@ -2065,10 +2111,15 @@ export class SettingsMaintenanceMethods {
       usedCount: 0,
       lastIdleAnchorTs: 0,
       lastSentTs: 0,
+      lastAttemptTs: 0,
       pendingAck: false,
       coldMissTripped: false,
       inKeepaliveTurn: false,
       lastColdCheckUsed: 0,
+      lastDispatchId: "",
+      lastDispatchMode: "",
+      pendingColdCheckId: "",
+      lastColdCheckedId: "",
       lastError: "",
       updatedTs: nowMs
     });
@@ -2727,9 +2778,15 @@ export class SettingsMaintenanceMethods {
               (parsedObj.usedCount > 0 ||
                 parsedObj.lastIdleAnchorTs > 0 ||
                 parsedObj.lastSentTs > 0 ||
+                parsedObj.lastAttemptTs > 0 ||
                 parsedObj.pendingAck ||
                 parsedObj.coldMissTripped ||
                 parsedObj.inKeepaliveTurn ||
+                parsedObj.lastDispatchId ||
+                parsedObj.lastDispatchMode ||
+                parsedObj.pendingColdCheckId ||
+                parsedObj.lastColdCheckedId ||
+                parsedObj.lastColdCheckUsed > 0 ||
                 parsedObj.lastError)
             ) {
               upsertMetaStmt.run(
@@ -2743,10 +2800,15 @@ export class SettingsMaintenanceMethods {
                   usedCount: 0,
                   lastIdleAnchorTs: 0,
                   lastSentTs: 0,
+                  lastAttemptTs: 0,
                   pendingAck: false,
                   coldMissTripped: false,
                   inKeepaliveTurn: false,
                   lastColdCheckUsed: 0,
+                  lastDispatchId: "",
+                  lastDispatchMode: "",
+                  pendingColdCheckId: "",
+                  lastColdCheckedId: "",
                   lastError: "",
                   updatedTs: entryTs > 0 ? entryTs : now
                 })
