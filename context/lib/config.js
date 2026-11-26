@@ -73,6 +73,7 @@ export const CONFIG_DEFAULTS = Object.freeze({
   watermarkDesktopNotify: null,
   toolLoading: "fast-eager",
   autoUpdateCheck: true,
+  autoUpdateInstall: false,
   uiLang: "en"
 });
 
@@ -602,6 +603,15 @@ export function getConfigSnapshot(options = {}) {
       parseDisableEnvFlag(env?.AGY_DART_DISABLE_AUTO_UPDATE_CHECK);
   }
   pick("autoUpdateCheck", autoUpdateCheckEnv, cfgBool("autoUpdateCheck"));
+  let autoUpdateInstallEnv;
+  if (parseEnvBool(env?.AGY_DART_DISABLE_AUTO_UPDATE_INSTALL) === true) {
+    autoUpdateInstallEnv = false;
+  } else {
+    autoUpdateInstallEnv =
+      parseEnvBool(env?.AGY_DART_AUTO_UPDATE_INSTALL) ??
+      parseDisableEnvFlag(env?.AGY_DART_DISABLE_AUTO_UPDATE_INSTALL);
+  }
+  pick("autoUpdateInstall", autoUpdateInstallEnv, cfgBool("autoUpdateInstall"));
   pick("uiLang", parseUiLang(env?.AGY_DART_LANG), parseUiLang(cfg.uiLang));
 
   return {

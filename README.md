@@ -77,13 +77,13 @@ Use **Node.js 22.16.0 or later in the 22.x line, or Node.js 24 or later**. The i
 **Windows (PowerShell):**
 
 ```powershell
-irm https://raw.githubusercontent.com/zou172866/Antigravity-agy-dart/v1.7.7/install.ps1 | iex
+irm https://raw.githubusercontent.com/zou172866/Antigravity-agy-dart/v1.7.8/install.ps1 | iex
 ```
 
 **macOS / Linux:**
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/zou172866/Antigravity-agy-dart/v1.7.7/install.sh | sh
+curl -fsSL https://raw.githubusercontent.com/zou172866/Antigravity-agy-dart/v1.7.8/install.sh | sh
 ```
 
 ### Option 2: Let Antigravity install it
@@ -91,13 +91,13 @@ curl -fsSL https://raw.githubusercontent.com/zou172866/Antigravity-agy-dart/v1.7
 Send this to Antigravity:
 
 ```text
-Clone tag v1.7.7 of https://github.com/zou172866/Antigravity-agy-dart.git to a temp folder, run `node scripts/install.mjs install` (add `--install-rg` on Windows if `rg` is missing), and confirm `doctor` passes.
+Clone tag v1.7.8 of https://github.com/zou172866/Antigravity-agy-dart.git to a temp folder, run `node scripts/install.mjs install` (add `--install-rg` on Windows if `rg` is missing), and confirm `doctor` passes.
 ```
 
 ### Option 3: Clone & install with custom flags
 
 ```powershell
-git clone --branch v1.7.7 --depth 1 https://github.com/zou172866/Antigravity-agy-dart.git
+git clone --branch v1.7.8 --depth 1 https://github.com/zou172866/Antigravity-agy-dart.git
 cd Antigravity-agy-dart
 
 # Windows PowerShell (optional -InstallRg auto-installs ripgrep)
@@ -153,6 +153,9 @@ node scripts/install.mjs tool-loading eager         # All 12 tools eager-loaded
 ---
 
 ## Changelog
+
+### v1.7.8
+- **Opt-in silent auto-updates (default OFF)**: Added an `Auto-Update: OFF/ON` toggle in the dashboard topbar (also configurable via `autoUpdateInstall` in `~/.agy-dart/config.json` or `AGY_DART_AUTO_UPDATE_INSTALL` / `AGY_DART_DISABLE_AUTO_UPDATE_INSTALL`). When enabled, background checks (at startup and every 6 hours) silently upgrade same-major releases only when a verified SHA-256 `.tgz` asset is present, defer during active TTL keepalive pings, trip a per-version circuit breaker on failure, and display a one-time dismissible notice after reload.
 
 ### v1.7.7
 - **DeepSeek Harness (`dsh`) native support (`--target dsh`)**: Added a zero-dependency native Cordis plugin (`dsh/plugin.mjs`) and `--target dsh` installer (`--profile <name>` / `--mcp-only`) that mounts both MCP servers (`agy_dart_fast` & `agy_dart_context` with tuned `toolCallTimeoutMs`), bridges DSH native `tools/pre-execute` / `tools/execute` / `tools/result` (supporting `read`, Windows `pwsh`, `bash`, `edit`, `write`, `apply_patch`), syncs `~/.dsh/skills/agy-dart/`, and adds `node bin/agy-dart.mjs dashboard` to open the live dashboard standalone. Zero token or behavior overhead on Antigravity.
@@ -269,7 +272,7 @@ After adding, removing, or editing modules or tests, keep these three places in 
 When installing for DeepSeek Harness, Claude Code, or Codex, the installer saves an undo record in `~/.agy-dart/<host>-install.json` so uninstalling cleanly restores your original config.
 
 ```sh
-git clone --branch v1.7.7 --depth 1 https://github.com/zou172866/Antigravity-agy-dart.git
+git clone --branch v1.7.8 --depth 1 https://github.com/zou172866/Antigravity-agy-dart.git
 cd Antigravity-agy-dart
 node bin/agy-dart.mjs install
 node bin/agy-dart.mjs doctor

@@ -538,7 +538,8 @@
     }
 
     .update-banner[data-state="current"],
-    .update-banner[data-state="updated"] {
+    .update-banner[data-state="updated"],
+    .update-banner[data-state="auto-updated"] {
       border-color: var(--ok-border);
       background: var(--ok-soft);
     }
@@ -2426,6 +2427,7 @@
             <span id="version-check-dot" class="version-dot hidden" aria-hidden="true"></span>
             <span id="version-check-label" data-i18n="versionCheckBtn">Check Update</span>
           </button>
+          <button id="auto-update-install-btn" type="button" onclick="toggleAutoUpdateInstall()" class="toggle-chip" data-enabled="0" data-i18n-title="autoUpdateInstallTip" title="Off by default. When enabled, silently installs same-major GitHub Releases with verified SHA-256 packages (skips active keepalives and trips a per-version circuit breaker on failure).">Auto-Update: OFF</button>
         </div>
 
         <div class="topbar-pills">
@@ -3386,7 +3388,14 @@
         versionReleaseBtn: 'Release Notes',
         versionManualBtn: 'Manual Download',
         versionDismissBtn: 'Dismiss',
+        versionAckBtn: 'Got it',
+        autoUpdateInstallLabel: 'Auto-Update',
+        autoUpdateInstallTip: 'Off by default. When enabled, silently installs same-major GitHub Releases with verified SHA-256 packages (skips active keepalives and trips a per-version circuit breaker on failure).',
+        autoUpdateInstallEnvTip: 'Controlled by environment variable (AGY_DART_AUTO_UPDATE_INSTALL / AGY_DART_DISABLE_AUTO_UPDATE_INSTALL).',
         versionUpdatedTitle: 'Updated to v{version}',
+        versionAutoUpdatedTitle: 'Auto-updated to v{version}',
+        versionAutoUpdatedTitleFrom: 'Auto-updated to v{version} (from v{prev})',
+        versionAutoUpdatedDetail: 'Dashboard reloaded automatically. Restart Antigravity to activate updated MCP tools & hooks.',
         versionUpdatedDetailReloading: 'Reloading dashboard... Restart Antigravity to apply MCP & Hook changes.',
         versionUpdatedDetailManual: 'Files updated on disk. Reload this window or restart Antigravity to activate.',
         versionCheckFailed: 'Could not check for updates.',
@@ -3860,7 +3869,14 @@
         versionReleaseBtn: '查看更新说明',
         versionManualBtn: '手动下载',
         versionDismissBtn: '关闭',
+        versionAckBtn: '知道了',
+        autoUpdateInstallLabel: '自动更新',
+        autoUpdateInstallTip: '默认关闭。开启后仅对同主版本且带 SHA-256 校验的 GitHub Release 静默自动升级（避让在途保活、单版本失败熔断；跨大版本仍需手动确认）。',
+        autoUpdateInstallEnvTip: '当前由环境变量（AGY_DART_AUTO_UPDATE_INSTALL / AGY_DART_DISABLE_AUTO_UPDATE_INSTALL）接管控制。',
         versionUpdatedTitle: '已更新至 v{version}',
+        versionAutoUpdatedTitle: '已自动更新至 v{version}',
+        versionAutoUpdatedTitleFrom: '已自动更新至 v{version}（原 v{prev}）',
+        versionAutoUpdatedDetail: '面板已自动重载；重启 Antigravity 后 MCP 工具与 Hooks 将生效。',
         versionUpdatedDetailReloading: '正在重载面板… 重启 Antigravity 后 MCP 工具与 Hooks 将生效。',
         versionUpdatedDetailManual: '插件文件已更新完成，请重新加载窗口或重启 Antigravity 生效。',
         versionCheckFailed: '检查更新失败。',
@@ -4055,6 +4071,10 @@
       lastCheck: null,
       lastUpdate: null,
       dismissedVersion: '',
+      dismissedAutoNoticeVersion: '',
+      autoUpdatedNotice: null,
+      autoUpdateInstall: { enabled: false, source: 'default' },
+      autoUpdateToggling: false,
       reloadPending: false
     };
 
@@ -4643,6 +4663,7 @@
       if (cachedStats && cachedStats.starPrompt) {
         renderStarMilestoneBanner(cachedStats.starPrompt);
       }
+      updateAutoUpdateInstallBtn();
       renderVersionUpdateUi();
     }
 
@@ -5405,6 +5426,19 @@
         if (isStale()) return;
         cachedStats = s;
         renderStarMilestoneBanner(s.starPrompt);
+        if (s.autoUpdateInstall && typeof s.autoUpdateInstall === 'object') {
+          versionCheckState.autoUpdateInstall = s.autoUpdateInstall;
+          updateAutoUpdateInstallBtn();
+        }
+        if (s.autoUpdateNotice && s.autoUpdateNotice.version) {
+          if (versionCheckState.dismissedAutoNoticeVersion !== s.autoUpdateNotice.version) {
+            versionCheckState.autoUpdatedNotice = s.autoUpdateNotice;
+            renderVersionUpdateUi();
+          }
+        } else if (versionCheckState.autoUpdatedNotice) {
+          versionCheckState.autoUpdatedNotice = null;
+          renderVersionUpdateUi();
+        }
 
         updateCutoffDropdown(s);
         updateExemptionsList(s);
@@ -11023,6 +11057,49 @@
       return base + restored;
     }
 
+    function updateAutoUpdateInstallBtn() {
+      const btn = document.getElementById('auto-update-install-btn');
+      if (!btn) return;
+      const info = versionCheckState.autoUpdateInstall || { enabled: false, source: 'default' };
+      const enabled = Boolean(info.enabled);
+      const lockedByEnv = info.source === 'env';
+      const sep = currentLang === 'zh' ? '：' : ': ';
+      btn.dataset.enabled = enabled ? '1' : '0';
+      btn.disabled = versionCheckState.autoUpdateToggling || lockedByEnv;
+      btn.className = enabled ? 'toggle-chip is-on' : 'toggle-chip';
+      btn.textContent = `${t('autoUpdateInstallLabel')}${sep}${enabled ? t('stateOn') : t('stateOff')}`;
+      btn.title = lockedByEnv ? t('autoUpdateInstallEnvTip') : t('autoUpdateInstallTip');
+    }
+
+    async function toggleAutoUpdateInstall() {
+      if (versionCheckState.autoUpdateToggling) return null;
+      const curInfo = versionCheckState.autoUpdateInstall || { enabled: false, source: 'default' };
+      if (curInfo.source === 'env') return null;
+      const nextEnabled = !curInfo.enabled;
+      versionCheckState.autoUpdateToggling = true;
+      versionCheckState.autoUpdateInstall = { enabled: nextEnabled, source: 'sqlite' };
+      updateAutoUpdateInstallBtn();
+      try {
+        const res = await apiFetch('/api/auto-update', {
+          method: 'POST',
+          body: JSON.stringify({ enabled: nextEnabled })
+        });
+        const data = res && res.ok ? await res.json().catch(() => null) : null;
+        if (data?.ok && data.autoUpdateInstall) {
+          versionCheckState.autoUpdateInstall = data.autoUpdateInstall;
+          return data;
+        }
+        versionCheckState.autoUpdateInstall = curInfo;
+        return null;
+      } catch {
+        versionCheckState.autoUpdateInstall = curInfo;
+        return null;
+      } finally {
+        versionCheckState.autoUpdateToggling = false;
+        updateAutoUpdateInstallBtn();
+      }
+    }
+
     function renderVersionUpdateUi() {
       const btn = document.getElementById('version-check-btn');
       const btnDot = document.getElementById('version-check-dot');
@@ -11044,6 +11121,13 @@
         !versionCheckState.manual &&
         versionCheckState.lastUpdate?.status !== 'error';
 
+      const autoNotice =
+        versionCheckState.autoUpdatedNotice &&
+        versionCheckState.autoUpdatedNotice.version &&
+        versionCheckState.dismissedAutoNoticeVersion !== versionCheckState.autoUpdatedNotice.version
+          ? versionCheckState.autoUpdatedNotice
+          : null;
+
       let state = '';
       if (versionCheckState.updating) state = 'updating';
       else if (versionCheckState.updated) state = 'updated';
@@ -11052,6 +11136,7 @@
       else if (versionCheckState.checking && versionCheckState.manual) state = 'checking';
       else if (versionCheckState.manual && versionCheckState.lastCheck?.status === 'error') state = 'check-error';
       else if (versionCheckState.manual && versionCheckState.lastCheck?.status === 'current') state = 'current';
+      else if (autoNotice) state = 'auto-updated';
 
       if (btn) {
         btn.disabled = versionCheckState.checking || versionCheckState.updating;
@@ -11106,6 +11191,12 @@
         detailText = versionCheckState.reloadPending
           ? t('versionUpdatedDetailReloading')
           : t('versionUpdatedDetailManual');
+      } else if (state === 'auto-updated') {
+        titleText = autoNotice.previousVersion
+          ? t('versionAutoUpdatedTitleFrom', { version: autoNotice.version, prev: autoNotice.previousVersion })
+          : t('versionAutoUpdatedTitle', { version: autoNotice.version });
+        detailText = t('versionAutoUpdatedDetail');
+        releaseHref = isSafeReleaseUrl(autoNotice.releaseUrl) ? autoNotice.releaseUrl : GITHUB_RELEASES_URL;
       } else if (state === 'check-error') {
         titleText = t('versionCheckFailed');
         detailText = formatVersionError(versionCheckState.lastCheck, false);
@@ -11143,7 +11234,7 @@
       }
       if (dismissBtn) {
         dismissBtn.disabled = versionCheckState.updating;
-        dismissBtn.textContent = t('versionDismissBtn');
+        dismissBtn.textContent = state === 'auto-updated' ? t('versionAckBtn') : t('versionDismissBtn');
         setElVisible(dismissBtn, !versionCheckState.updating);
       }
     }
@@ -11294,8 +11385,17 @@
 
     function dismissVersionBanner() {
       if (versionCheckState.updating) return;
+      const activeNoticeVer = versionCheckState.autoUpdatedNotice?.version || '';
       if (versionCheckState.available?.latestVersion) {
         versionCheckState.dismissedVersion = versionCheckState.available.latestVersion;
+      }
+      if (activeNoticeVer) {
+        versionCheckState.dismissedAutoNoticeVersion = activeNoticeVer;
+        versionCheckState.autoUpdatedNotice = null;
+        void apiFetch('/api/auto-update', {
+          method: 'POST',
+          body: JSON.stringify({ dismissNotice: true })
+        }).catch(() => {});
       }
       versionCheckState.manual = false;
       versionCheckState.updated = false;

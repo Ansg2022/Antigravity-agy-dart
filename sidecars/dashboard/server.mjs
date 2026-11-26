@@ -7,7 +7,13 @@ import os from "node:os";
 import { execFile, execSync } from "node:child_process";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { VERSION_ROUTE, createVersionChecker, parseVersion, readLocalVersion } from "./version-check.mjs";
-import { UPDATE_MARKER_NAME, UPDATE_ROUTE, createPluginUpdater, hasActiveUpdateMarker } from "./version-update.mjs";
+import {
+  UPDATE_MARKER_NAME,
+  UPDATE_ROUTE,
+  createPluginUpdater,
+  evaluateAutoInstallEligibility,
+  hasActiveUpdateMarker
+} from "./version-update.mjs";
 import { getEffectiveConfig } from "../../context/lib/config.js";
 import { executionReceiptsFromSteps, fastToolClaimsFromSteps } from "../../context/lib/execution-receipts.js";
 import { buildHandoffBrief, inferWorkspaceFromStore } from "../../context/lib/handoff.js";
@@ -322,6 +328,7 @@ export function closeRuntimeStore() {
   claimedTranscriptStatCache.clear();
   _updateInFlight = false;
   _updateRestartScheduled = false;
+  _autoCycleInFlight = null;
   if (_runtimeStore) {
     try {
       _runtimeStore.close();
@@ -805,6 +812,24 @@ function getStatsPayload(data, defaultConvId = "default") {
   } catch {}
 
   stats.version = getPackageVersion();
+  stats.autoUpdateCheckEnabled = isAutoUpdateCheckEnabled();
+  try {
+    stats.autoUpdateInstall = store.getAutoUpdateInstallInfo();
+    const autoState = store.getAutoUpdateRuntimeState();
+    const localVer = readLocalVersion() || stats.version;
+    stats.autoUpdateNotice =
+      autoState.lastAutoUpdatedVersion && (!localVer || autoState.lastAutoUpdatedVersion === localVer)
+        ? {
+            version: autoState.lastAutoUpdatedVersion,
+            previousVersion: autoState.lastAutoUpdatedFrom || "",
+            updatedAt: autoState.lastAutoUpdatedAt || "",
+            releaseUrl: autoState.lastAutoUpdatedUrl || ""
+          }
+        : null;
+  } catch {
+    stats.autoUpdateInstall = { enabled: false, source: "default" };
+    stats.autoUpdateNotice = null;
+  }
 
   return stats;
 }
@@ -2748,10 +2773,16 @@ function handleStarPromptMutation(data) {
   return { ok: true, starPrompt: store.evaluateStarPrompt({ markTriggered: false }) };
 }
 
+export const AUTO_UPDATE_ROUTE = "/api/auto-update";
+
 let _defaultVersionChecker = null;
 let _defaultPluginUpdater = null;
 let _updateInFlight = false;
 let _updateRestartScheduled = false;
+let _autoCycleInFlight = null;
+
+const NON_CIRCUIT_AUTO_FAIL_REASONS = new Set(["gitCheckout", "notInstalled", "busy", "releaseChanged"]);
+const AUTO_UPDATE_MUTATION_ALLOWED_KEYS = new Set(["enabled", "dismissNotice"]);
 
 export function isPluginUpdateBusy() {
   return _updateInFlight || _updateRestartScheduled;
@@ -2822,7 +2853,8 @@ export async function handleVersionCheck(
 export async function handlePluginUpdate(
   data = {},
   updater = getDefaultPluginUpdater(),
-  onUpdated = null
+  onUpdated = null,
+  { automatic = false, store = null, nowIso = null } = {}
 ) {
   if (!data || typeof data !== "object" || Array.isArray(data)) {
     return { ok: false, status: 400, error: "Request body must be a JSON object" };
@@ -2845,6 +2877,33 @@ export async function handlePluginUpdate(
   }
   if (result?.status === "updated") {
     invalidateVersionCache();
+    try {
+      const targetStore = store || (_runtimeStore ? _runtimeStore : null);
+      if (targetStore && typeof targetStore.setAutoUpdateRuntimeState === "function") {
+        const ts = typeof nowIso === "string" && nowIso.trim() ? nowIso.trim() : new Date().toISOString();
+        if (automatic) {
+          targetStore.setAutoUpdateRuntimeState({
+            lastAutoUpdatedVersion: result.version || parsed.version,
+            lastAutoUpdatedFrom: result.previousVersion || "",
+            lastAutoUpdatedAt: ts,
+            lastAutoUpdatedUrl: result.releaseUrl || "",
+            failedVersion: "",
+            failedReason: "",
+            failedAt: ""
+          });
+        } else {
+          targetStore.setAutoUpdateRuntimeState({
+            lastAutoUpdatedVersion: "",
+            lastAutoUpdatedFrom: "",
+            lastAutoUpdatedAt: "",
+            lastAutoUpdatedUrl: "",
+            failedVersion: "",
+            failedReason: "",
+            failedAt: ""
+          });
+        }
+      }
+    } catch {}
     if (typeof onUpdated === "function") {
       _updateRestartScheduled = true;
       try {
@@ -2855,6 +2914,122 @@ export async function handlePluginUpdate(
     }
   }
   return result;
+}
+
+export function handleAutoUpdateMutation(
+  data = {},
+  { store = getRuntimeStore(), onAutoInstallEnabled = null } = {}
+) {
+  if (!data || typeof data !== "object" || Array.isArray(data)) {
+    return { ok: false, status: 400, error: "Request body must be a JSON object" };
+  }
+  const keys = Object.keys(data);
+  if (keys.length === 0) {
+    return { ok: false, status: 400, error: "Expected 'enabled' or 'dismissNotice' field" };
+  }
+  for (const key of keys) {
+    if (!AUTO_UPDATE_MUTATION_ALLOWED_KEYS.has(key)) {
+      return { ok: false, status: 400, error: `Unexpected field '${key}' in request body` };
+    }
+  }
+  if (data.enabled !== undefined && typeof data.enabled !== "boolean") {
+    return { ok: false, status: 400, error: "Field 'enabled' must be a boolean" };
+  }
+  if (data.dismissNotice !== undefined && data.dismissNotice !== true) {
+    return { ok: false, status: 400, error: "Field 'dismissNotice' must be true" };
+  }
+  if (typeof data.enabled === "boolean") {
+    store.setAutoUpdateInstallEnabled(data.enabled);
+    if (data.enabled === true && typeof onAutoInstallEnabled === "function") {
+      void Promise.resolve(onAutoInstallEnabled()).catch(() => {});
+    }
+  }
+  if (data.dismissNotice === true) {
+    store.clearAutoUpdateNotice();
+  }
+  const info = store.getAutoUpdateInstallInfo();
+  const state = store.getAutoUpdateRuntimeState();
+  const localVer = readLocalVersion() || getPackageVersion();
+  const notice =
+    state.lastAutoUpdatedVersion && (!localVer || state.lastAutoUpdatedVersion === localVer)
+      ? {
+          version: state.lastAutoUpdatedVersion,
+          previousVersion: state.lastAutoUpdatedFrom || "",
+          updatedAt: state.lastAutoUpdatedAt || "",
+          releaseUrl: state.lastAutoUpdatedUrl || ""
+        }
+      : null;
+  return {
+    ok: true,
+    autoUpdateInstall: info,
+    autoUpdateNotice: notice
+  };
+}
+
+export async function runAutoUpdateCycle({
+  store = getRuntimeStore(),
+  checker = getDefaultVersionChecker(),
+  updater = getDefaultPluginUpdater(),
+  monitor = null,
+  onUpdated = null,
+  currentVersion = null,
+  nowIso = null
+} = {}) {
+  if (_autoCycleInFlight) return _autoCycleInFlight;
+
+  const task = (async () => {
+    if (!isAutoUpdateCheckEnabled()) {
+      return { ok: true, action: "skipped", reason: "checkDisabled" };
+    }
+    const release = await checker("auto");
+    if (!store.isAutoUpdateInstallEnabled()) {
+      return { ok: true, action: "checked", release, autoInstallSkipped: "installDisabled" };
+    }
+    if (isPluginUpdateBusy()) {
+      return { ok: true, action: "skipped", reason: "busy", release };
+    }
+    if (monitor?._keepaliveInFlight && monitor._keepaliveInFlight.size > 0) {
+      return { ok: true, action: "deferred", reason: "keepaliveInFlight", release };
+    }
+    const runtimeState = store.getAutoUpdateRuntimeState();
+    const curVer =
+      typeof currentVersion === "string" && currentVersion.trim()
+        ? currentVersion.trim()
+        : release?.currentVersion || readLocalVersion() || getPackageVersion();
+    const eligibility = evaluateAutoInstallEligibility({
+      release,
+      currentVersion: curVer,
+      failedVersion: runtimeState.failedVersion
+    });
+    if (!eligibility.eligible) {
+      return { ok: true, action: "checked", release, autoInstallSkipped: eligibility.skipReason };
+    }
+
+    const updRes = await handlePluginUpdate(
+      { version: eligibility.targetVersion },
+      updater,
+      onUpdated,
+      { automatic: true, store, nowIso }
+    );
+    if (updRes?.status === "updated") {
+      return { ok: true, action: "updated", result: updRes };
+    }
+    const failReason = updRes?.reason || "install";
+    if (!NON_CIRCUIT_AUTO_FAIL_REASONS.has(failReason)) {
+      const ts = typeof nowIso === "string" && nowIso.trim() ? nowIso.trim() : new Date().toISOString();
+      store.setAutoUpdateRuntimeState({
+        failedVersion: eligibility.targetVersion,
+        failedReason: failReason,
+        failedAt: ts
+      });
+    }
+    return { ok: false, action: "failed", result: updRes };
+  })().finally(() => {
+    _autoCycleInFlight = null;
+  });
+
+  _autoCycleInFlight = task;
+  return task;
 }
 
 function sendJson(res, status, payload, extraHeaders = {}) {
@@ -2888,6 +3063,7 @@ const MUTATING_ENDPOINTS = new Set([
   "/api/read-dedup",
   "/api/watchdog/action",
   "/api/star-prompt",
+  AUTO_UPDATE_ROUTE,
   UPDATE_ROUTE
 ]);
 
@@ -2896,7 +3072,8 @@ export function createStandaloneServer({
   maxBodyBytes = MAX_REQUEST_BODY_BYTES,
   watchdogOptions = null,
   versionChecker = null,
-  pluginUpdater = null
+  pluginUpdater = null,
+  onAutoInstallEnabled = null
 } = {}) {
   getRuntimeStore();
   const monitor = getWatchdogMonitor(watchdogOptions || {});
@@ -3164,6 +3341,13 @@ export function createStandaloneServer({
           } else {
             sendJson(res, 200, spRes);
           }
+        } else if (url.pathname === AUTO_UPDATE_ROUTE) {
+          const auRes = handleAutoUpdateMutation(data, { onAutoInstallEnabled });
+          if (auRes.ok === false && auRes.status) {
+            sendJson(res, auRes.status, { error: auRes.error });
+          } else {
+            sendJson(res, 200, auRes);
+          }
         } else if (url.pathname === UPDATE_ROUTE) {
           const updRes = await handlePluginUpdate(data, pluginUpdater || getDefaultPluginUpdater());
           if (updRes.ok === false && updRes.status === 400) {
@@ -3320,31 +3504,43 @@ if (isDirectRun) {
       return html;
     });
 
+    const scheduleUpdatedRestart = () => {
+      const scheduleExit = (waitedMs = 0) => {
+        if (shuttingDown) return;
+        if (monitor._keepaliveInFlight && monitor._keepaliveInFlight.size > 0 && waitedMs < 15_000) {
+          const waitTimer = setTimeout(() => scheduleExit(waitedMs + 250), 250);
+          waitTimer.unref?.();
+          return;
+        }
+        void shutdownCleanly(0);
+      };
+      const restartTimer = setTimeout(() => scheduleExit(0), 450);
+      restartTimer.unref?.();
+    };
+    const triggerBackgroundAutoUpdate = () =>
+      runAutoUpdateCycle({
+        store: getRuntimeStore(),
+        monitor,
+        onUpdated: scheduleUpdatedRestart
+      }).catch(() => {});
+
     registerSidecarRoutes(app, {
-      onUpdated: () => {
-        const scheduleExit = (waitedMs = 0) => {
-          if (shuttingDown) return;
-          if (monitor._keepaliveInFlight && monitor._keepaliveInFlight.size > 0 && waitedMs < 15_000) {
-            const waitTimer = setTimeout(() => scheduleExit(waitedMs + 250), 250);
-            waitTimer.unref?.();
-            return;
-          }
-          void shutdownCleanly(0);
-        };
-        const restartTimer = setTimeout(() => scheduleExit(0), 450);
-        restartTimer.unref?.();
-      }
+      onUpdated: scheduleUpdatedRestart,
+      onAutoInstallEnabled: triggerBackgroundAutoUpdate
     });
 
     await app.run();
     console.log(`[agy-dart sidecar] registered and running`);
 
-    if (isAutoUpdateCheckEnabled()) {
-      const startupCheckTimer = setTimeout(() => {
-        void getDefaultVersionChecker()("auto").catch(() => {});
-      }, 1500);
-      startupCheckTimer.unref?.();
-    }
+    const startupCheckTimer = setTimeout(() => {
+      void triggerBackgroundAutoUpdate();
+    }, 1500);
+    startupCheckTimer.unref?.();
+
+    const periodicAutoCheckTimer = setInterval(() => {
+      void triggerBackgroundAutoUpdate();
+    }, 6 * 60 * 60_000);
+    periodicAutoCheckTimer.unref?.();
   } else {
     const port = resolveStandalonePort(process.env);
     const server = createStandaloneServer({
@@ -3360,7 +3556,10 @@ if (isDirectRun) {
   }
 }
 
-export function registerSidecarRoutes(app, { versionChecker = null, pluginUpdater = null, onUpdated = null } = {}) {
+export function registerSidecarRoutes(
+  app,
+  { versionChecker = null, pluginUpdater = null, onUpdated = null, onAutoInstallEnabled = null } = {}
+) {
   const makeBadRequest = (msg) => {
     const err = new Error(msg);
     err.statusCode = 400;
@@ -3525,6 +3724,13 @@ export function registerSidecarRoutes(app, { versionChecker = null, pluginUpdate
     if (!data) return makeBadRequest("Request body must be a JSON object");
     const res = await handleVersionCheck(data, versionChecker || getDefaultVersionChecker());
     if (res.ok === false && res.status === 400) return makeBadRequest(res.error);
+    return res;
+  }, "POST");
+  app.api(AUTO_UPDATE_ROUTE, (rawData) => {
+    const data = normalizeSidecarBody(rawData);
+    if (!data) return makeBadRequest("Request body must be a JSON object");
+    const res = handleAutoUpdateMutation(data, { onAutoInstallEnabled });
+    if (res.ok === false) return makeBadRequest(res.error);
     return res;
   }, "POST");
   app.api(UPDATE_ROUTE, async (rawData) => {

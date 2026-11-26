@@ -13,13 +13,16 @@ import { CONFIG_DEFAULTS, getEffectiveConfig, resetConfigCache } from "../contex
 import { DEVTOOLS_FILES, RUNTIME_FILES } from "../scripts/install.mjs";
 import { verifyPackageManifest } from "../scripts/verify-package-graph.mjs";
 import {
+  AUTO_UPDATE_ROUTE,
   closeRuntimeStore,
   createStandaloneServer,
+  handleAutoUpdateMutation,
   handlePluginUpdate,
   handleVersionCheck,
   invalidateVersionCache,
   isPluginUpdateBusy,
-  registerSidecarRoutes
+  registerSidecarRoutes,
+  runAutoUpdateCycle
 } from "../sidecars/dashboard/server.mjs";
 import {
   downloadArchive,
@@ -38,6 +41,7 @@ import {
 } from "../sidecars/dashboard/version-check.mjs";
 import {
   createPluginUpdater,
+  evaluateAutoInstallEligibility,
   extractStaticRelativeImports,
   hasActiveUpdateMarker,
   resolveInstalledRoot,
@@ -1266,6 +1270,241 @@ test("v1.7.6-10: preserves --with-devtools, syncs owned secondary hosts & valida
     assert.ok(serverImports.includes("./version-check.mjs"));
     assert.ok(serverImports.includes("./version-update.mjs"));
   } finally {
+    fs.rmSync(tmpDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
+  }
+});
+
+test("v1.7.7-auto-install: opt-in default-OFF silent auto-update guardrails, SQLite/env precedence, keepalive deferral, /api/auto-update CSRF & UI", async () => {
+  const { ContextModeStore } = await import("../context/lib/store.js");
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "agy-v177-autoinst-"));
+  const dbPath = path.join(tmpDir, "ctx.db");
+  const cfgPath = path.join(tmpDir, "config.json");
+  const prevDb = process.env.AGY_DART_DB_PATH;
+  const prevCfg = process.env.AGY_DART_CONFIG_PATH;
+  const prevAutoInst = process.env.AGY_DART_AUTO_UPDATE_INSTALL;
+  const prevDisInst = process.env.AGY_DART_DISABLE_AUTO_UPDATE_INSTALL;
+  const prevDisChk = process.env.AGY_DART_DISABLE_AUTO_UPDATE_CHECK;
+
+  try {
+    assert.equal(CONFIG_DEFAULTS.autoUpdateInstall, false);
+    const validSha = "d".repeat(64);
+    const baseRelease = {
+      ok: true,
+      status: "update",
+      currentVersion: "1.7.6",
+      latestVersion: "1.7.7",
+      releaseTag: "v1.7.7",
+      releaseUrl: `${RELEASES_URL}/tag/v1.7.7`,
+      assetName: "agy-dart-1.7.7.tgz",
+      assetUrl: "https://github.com/zou172866/Antigravity-agy-dart/releases/download/v1.7.7/agy-dart-1.7.7.tgz",
+      assetSha256: validSha
+    };
+
+    // 1. 4-guardrail eligibility checks
+    assert.deepEqual(
+      evaluateAutoInstallEligibility({ release: baseRelease, currentVersion: "1.7.6" }),
+      { eligible: true, skipReason: null, targetVersion: "1.7.7" }
+    );
+    assert.equal(
+      evaluateAutoInstallEligibility({
+        release: { ...baseRelease, latestVersion: "2.0.0", releaseTag: "v2.0.0" },
+        currentVersion: "1.7.6"
+      }).skipReason,
+      "majorUpgrade"
+    );
+    assert.equal(
+      evaluateAutoInstallEligibility({
+        release: { ...baseRelease, assetUrl: "", assetSha256: "" },
+        currentVersion: "1.7.6"
+      }).skipReason,
+      "noVerifiedAsset"
+    );
+    assert.equal(
+      evaluateAutoInstallEligibility({
+        release: baseRelease,
+        currentVersion: "1.7.6",
+        failedVersion: "1.7.7"
+      }).skipReason,
+      "failedCircuitOpen"
+    );
+
+    // 2. Store precedence (env > sqlite > config > default) + runAutoUpdateCycle guardrails
+    process.env.AGY_DART_DB_PATH = dbPath;
+    process.env.AGY_DART_CONFIG_PATH = cfgPath;
+    delete process.env.AGY_DART_AUTO_UPDATE_INSTALL;
+    delete process.env.AGY_DART_DISABLE_AUTO_UPDATE_INSTALL;
+    delete process.env.AGY_DART_DISABLE_AUTO_UPDATE_CHECK;
+    resetConfigCache();
+    closeRuntimeStore();
+
+    const store = new ContextModeStore(dbPath);
+    try {
+      assert.deepEqual(store.getAutoUpdateInstallInfo({}), { enabled: false, source: "default" });
+      store.setAutoUpdateInstallEnabled(true);
+      assert.deepEqual(store.getAutoUpdateInstallInfo({}), { enabled: true, source: "sqlite" });
+      assert.deepEqual(
+        store.getAutoUpdateInstallInfo({ AGY_DART_DISABLE_AUTO_UPDATE_INSTALL: "1" }),
+        { enabled: false, source: "env" }
+      );
+      assert.deepEqual(
+        store.getAutoUpdateInstallInfo({ AGY_DART_DISABLE_AUTO_UPDATE_CHECK: "1" }),
+        { enabled: false, source: "env" }
+      );
+
+      // Keepalive in-flight defers automatic install cleanly
+      let updateCalls = 0;
+      const deferred = await runAutoUpdateCycle({
+        store,
+        checker: async () => baseRelease,
+        updater: async () => {
+          updateCalls += 1;
+          return { ok: true, status: "updated", previousVersion: "1.7.6", version: "1.7.7", releaseUrl: baseRelease.releaseUrl };
+        },
+        monitor: { _keepaliveInFlight: new Set(["conv-busy"]) },
+        currentVersion: "1.7.6"
+      });
+      assert.equal(deferred.action, "deferred");
+      assert.equal(deferred.reason, "keepaliveInFlight");
+      assert.equal(updateCalls, 0);
+
+      // Failure trips per-version circuit breaker; second cycle skips 1.7.7
+      const failed = await runAutoUpdateCycle({
+        store,
+        checker: async () => baseRelease,
+        updater: async () => {
+          updateCalls += 1;
+          return { ok: false, status: "error", reason: "locked", diagnostics: { step: "replace", restored: true } };
+        },
+        monitor: { _keepaliveInFlight: new Set() },
+        currentVersion: "1.7.6",
+        nowIso: "2026-11-26T16:10:00.000Z"
+      });
+      assert.equal(failed.action, "failed");
+      assert.equal(store.getAutoUpdateRuntimeState().failedVersion, "1.7.7");
+
+      const circuitSkip = await runAutoUpdateCycle({
+        store,
+        checker: async () => baseRelease,
+        updater: async () => {
+          updateCalls += 1;
+          return { ok: true, status: "updated", version: "1.7.7" };
+        },
+        monitor: { _keepaliveInFlight: new Set() },
+        currentVersion: "1.7.6"
+      });
+      assert.equal(circuitSkip.action, "checked");
+      assert.equal(circuitSkip.autoInstallSkipped, "failedCircuitOpen");
+      assert.equal(updateCalls, 1);
+
+      // Manual update success clears circuit breaker; next auto-update succeeds and persists notice
+      const manualOk = await handlePluginUpdate(
+        { version: "1.7.7" },
+        async (v) => ({ ok: true, status: "updated", previousVersion: "1.7.6", version: v, releaseUrl: baseRelease.releaseUrl }),
+        null,
+        { store }
+      );
+      assert.equal(manualOk.status, "updated");
+      assert.equal(store.getAutoUpdateRuntimeState().failedVersion, "");
+
+      let restarted = false;
+      const localVer = readLocalVersion(ROOT);
+      const autoOk = await runAutoUpdateCycle({
+        store,
+        checker: async () => ({
+          ...baseRelease,
+          latestVersion: localVer,
+          releaseTag: `v${localVer}`
+        }),
+        updater: async (v) => ({
+          ok: true,
+          status: "updated",
+          previousVersion: "1.7.5",
+          version: v,
+          releaseUrl: `${RELEASES_URL}/tag/v${v}`
+        }),
+        monitor: { _keepaliveInFlight: new Set() },
+        currentVersion: "1.7.5",
+        nowIso: "2026-11-26T16:12:00.000Z",
+        onUpdated: () => {
+          restarted = true;
+        }
+      });
+      assert.equal(autoOk.action, "updated");
+      assert.equal(restarted, true);
+      assert.equal(store.getAutoUpdateRuntimeState().lastAutoUpdatedVersion, localVer);
+
+      // handleAutoUpdateMutation validates inputs and clears notice
+      assert.equal(handleAutoUpdateMutation({}, { store }).status, 400);
+      assert.equal(handleAutoUpdateMutation({ enabled: "yes" }, { store }).status, 400);
+      assert.equal(handleAutoUpdateMutation({ enabled: true, extra: 1 }, { store }).status, 400);
+      const dismissed = handleAutoUpdateMutation({ dismissNotice: true }, { store });
+      assert.equal(dismissed.ok, true);
+      assert.equal(dismissed.autoUpdateNotice, null);
+    } finally {
+      store.close();
+    }
+
+    // 3. Standalone HTTP /api/auto-update enforces POST + CSRF + triggers callback on enable
+    closeRuntimeStore();
+    const csrf = "dart-auto-upd-csrf-0123456789";
+    let triggered = false;
+    const srv = createStandaloneServer({
+      csrfToken: csrf,
+      onAutoInstallEnabled: () => {
+        triggered = true;
+      }
+    });
+    await new Promise((resolve) => srv.listen(0, "127.0.0.1", resolve));
+    const port = srv.address().port;
+    try {
+      const req = (method, headers, body = null) =>
+        new Promise((resolve, reject) => {
+          const r = http.request(
+            { hostname: "127.0.0.1", port, path: AUTO_UPDATE_ROUTE, method, headers: { Host: `127.0.0.1:${port}`, ...headers } },
+            (res) => {
+              let raw = "";
+              res.on("data", (d) => (raw += d));
+              res.on("end", () => resolve({ status: res.statusCode, json: JSON.parse(raw || "{}") }));
+            }
+          );
+          r.on("error", reject);
+          if (body !== null) r.write(body);
+          r.end();
+        });
+      assert.equal((await req("GET", { "X-Agy-Dart-Token": csrf })).status, 405);
+      assert.equal((await req("POST", { "Content-Type": "application/json" }, JSON.stringify({ enabled: true }))).status, 403);
+      const okOn = await req(
+        "POST",
+        { "Content-Type": "application/json", "X-Agy-Dart-Token": csrf },
+        JSON.stringify({ enabled: true })
+      );
+      assert.equal(okOn.status, 200);
+      assert.equal(okOn.json.autoUpdateInstall.enabled, true);
+      assert.equal(triggered, true);
+    } finally {
+      await new Promise((resolve) => srv.close(resolve));
+      closeRuntimeStore();
+    }
+
+    // 4. Dashboard index.html exposes #auto-update-install-btn and auto-updated notice i18n
+    const html = fs.readFileSync(path.join(ROOT, "sidecars/dashboard/index.html"), "utf8");
+    assert.ok(html.includes('id="auto-update-install-btn"'));
+    assert.ok(html.includes("toggleAutoUpdateInstall()"));
+    assert.ok(html.includes("versionAutoUpdatedTitleFrom"));
+    assert.ok(html.includes("/api/auto-update"));
+  } finally {
+    closeRuntimeStore();
+    if (prevDb === undefined) delete process.env.AGY_DART_DB_PATH;
+    else process.env.AGY_DART_DB_PATH = prevDb;
+    if (prevCfg === undefined) delete process.env.AGY_DART_CONFIG_PATH;
+    else process.env.AGY_DART_CONFIG_PATH = prevCfg;
+    if (prevAutoInst === undefined) delete process.env.AGY_DART_AUTO_UPDATE_INSTALL;
+    else process.env.AGY_DART_AUTO_UPDATE_INSTALL = prevAutoInst;
+    if (prevDisInst === undefined) delete process.env.AGY_DART_DISABLE_AUTO_UPDATE_INSTALL;
+    else process.env.AGY_DART_DISABLE_AUTO_UPDATE_INSTALL = prevDisInst;
+    if (prevDisChk === undefined) delete process.env.AGY_DART_DISABLE_AUTO_UPDATE_CHECK;
+    else process.env.AGY_DART_DISABLE_AUTO_UPDATE_CHECK = prevDisChk;
+    resetConfigCache();
     fs.rmSync(tmpDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
   }
 });

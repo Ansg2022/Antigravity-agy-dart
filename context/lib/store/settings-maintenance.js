@@ -216,6 +216,45 @@ function resolveModelColdFloorSec(modelStr) {
 
 export const STAR_PROMPT_META_KEY = "star_prompt";
 export const CACHE_AUDIT_PASSED_META_KEY = "cache_audit:passed_at";
+export const AUTO_UPDATE_INSTALL_META_KEY = "auto_update:install";
+export const AUTO_UPDATE_STATE_META_KEY = "auto_update:state";
+const AUTO_UPDATE_RELEASE_URL_PREFIX = "https://github.com/zou172866/Antigravity-agy-dart/releases/";
+
+export function normalizeAutoUpdateRuntimeState(raw) {
+  const defaults = {
+    lastAutoUpdatedVersion: "",
+    lastAutoUpdatedFrom: "",
+    lastAutoUpdatedAt: "",
+    lastAutoUpdatedUrl: "",
+    failedVersion: "",
+    failedReason: "",
+    failedAt: ""
+  };
+  let obj = raw;
+  if (typeof raw === "string") {
+    const trimmed = raw.trim();
+    if (!trimmed) return { ...defaults };
+    try {
+      obj = JSON.parse(trimmed);
+    } catch {
+      return { ...defaults };
+    }
+  }
+  if (!obj || typeof obj !== "object" || Array.isArray(obj)) {
+    return { ...defaults };
+  }
+  const norm = (v, maxLen = 64) => (typeof v === "string" ? v.trim().slice(0, maxLen) : "");
+  const rawUrl = norm(obj.lastAutoUpdatedUrl, 256);
+  return {
+    lastAutoUpdatedVersion: norm(obj.lastAutoUpdatedVersion, 32),
+    lastAutoUpdatedFrom: norm(obj.lastAutoUpdatedFrom, 32),
+    lastAutoUpdatedAt: norm(obj.lastAutoUpdatedAt, 64),
+    lastAutoUpdatedUrl: rawUrl.startsWith(AUTO_UPDATE_RELEASE_URL_PREFIX) ? rawUrl : "",
+    failedVersion: norm(obj.failedVersion, 32),
+    failedReason: norm(obj.failedReason, 64),
+    failedAt: norm(obj.failedAt, 64)
+  };
+}
 export const STAR_PROMPT_STATES = Object.freeze(["pending", "clicked", "dismissed", "copied_cli"]);
 export const STAR_PROMPT_TERMINAL_STATES = Object.freeze(["clicked", "dismissed", "copied_cli"]);
 export const STAR_PROMPT_MIN_SAVED_BYTES = 100 * 1024;
@@ -1429,6 +1468,66 @@ export class SettingsMaintenanceMethods {
     const boolVal = Boolean(enabled && enabled !== "false" && enabled !== "0");
     this.setMeta("cache:ttl_desktop_notify", boolVal ? "true" : "false");
     return boolVal;
+  }
+
+  /** Inspect effective opt-in silent auto-update install setting and its source (default OFF; env > sqlite > config) */
+  getAutoUpdateInstallInfo(env = process.env) {
+    const snap = getConfigSnapshot({ env });
+    if (snap.values.autoUpdateCheck === false) {
+      return { enabled: false, source: snap.sources.autoUpdateCheck === "env" ? "env" : "config" };
+    }
+    if (snap.sources.autoUpdateInstall === "env") {
+      return { enabled: Boolean(snap.values.autoUpdateInstall), source: "env" };
+    }
+    this.open();
+    const raw = this.getMeta(AUTO_UPDATE_INSTALL_META_KEY, null);
+    if (raw !== null) {
+      return { enabled: raw === "true" || raw === "1", source: "sqlite" };
+    }
+    return {
+      enabled: Boolean(snap.values.autoUpdateInstall),
+      source: snap.sources.autoUpdateInstall || "default"
+    };
+  }
+
+  /** Check if opt-in silent auto-update install is enabled (default OFF; env > sqlite > config) */
+  isAutoUpdateInstallEnabled(env = process.env) {
+    return this.getAutoUpdateInstallInfo(env).enabled;
+  }
+
+  /** Enable or disable opt-in silent auto-update install in SQLite meta */
+  setAutoUpdateInstallEnabled(enabled) {
+    this.open();
+    const boolVal = Boolean(enabled && enabled !== "false" && enabled !== "0");
+    this.setMeta(AUTO_UPDATE_INSTALL_META_KEY, boolVal ? "true" : "false");
+    return boolVal;
+  }
+
+  /** Read normalized silent auto-update runtime state (circuit breaker + post-update notice) */
+  getAutoUpdateRuntimeState() {
+    this.open();
+    return normalizeAutoUpdateRuntimeState(this.getMeta(AUTO_UPDATE_STATE_META_KEY, null));
+  }
+
+  /** Merge and persist silent auto-update runtime state in SQLite meta */
+  setAutoUpdateRuntimeState(patch = {}) {
+    this.open();
+    const next = normalizeAutoUpdateRuntimeState({
+      ...this.getAutoUpdateRuntimeState(),
+      ...(patch && typeof patch === "object" && !Array.isArray(patch) ? patch : {})
+    });
+    this.setMeta(AUTO_UPDATE_STATE_META_KEY, JSON.stringify(next));
+    return next;
+  }
+
+  /** Clear one-time post-auto-update notice after user acknowledgement */
+  clearAutoUpdateNotice() {
+    return this.setAutoUpdateRuntimeState({
+      lastAutoUpdatedVersion: "",
+      lastAutoUpdatedFrom: "",
+      lastAutoUpdatedAt: "",
+      lastAutoUpdatedUrl: ""
+    });
   }
 
   /** Return last remembered non-zero global keepalive max count (1..20, fallback 1) */
