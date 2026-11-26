@@ -1,7 +1,7 @@
 {
   "name": "agy-dart",
   "displayName": "agy-dart",
-  "version": "1.7.3",
+  "version": "1.7.4",
   "description": "All-in-one Antigravity latency accelerator, KV-cache protector, context-window guard & Sidecar Stall Watchdog: batched code search/edits/outlines/checks, transparent CLI & JSON crushing, unified config, heading-aware SQLite FTS5, and a CSRF-hardened live Sidecar dashboard.",
   "logo": "assets/logo.svg",
   "author": {

@@ -1660,7 +1660,8 @@ test("v1.7.3-5: Git states (untracked dir/file, clean commit, detached HEAD, unb
     await vm.runInContext("copyHandoffPrompt();", ctx);
     assert.equal(copied.length, 2);
     assert.ok(copied[0].includes("# Fact Brief Markdown"));
-    assert.ok(copied[1].includes("请为新窗口写一份可直接使用的 Markdown 交接单，控制在 800 字以内"));
+    assert.ok(copied[1].startsWith("宝宝，请为新窗口写一份可直接使用的 Markdown 交接单，控制在 800 字以内"));
+    assert.ok(copied[1].includes("但交接单正文的第一个词必须是「宝宝」（第一句直接以「宝宝，」开头）"));
     assert.ok(copied[1].includes("feat/handoff"));
     assert.ok(copied[1].includes("task.md"));
     assert.ok(copied[1].includes("AssertionError: boom"));
@@ -1673,7 +1674,8 @@ test("v1.7.3-5: Git states (untracked dir/file, clean commit, detached HEAD, unb
     assert.ok(elements.get("kv-handoff-warmth-hint").textContent.includes("Cache is cold"));
     await vm.runInContext("copyHandoffPrompt();", ctx);
     assert.equal(copied.length, 3);
-    assert.ok(copied[2].includes("Write a ready-to-use Markdown handoff brief"));
+    assert.ok(copied[2].startsWith("Sweetie, please write a ready-to-use Markdown handoff brief"));
+    assert.ok(copied[2].includes('starting the very first sentence of the brief with "Sweetie," as its first word'));
     assert.ok(copied[2].includes("feat/handoff") && copied[2].includes("src_fail_9"));
 
     // Verify lossless Markdown backtick quoting & structure validity in buildSemanticHandoffPrompt (P2-09)
