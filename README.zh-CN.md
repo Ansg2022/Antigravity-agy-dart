@@ -77,13 +77,13 @@ AI 要搜好几个词时一次同时搜完，要改多个文件时一次改完�
 **Windows（PowerShell）：**
 
 ```powershell
-irm https://raw.githubusercontent.com/zou172866/Antigravity-agy-dart/v1.7.5/install.ps1 | iex
+irm https://raw.githubusercontent.com/zou172866/Antigravity-agy-dart/v1.7.6/install.ps1 | iex
 ```
 
 **macOS / Linux：**
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/zou172866/Antigravity-agy-dart/v1.7.5/install.sh | sh
+curl -fsSL https://raw.githubusercontent.com/zou172866/Antigravity-agy-dart/v1.7.6/install.sh | sh
 ```
 
 ### 方法二：直接发给 Antigravity 装
@@ -91,13 +91,13 @@ curl -fsSL https://raw.githubusercontent.com/zou172866/Antigravity-agy-dart/v1.7
 复制这句发给 Antigravity：
 
 ```text
-请将 https://github.com/zou172866/Antigravity-agy-dart.git 的 v1.7.5 标签克隆到临时目录，运行其中的 scripts/install.mjs install 完成全局安装并跑 doctor 自检（Windows 如未安装 rg 请同时传 --install-rg）。
+请将 https://github.com/zou172866/Antigravity-agy-dart.git 的 v1.7.6 标签克隆到临时目录，运行其中的 scripts/install.mjs install 完成全局安装并跑 doctor 自检（Windows 如未安装 rg 请同时传 --install-rg）。
 ```
 
 ### 方法三：克隆仓库自定义安装
 
 ```powershell
-git clone --branch v1.7.5 --depth 1 https://github.com/zou172866/Antigravity-agy-dart.git
+git clone --branch v1.7.6 --depth 1 https://github.com/zou172866/Antigravity-agy-dart.git
 cd Antigravity-agy-dart
 
 # Windows PowerShell（加 -InstallRg 可顺手自动安装快速搜索工具 rg）
@@ -145,6 +145,10 @@ node scripts/install.mjs tool-loading eager         # 12 个工具全部预载
 ---
 
 ## 更新日志
+
+### v1.7.6
+- **面板新增一键在线更新与启动版本检查**（感谢 [@bestmulicc](https://github.com/bestmulicc) 贡献，[#5](https://github.com/zou172866/Antigravity-agy-dart/pull/5)）：右侧面板启动时会自动检查 GitHub 是否有新版本（可在 `~/.agy-dart/config.json` 设 `autoUpdateCheck: false` 或环境变量 `AGY_DART_DISABLE_AUTO_UPDATE_CHECK=1` 关闭），点顶栏「检查更新」/「立即更新」即可原地升级，不用再手动跑终端安装命令。
+- **校验下载包、失败自动回滚并保留个人配置**：优先下载带 SHA-256 校验的 Release 压缩包再解包，遇到文件被占用会自动回滚恢复原版；升级后自动重载面板，同时保留本地 `rules/*.local.md`、工具加载模式、`--with-devtools` 工具和同步的 Gemini/T3 副本。
 
 ### v1.7.5
 - **面板新增一键「续温 1×」按钮**：缓存倒计时旁边可以直接手动点一次续温。就算平时关着自动续温也能随时点，而且不扣自动续温次数（防连点，发送失败也不白算）。
@@ -257,7 +261,7 @@ npm run cache:simulate
 装到 Claude Code 或 Codex 时，安装器会把改动记录存在 `~/.agy-dart/<宿主名>-install.json` 里，方便以后卸载时干净还原，不会弄乱你原本的配置。
 
 ```sh
-git clone --branch v1.7.5 --depth 1 https://github.com/zou172866/Antigravity-agy-dart.git
+git clone --branch v1.7.6 --depth 1 https://github.com/zou172866/Antigravity-agy-dart.git
 cd Antigravity-agy-dart
 node bin/agy-dart.mjs install
 node bin/agy-dart.mjs doctor

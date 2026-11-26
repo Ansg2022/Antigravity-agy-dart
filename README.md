@@ -77,13 +77,13 @@ Use **Node.js 22.16.0 or later in the 22.x line, or Node.js 24 or later**. The i
 **Windows (PowerShell):**
 
 ```powershell
-irm https://raw.githubusercontent.com/zou172866/Antigravity-agy-dart/v1.7.5/install.ps1 | iex
+irm https://raw.githubusercontent.com/zou172866/Antigravity-agy-dart/v1.7.6/install.ps1 | iex
 ```
 
 **macOS / Linux:**
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/zou172866/Antigravity-agy-dart/v1.7.5/install.sh | sh
+curl -fsSL https://raw.githubusercontent.com/zou172866/Antigravity-agy-dart/v1.7.6/install.sh | sh
 ```
 
 ### Option 2: Let Antigravity install it
@@ -91,13 +91,13 @@ curl -fsSL https://raw.githubusercontent.com/zou172866/Antigravity-agy-dart/v1.7
 Send this to Antigravity:
 
 ```text
-Clone tag v1.7.5 of https://github.com/zou172866/Antigravity-agy-dart.git to a temp folder, run `node scripts/install.mjs install` (add `--install-rg` on Windows if `rg` is missing), and confirm `doctor` passes.
+Clone tag v1.7.6 of https://github.com/zou172866/Antigravity-agy-dart.git to a temp folder, run `node scripts/install.mjs install` (add `--install-rg` on Windows if `rg` is missing), and confirm `doctor` passes.
 ```
 
 ### Option 3: Clone & install with custom flags
 
 ```powershell
-git clone --branch v1.7.5 --depth 1 https://github.com/zou172866/Antigravity-agy-dart.git
+git clone --branch v1.7.6 --depth 1 https://github.com/zou172866/Antigravity-agy-dart.git
 cd Antigravity-agy-dart
 
 # Windows PowerShell (optional -InstallRg auto-installs ripgrep)
@@ -153,6 +153,10 @@ node scripts/install.mjs tool-loading eager         # All 12 tools eager-loaded
 ---
 
 ## Changelog
+
+### v1.7.6
+- **One-click self-update & startup version check in the panel** (thanks to [@bestmulicc](https://github.com/bestmulicc), [#5](https://github.com/zou172866/Antigravity-agy-dart/pull/5)): The right-sidebar panel now checks GitHub Releases for new versions on startup (disable via `autoUpdateCheck: false` in `~/.agy-dart/config.json` or `AGY_DART_DISABLE_AUTO_UPDATE_CHECK=1`) and lets you click **Check Update** / **Update Now** to upgrade in place without running terminal commands.
+- **Verified downloads, automatic rollback & preserved settings**: Prefers the release `.tgz` package with SHA-256 verification before unpacking, rolls back automatically if a file is locked, reloads the panel cleanly, and keeps your local `rules/*.local.md`, tool-loading mode, `--with-devtools` tools, and synced Gemini/T3 copies intact.
 
 ### v1.7.5
 - **One-click manual `Warm 1×` button in the panel**: Added a manual warm-up button right next to the cache countdown. It works even when Auto-Keepalive is off and doesn't use up your automatic warm-up limit (with double-click protection and rollback if sending fails).
@@ -261,7 +265,7 @@ After adding, removing, or editing modules or tests, keep these three places in 
 When installing for Claude Code or Codex, the installer saves an undo record in `~/.agy-dart/<host>-install.json` so uninstalling cleanly restores your original config.
 
 ```sh
-git clone --branch v1.7.5 --depth 1 https://github.com/zou172866/Antigravity-agy-dart.git
+git clone --branch v1.7.6 --depth 1 https://github.com/zou172866/Antigravity-agy-dart.git
 cd Antigravity-agy-dart
 node bin/agy-dart.mjs install
 node bin/agy-dart.mjs doctor
