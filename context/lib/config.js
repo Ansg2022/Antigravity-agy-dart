@@ -72,6 +72,7 @@ export const CONFIG_DEFAULTS = Object.freeze({
   ttlKeepaliveMinTokens: 0,
   watermarkDesktopNotify: null,
   toolLoading: "fast-eager",
+  autoUpdateCheck: true,
   uiLang: "en"
 });
 
@@ -592,6 +593,15 @@ export function getConfigSnapshot(options = {}) {
     cfgBool("watermarkDesktopNotify")
   );
   pick("toolLoading", parseToolLoading(env?.AGY_DART_TOOL_LOADING), parseToolLoading(cfg.toolLoading));
+  let autoUpdateCheckEnv;
+  if (parseEnvBool(env?.AGY_DART_DISABLE_AUTO_UPDATE_CHECK) === true) {
+    autoUpdateCheckEnv = false;
+  } else {
+    autoUpdateCheckEnv =
+      parseEnvBool(env?.AGY_DART_AUTO_UPDATE_CHECK) ??
+      parseDisableEnvFlag(env?.AGY_DART_DISABLE_AUTO_UPDATE_CHECK);
+  }
+  pick("autoUpdateCheck", autoUpdateCheckEnv, cfgBool("autoUpdateCheck"));
   pick("uiLang", parseUiLang(env?.AGY_DART_LANG), parseUiLang(cfg.uiLang));
 
   return {
