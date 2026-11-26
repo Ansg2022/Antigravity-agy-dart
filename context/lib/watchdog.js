@@ -2144,6 +2144,61 @@ export class WatchdogMonitor {
     return clampPct(cfg?.ttlKeepaliveMinContextPct ?? 15);
   }
 
+  _normalizeKeepaliveIntervalSec(raw) {
+    if (raw === null || raw === undefined || typeof raw === "boolean" || typeof raw === "object") return null;
+    if (typeof raw === "string") {
+      const s = raw.trim().toLowerCase();
+      if (!s) return null;
+      if (s === "0" || s === "auto" || s === "adaptive" || s === "dynamic") return 0;
+    }
+    const n = Number(raw);
+    if (!Number.isFinite(n)) return null;
+    const floored = Math.floor(n);
+    if (floored === 0) return 0;
+    if (floored < 60) return null;
+    return Math.min(3600, floored);
+  }
+
+  _resolveGlobalTtlKeepaliveIntervalSec(store, cfg) {
+    const envRaw = process.env.AGY_DART_TTL_KEEPALIVE_INTERVAL_SEC;
+    if (typeof envRaw === "string" && envRaw.trim() !== "") {
+      const parsed = this._normalizeKeepaliveIntervalSec(envRaw);
+      if (parsed !== null) return parsed;
+    }
+    if (
+      store &&
+      typeof store.hasExplicitGlobalTtlKeepaliveIntervalSec === "function" &&
+      store.hasExplicitGlobalTtlKeepaliveIntervalSec()
+    ) {
+      return store.getGlobalTtlKeepaliveIntervalSec();
+    }
+    if (this._hasCustomConfig) {
+      const cfgParsed = this._normalizeKeepaliveIntervalSec(cfg?.ttlKeepaliveIntervalSec);
+      if (cfgParsed !== null) return cfgParsed;
+      if (store && typeof store.getGlobalTtlKeepaliveIntervalSec === "function") {
+        return store.getGlobalTtlKeepaliveIntervalSec();
+      }
+      return 0;
+    }
+    if (store && typeof store.getGlobalTtlKeepaliveIntervalSec === "function") {
+      return store.getGlobalTtlKeepaliveIntervalSec();
+    }
+    return this._normalizeKeepaliveIntervalSec(cfg?.ttlKeepaliveIntervalSec) ?? 0;
+  }
+
+  _resolveTtlKeepaliveIntervalSec(store, cfg, conversationId = "") {
+    if (conversationId && store && typeof store.getTtlKeepaliveState === "function") {
+      try {
+        const kaState = store.getTtlKeepaliveState(conversationId);
+        if (kaState && kaState.intervalSec !== null && kaState.intervalSec !== undefined) {
+          const parsed = this._normalizeKeepaliveIntervalSec(kaState.intervalSec);
+          if (parsed !== null) return parsed;
+        }
+      } catch {}
+    }
+    return this._resolveGlobalTtlKeepaliveIntervalSec(store, cfg);
+  }
+
   _resolveLeaseKeepaliveMinContext(store, cfg, lease = null, { isCustomOverride = false } = {}) {
     const globalPct = this._resolveGlobalTtlKeepaliveMinContextPct(store, cfg);
     const profile = resolveModelProfile(lease?.model || null);
@@ -2357,14 +2412,20 @@ export class WatchdogMonitor {
       if (effectiveMinTokens > 0 && leaseContextTokens > 0 && leaseContextTokens < effectiveMinTokens) continue;
       if (effectiveMinTokens > 0 && leaseContextTokens === 0 && !lease.transcriptPath) continue;
       const maxCount = this._resolveTtlKeepaliveMaxCount(store, cfg, lease.conversationId);
+      const intervalSec = this._resolveTtlKeepaliveIntervalSec(store, cfg, lease.conversationId);
+      const isFixedInterval = intervalSec > 0;
 
       const effectiveTtlSec = this._resolveLeaseEffectiveTtlSec(store, lease, cfg, nowWallMs);
       const effectiveLeadSec = Math.min(leadSec, Math.max(5, Math.floor(effectiveTtlSec * 0.5)));
-      if (!(effectiveTtlSec > effectiveLeadSec)) continue;
+      if (!isFixedInterval && !(effectiveTtlSec > effectiveLeadSec)) continue;
       const effectiveTriggerLeadSec = Math.min(
         Math.max(5, Math.floor(effectiveTtlSec * 0.75)),
         effectiveLeadSec + deliveryCompSec
       );
+      const fixedTriggerAtSec = isFixedInterval ? Math.max(30, intervalSec - deliveryCompSec) : 0;
+      const fixedMaxWindowSec = isFixedInterval
+        ? Math.max(Math.round(intervalSec * 1.5), intervalSec + 120)
+        : 0;
 
       const idleAnchorTs = lease.idleAnchorTs || lease.phaseChangedTs || lease.updatedTs || 0;
       if (idleAnchorTs <= 0 || nowWallMs < idleAnchorTs) continue;
@@ -2376,7 +2437,11 @@ export class WatchdogMonitor {
           : idleAnchorTs;
       let idleSec = Math.floor((nowWallMs - originTs) / 1000);
       let remSec = effectiveTtlSec - idleSec;
-      if (remSec <= 0) continue;
+      if (isFixedInterval) {
+        if (idleSec > fixedMaxWindowSec) continue;
+      } else if (remSec <= 0) {
+        continue;
+      }
 
       const kaState =
         typeof store.getTtlKeepaliveState === "function"
@@ -2394,12 +2459,13 @@ export class WatchdogMonitor {
 
       // Lazy Turn-0 post-Stop flush backfill (0 fs.statSync): if Stop ran before the first
       // PLANNER_RESPONSE flushed to disk, inspect the tail once when entering the trigger window.
+      const isDueForBackfill = isFixedInterval ? idleSec >= fixedTriggerAtSec : remSec <= effectiveTriggerLeadSec;
       if (
         effectiveMinTokens > 0 &&
         leaseContextTokens === 0 &&
         lease.transcriptPath &&
         kaState.usedCount < maxCount &&
-        remSec <= effectiveTriggerLeadSec &&
+        isDueForBackfill &&
         this._turn0BackfillChecked.get(lease.conversationId) !== idleAnchorTs
       ) {
         this._turn0BackfillChecked.set(lease.conversationId, idleAnchorTs);
@@ -2435,7 +2501,11 @@ export class WatchdogMonitor {
           }
         } catch {}
       }
-      if (remSec <= 0) continue;
+      if (isFixedInterval) {
+        if (idleSec > fixedMaxWindowSec) continue;
+      } else if (remSec <= 0) {
+        continue;
+      }
       if (effectiveMinTokens > 0 && leaseContextTokens < effectiveMinTokens) continue;
 
       const sentOnCurrentIdleCycle =
@@ -2455,7 +2525,7 @@ export class WatchdogMonitor {
       }
 
       if (kaState.usedCount >= maxCount) continue;
-      if (remSec > effectiveTriggerLeadSec) continue;
+      if (isFixedInterval ? idleSec < fixedTriggerAtSec : remSec > effectiveTriggerLeadSec) continue;
 
       if (this._keepaliveInFlight.has(lease.conversationId)) continue;
       if (kaState.lastIdleAnchorTs === idleAnchorTs) continue;
@@ -2916,6 +2986,7 @@ export class WatchdogMonitor {
     const globalTtlKeepaliveMaxCount = this._resolveGlobalTtlKeepaliveMaxCount(store, cfg);
     const fallbackTtlKeepaliveMaxCount = this._resolveFallbackTtlKeepaliveMaxCount(store, cfg);
     const globalTtlKeepaliveMinContextPct = this._resolveGlobalTtlKeepaliveMinContextPct(store, cfg);
+    const globalTtlKeepaliveIntervalSec = this._resolveGlobalTtlKeepaliveIntervalSec(store, cfg);
     const ttlKeepaliveEnabled = this._resolveTtlKeepaliveEnabled(store, cfg);
     const ttlKeepaliveMaxCount = this._resolveTtlKeepaliveMaxCount(store, cfg);
     const ttlKeepaliveActive = Boolean(
@@ -2943,6 +3014,7 @@ export class WatchdogMonitor {
         globalTtlKeepaliveMaxCount,
         fallbackTtlKeepaliveMaxCount,
         globalTtlKeepaliveMinContextPct,
+        globalTtlKeepaliveIntervalSec,
         watermarkDesktopNotifyEnabled,
         uiLang,
         uiLangSource: langInfo.source,
@@ -3023,6 +3095,7 @@ export class WatchdogMonitor {
         globalTtlKeepaliveMaxCount,
         fallbackTtlKeepaliveMaxCount,
         globalTtlKeepaliveMinContextPct,
+        globalTtlKeepaliveIntervalSec,
         watermarkDesktopNotifyEnabled,
         uiLang,
         uiLangSource: langInfo.source,
@@ -3097,6 +3170,7 @@ export class WatchdogMonitor {
         globalTtlKeepaliveMaxCount,
         fallbackTtlKeepaliveMaxCount,
         globalTtlKeepaliveMinContextPct,
+        globalTtlKeepaliveIntervalSec,
         watermarkDesktopNotifyEnabled,
         uiLang,
         uiLangSource: langInfo.source,
@@ -3259,6 +3333,7 @@ export class WatchdogMonitor {
       globalTtlKeepaliveMaxCount,
       fallbackTtlKeepaliveMaxCount,
       globalTtlKeepaliveMinContextPct,
+      globalTtlKeepaliveIntervalSec,
       watermarkDesktopNotifyEnabled,
       uiLang,
       uiLangSource: langInfo.source,
@@ -3905,6 +3980,9 @@ export class WatchdogMonitor {
     const globalTtlKeepaliveMinContextPct = tickRes
       ? tickRes.globalTtlKeepaliveMinContextPct
       : this._resolveGlobalTtlKeepaliveMinContextPct(store, cfg);
+    const globalTtlKeepaliveIntervalSec = tickRes
+      ? tickRes.globalTtlKeepaliveIntervalSec
+      : this._resolveGlobalTtlKeepaliveIntervalSec(store, cfg);
     const ttlKeepaliveEnabled = tickRes
       ? tickRes.ttlKeepaliveEnabled
       : this._resolveTtlKeepaliveEnabled(store, cfg);
@@ -4058,6 +4136,9 @@ export class WatchdogMonitor {
     const projectedSessions = sessions.slice(0, 20).map(projectOverviewEntry);
     const projectedAlertingSessions = alertingSessions.slice(0, 10).map(projectOverviewEntry);
 
+    const convKeepaliveIntervalSec = isKaTargetSubagent
+      ? globalTtlKeepaliveIntervalSec
+      : this._resolveTtlKeepaliveIntervalSec(store, cfg, kaTargetConvId);
     return {
       ok: true,
       enabled,
@@ -4066,6 +4147,7 @@ export class WatchdogMonitor {
       globalTtlKeepaliveMaxCount,
       fallbackTtlKeepaliveMaxCount,
       globalTtlKeepaliveMinContextPct,
+      globalTtlKeepaliveIntervalSec,
       ttlKeepalive: {
         conversationId: kaTargetConvId,
         enabled: convKeepaliveEnabled,
@@ -4074,6 +4156,9 @@ export class WatchdogMonitor {
         maxCount: convKeepaliveMaxCount,
         globalMaxCount: globalTtlKeepaliveMaxCount,
         fallbackMaxCount: fallbackTtlKeepaliveMaxCount,
+        intervalSec: convKeepaliveIntervalSec,
+        globalIntervalSec: globalTtlKeepaliveIntervalSec,
+        intervalMode: convKeepaliveIntervalSec > 0 ? "fixed" : "auto",
         minContextPct: globalTtlKeepaliveMinContextPct,
         minContextTokens: minCtxInfo.pctMinTokens,
         windowTokens: minCtxInfo.windowTokens,

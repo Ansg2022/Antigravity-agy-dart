@@ -1545,6 +1545,78 @@ export class SettingsMaintenanceMethods {
     return clamped;
   }
 
+  _normalizeKeepaliveIntervalSec(raw) {
+    if (raw === null || raw === undefined || typeof raw === "boolean" || typeof raw === "object") return null;
+    if (typeof raw === "string") {
+      const s = raw.trim().toLowerCase();
+      if (!s) return null;
+      if (s === "0" || s === "auto" || s === "adaptive" || s === "dynamic") return 0;
+    }
+    const n = Number(raw);
+    if (!Number.isFinite(n)) return null;
+    const floored = Math.floor(n);
+    if (floored === 0) return 0;
+    if (floored < 60) return null;
+    return Math.min(3600, floored);
+  }
+
+  /** True iff global keepalive interval (0=auto or 60..3600s) has been explicitly persisted in SQLite meta */
+  hasExplicitGlobalTtlKeepaliveIntervalSec() {
+    this.open();
+    const raw = this.getMeta("cache:ttl_keepalive_global_interval_sec", null);
+    if (raw === null || raw === "") return false;
+    return this._normalizeKeepaliveIntervalSec(raw) !== null;
+  }
+
+  /** Resolve global default keepalive interval seconds (0=adaptive auto, 60..3600=fixed seconds; env > sqlite > config) */
+  getGlobalTtlKeepaliveIntervalSec() {
+    const snap = getConfigSnapshot();
+    if (snap.sources.ttlKeepaliveIntervalSec === "env") {
+      return this._normalizeKeepaliveIntervalSec(snap.values.ttlKeepaliveIntervalSec) ?? 0;
+    }
+    this.open();
+    const raw = this.getMeta("cache:ttl_keepalive_global_interval_sec", null);
+    if (raw !== null && raw !== "") {
+      const parsed = this._normalizeKeepaliveIntervalSec(raw);
+      if (parsed !== null) return parsed;
+    }
+    return this._normalizeKeepaliveIntervalSec(snap.values.ttlKeepaliveIntervalSec) ?? 0;
+  }
+
+  /** Persist global default keepalive interval seconds (0=adaptive auto, 60..3600=fixed seconds) in SQLite meta */
+  setGlobalTtlKeepaliveIntervalSec(intervalSec) {
+    this.open();
+    const norm = this._normalizeKeepaliveIntervalSec(intervalSec);
+    const clamped = norm !== null ? norm : 0;
+    this.setMeta("cache:ttl_keepalive_global_interval_sec", String(clamped));
+    return clamped;
+  }
+
+  /** Resolve effective keepalive interval seconds for a conversation (per-conv > env > global sqlite > config > 0) */
+  getTtlKeepaliveIntervalSec(conversationId = null) {
+    const cleanId = this._sanitizeKeepaliveConvId(conversationId);
+    if (cleanId) {
+      const st = this.getTtlKeepaliveState(cleanId);
+      if (st.intervalSec !== null && st.intervalSec !== undefined) {
+        return st.intervalSec;
+      }
+    }
+    return this.getGlobalTtlKeepaliveIntervalSec();
+  }
+
+  /** Persist per-conversation keepalive interval override (0=auto, 60..3600=fixed, null=follow global) */
+  setTtlKeepaliveIntervalSec(intervalSec, conversationId = null) {
+    const targetId = this._sanitizeKeepaliveConvId(conversationId) || "__unbound__";
+    if (intervalSec === null) {
+      this.setTtlKeepaliveState(targetId, { intervalSec: null });
+      return this.getGlobalTtlKeepaliveIntervalSec();
+    }
+    const norm = this._normalizeKeepaliveIntervalSec(intervalSec);
+    const effective = norm !== null ? norm : 0;
+    this.setTtlKeepaliveState(targetId, { intervalSec: effective });
+    return effective;
+  }
+
   /** Read smoothed keepalive send->PreInvocation delivery latency in ms (0..20000; 0 = uncalibrated) */
   getTtlKeepaliveDeliveryMs() {
     this.open();
@@ -1711,15 +1783,15 @@ export class SettingsMaintenanceMethods {
     return clamped;
   }
 
-  /** True iff a conversation (or __unbound__ tab) has an explicit per-window enabled or maxCount override */
+  /** True iff a conversation (or __unbound__ tab) has an explicit per-window enabled, maxCount, or intervalSec override */
   hasCustomTtlKeepaliveOverride(conversationId) {
     const cleanId = this._sanitizeKeepaliveConvId(conversationId);
     if (!cleanId) return false;
     const st = this.getTtlKeepaliveState(cleanId);
-    return st.enabled !== null || st.maxCount !== null;
+    return st.enabled !== null || st.maxCount !== null || st.intervalSec !== null;
   }
 
-  /** Clear per-conversation enabled/maxCount override so the window follows global again while preserving usedCount */
+  /** Clear per-conversation enabled/maxCount/intervalSec override so the window follows global again while preserving usedCount */
   clearTtlKeepaliveOverride(conversationId, nowMs = Date.now()) {
     const cleanId = this._sanitizeKeepaliveConvId(conversationId);
     if (!cleanId) return null;
@@ -1745,6 +1817,7 @@ export class SettingsMaintenanceMethods {
     return this.setTtlKeepaliveState(cleanId, {
       enabled: null,
       maxCount: null,
+      intervalSec: null,
       updatedTs: nowMs
     });
   }
@@ -1765,6 +1838,7 @@ export class SettingsMaintenanceMethods {
     const empty = {
       enabled: null,
       maxCount: null,
+      intervalSec: null,
       usedCount: 0,
       lastIdleAnchorTs: 0,
       lastSentTs: 0,
@@ -1807,9 +1881,14 @@ export class SettingsMaintenanceMethods {
         Number(rawMax) >= 1
           ? Math.min(20, Math.max(1, Math.floor(Number(rawMax))))
           : null;
+      const validInterval =
+        parsed.intervalSec !== undefined && parsed.intervalSec !== null
+          ? this._normalizeKeepaliveIntervalSec(parsed.intervalSec)
+          : null;
       return {
         enabled: typeof parsed.enabled === "boolean" ? parsed.enabled : null,
         maxCount: validMax,
+        intervalSec: validInterval,
         usedCount: Number.isFinite(Number(parsed.usedCount)) && Number(parsed.usedCount) >= 0 ? Math.floor(Number(parsed.usedCount)) : 0,
         lastIdleAnchorTs: Number.isFinite(Number(parsed.lastIdleAnchorTs)) && Number(parsed.lastIdleAnchorTs) > 0 ? Math.floor(Number(parsed.lastIdleAnchorTs)) : 0,
         lastSentTs: Number.isFinite(Number(parsed.lastSentTs)) && Number(parsed.lastSentTs) > 0 ? Math.floor(Number(parsed.lastSentTs)) : 0,
@@ -1866,7 +1945,16 @@ export class SettingsMaintenanceMethods {
             ? Math.min(20, Math.max(1, Math.floor(Number(rawMax))))
             : null;
         const validEnabled = typeof parsed?.enabled === "boolean" ? parsed.enabled : null;
-        if (!parsed || updatedTs <= 0 || safeNow - updatedTs > ttlMs || (validEnabled === null && validMax === null)) {
+        const validInterval =
+          parsed?.intervalSec !== undefined && parsed?.intervalSec !== null
+            ? this._normalizeKeepaliveIntervalSec(parsed.intervalSec)
+            : null;
+        if (
+          !parsed ||
+          updatedTs <= 0 ||
+          safeNow - updatedTs > ttlMs ||
+          (validEnabled === null && validMax === null && validInterval === null)
+        ) {
           this.db.prepare("DELETE FROM meta WHERE key = 'cache:ttl_keepalive_state:__unbound__'").run();
           return null;
         }
@@ -1886,6 +1974,7 @@ export class SettingsMaintenanceMethods {
         const migrated = {
           enabled: validEnabled,
           maxCount: validMax,
+          intervalSec: validInterval,
           usedCount: 0,
           lastIdleAnchorTs: 0,
           lastSentTs: 0,
@@ -1928,9 +2017,16 @@ export class SettingsMaintenanceMethods {
         : safePatch.maxCount !== undefined
           ? Math.min(20, Math.max(1, Math.floor(Number(safePatch.maxCount) || 1)))
           : cur.maxCount;
+    const nextIntervalSec =
+      safePatch.intervalSec === null
+        ? null
+        : safePatch.intervalSec !== undefined
+          ? (this._normalizeKeepaliveIntervalSec(safePatch.intervalSec) ?? cur.intervalSec)
+          : cur.intervalSec;
     const next = {
       enabled: nextEnabled,
       maxCount: nextMaxCount,
+      intervalSec: nextIntervalSec,
       usedCount:
         safePatch.usedCount !== undefined
           ? Math.max(0, Math.floor(Number(safePatch.usedCount) || 0))

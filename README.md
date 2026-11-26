@@ -77,13 +77,13 @@ Use **Node.js 22.16.0 or later in the 22.x line, or Node.js 24 or later**. The i
 **Windows (PowerShell):**
 
 ```powershell
-irm https://raw.githubusercontent.com/zou172866/Antigravity-agy-dart/v1.7.2/install.ps1 | iex
+irm https://raw.githubusercontent.com/zou172866/Antigravity-agy-dart/v1.7.4/install.ps1 | iex
 ```
 
 **macOS / Linux:**
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/zou172866/Antigravity-agy-dart/v1.7.2/install.sh | sh
+curl -fsSL https://raw.githubusercontent.com/zou172866/Antigravity-agy-dart/v1.7.4/install.sh | sh
 ```
 
 ### Option 2: Let Antigravity install it
@@ -91,13 +91,13 @@ curl -fsSL https://raw.githubusercontent.com/zou172866/Antigravity-agy-dart/v1.7
 Send this to Antigravity:
 
 ```text
-Clone tag v1.7.2 of https://github.com/zou172866/Antigravity-agy-dart.git to a temp folder, run `node scripts/install.mjs install` (add `--install-rg` on Windows if `rg` is missing), and confirm `doctor` passes.
+Clone tag v1.7.4 of https://github.com/zou172866/Antigravity-agy-dart.git to a temp folder, run `node scripts/install.mjs install` (add `--install-rg` on Windows if `rg` is missing), and confirm `doctor` passes.
 ```
 
 ### Option 3: Clone & install with custom flags
 
 ```powershell
-git clone --branch v1.7.2 --depth 1 https://github.com/zou172866/Antigravity-agy-dart.git
+git clone --branch v1.7.4 --depth 1 https://github.com/zou172866/Antigravity-agy-dart.git
 cd Antigravity-agy-dart
 
 # Windows PowerShell (optional -InstallRg auto-installs ripgrep)
@@ -126,7 +126,7 @@ Global uninstall also removes the Gemini/T3 copies recorded by the installer. If
 
 ## Settings
 
-Automatic cache keepalive is off by default. To opt in for one chat, turn on **Auto-Keepalive** in the **agy-dart Context** panel. **Global Warm** sets the default for chats without an override. Turning off warming for a chat silences its cache-expiry and keepalive-limit desktop alerts. Desktop alerts for stalled tasks default to off and can be enabled separately. Each keepalive requests an `OK` reply and consumes model input, including the full prompt on a cache miss. The panel also controls desktop alerts, protection, local cleanup, and file-size limits.
+Automatic cache keepalive is off by default. To opt in for one chat, turn on **Auto-Keepalive** in the **agy-dart Context** panel. **Global Warm** sets the default count and schedule (**Auto** adaptive TTL, **Fixed 4min / 9min / 15min**, or **Custom** 1–60min; also configurable via `ttlKeepaliveIntervalSec` / `AGY_DART_TTL_KEEPALIVE_INTERVAL_SEC`) for chats without a per-window override. Turning off warming for a chat silences its cache-expiry and keepalive-limit desktop alerts. Desktop alerts for stalled tasks default to off and can be enabled separately. Each keepalive requests an `OK` reply and consumes model input, including the full prompt on a cache miss. The panel also controls desktop alerts, protection, local cleanup, and file-size limits.
 
 Preset modes & tool-loading modes via CLI:
 
@@ -153,6 +153,14 @@ node scripts/install.mjs tool-loading eager         # All 12 tools eager-loaded
 ---
 
 ## Changelog
+
+### v1.7.4
+- **Friendly semantic handoff prompt greeting & opening cue**: Updated the Sidecar dashboard's **Copy Handoff Prompt** templates to open with a warm greeting (`宝宝，` in Chinese / `Sweetie, please ...` in English) and instruct the current window to start the generated handoff brief's very first sentence with the matching opening word (`宝宝，` / `Sweetie,`) while keeping strict no-filler output rules intact.
+
+### v1.7.3
+- **Selectable Auto-Keepalive intervals**: Pick **Auto** (existing adaptive mode), **Fixed 4min / 9min / 15min**, or **Custom (1–60min)** globally or per chat, with one-click **Global** reset; existing safety guards (max count, minimum context threshold, cold-miss stop, subagent skip) still apply.
+- **No more false warnings on check timeouts or partial test passes**: Timed-out commands no longer trigger "repeated edit-fail" alerts; passing an unrelated test or single case won't clear an earlier suite failure; background test failures stay visible after editing other files; truncated failing check batches stay flagged until re-run.
+- **Cleaner Handoff Brief & cache-miss diagnostics**: One-click cache-friendly handoff briefs with automatic secret redaction, plus clearer cache-miss cause breakdowns.
 
 ### v1.7.2
 - **Agent Skills progressive disclosure & prefix-tax audit**: Restructured `skills/agy-dart/` with on-demand `examples/` (`ctx_trace_summary.py`, `filters.json`) and `references/error-playbook.md` synced cleanly across Antigravity, Claude Code, and Codex; added `node bin/agy-dart.mjs audit skills` to inspect Turn-0 frontmatter tax and progressive-disclosure hygiene, and separated on-demand skill assets in `prefix:budget`.
@@ -250,7 +258,7 @@ Install for Antigravity by default. Select Claude Code or Codex explicitly with 
 For Claude Code and Codex, the installer keeps hashes and undo metadata in `~/.agy-dart/<host>-install.json` to restore the plugin's configuration changes. Reinstalling replaces an older full-config record. Uninstalling removes that host's record.
 
 ```sh
-git clone --branch v1.7.2 --depth 1 https://github.com/zou172866/Antigravity-agy-dart.git
+git clone --branch v1.7.4 --depth 1 https://github.com/zou172866/Antigravity-agy-dart.git
 cd Antigravity-agy-dart
 node bin/agy-dart.mjs install
 node bin/agy-dart.mjs doctor

@@ -65,6 +65,7 @@ export const CONFIG_DEFAULTS = Object.freeze({
   ttlNotifyMinTokens: 60000,
   ttlKeepalive: false,
   ttlKeepaliveMaxCount: 1,
+  ttlKeepaliveIntervalSec: 0,
   ttlKeepaliveLeadSec: 60,
   ttlKeepaliveMinContextPct: 15,
   ttlKeepaliveMinTokens: 0,
@@ -540,10 +541,29 @@ export function getConfigSnapshot(options = {}) {
   const configuredKeepaliveCount = clampInt(parseNonNegativeInt(cfg.ttlKeepaliveMaxCount), 0, 20);
   // Existing configs can opt in with a positive count alone.
   pick("ttlKeepalive", ttlKeepaliveEnv, cfgBool("ttlKeepalive") ?? (configuredKeepaliveCount > 0 ? true : undefined));
+  const parseKeepaliveIntervalSec = (raw) => {
+    if (raw === undefined || raw === null || typeof raw === "boolean" || typeof raw === "object") return undefined;
+    if (typeof raw === "string") {
+      const s = raw.trim().toLowerCase();
+      if (!s) return undefined;
+      if (s === "0" || s === "auto" || s === "adaptive" || s === "dynamic") return 0;
+    }
+    const n = Number(raw);
+    if (!Number.isFinite(n)) return undefined;
+    const floored = Math.floor(n);
+    if (floored === 0) return 0;
+    if (floored < 60) return undefined;
+    return Math.min(3600, floored);
+  };
   pick(
     "ttlKeepaliveMaxCount",
     clampInt(parseNonNegativeInt(env?.AGY_DART_TTL_KEEPALIVE_MAX_COUNT), 0, 20),
     configuredKeepaliveCount
+  );
+  pick(
+    "ttlKeepaliveIntervalSec",
+    parseKeepaliveIntervalSec(env?.AGY_DART_TTL_KEEPALIVE_INTERVAL_SEC),
+    parseKeepaliveIntervalSec(cfg.ttlKeepaliveIntervalSec)
   );
   pick(
     "ttlKeepaliveLeadSec",
@@ -649,10 +669,11 @@ export function formatEffectiveConfigLines(snapshot = getConfigSnapshot(), extra
   );
   const wmNotifyDisplay =
     values.watermarkDesktopNotify === null ? "auto" : String(values.watermarkDesktopNotify);
+  const kaIntervalLabel = values.ttlKeepaliveIntervalSec > 0 ? `${values.ttlKeepaliveIntervalSec}s` : "auto";
   lines.push(
     `  - TTL alert     : desktopNotify=${values.ttlDesktopNotify} (${sources.ttlDesktopNotify}), ` +
       `watermarkNotify=${wmNotifyDisplay} (${sources.watermarkDesktopNotify}), ` +
-      `keepalive=${values.ttlKeepalive} (${sources.ttlKeepalive}, max=${values.ttlKeepaliveMaxCount}, lead=${values.ttlKeepaliveLeadSec}s, minCtx=${values.ttlKeepaliveMinContextPct}%), ` +
+      `keepalive=${values.ttlKeepalive} (${sources.ttlKeepalive}, max=${values.ttlKeepaliveMaxCount}, interval=${kaIntervalLabel}, lead=${values.ttlKeepaliveLeadSec}s, minCtx=${values.ttlKeepaliveMinContextPct}%), ` +
       `lead=${values.ttlNotifyLeadSec}s, minTokens=${values.ttlNotifyMinTokens}, lang=${values.uiLang} (${sources.uiLang})`
   );
 

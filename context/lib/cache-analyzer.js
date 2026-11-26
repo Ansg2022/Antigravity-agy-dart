@@ -2,6 +2,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { sha256Hex, stableStringify } from "./stable-json.js";
+import { redactSecrets } from "./security.js";
 
 import {
   DEFAULT_CACHE_TTL_SEC,
@@ -1103,13 +1104,97 @@ const STEP_CANCELED_TEXT_RE =
   /(?:tool execution was cancel(?:ed|led)|user cancel(?:ed|led)|operation (?:was )?cancel(?:ed|led)|command (?:was )?cancel(?:ed|led)|request (?:was )?(?:cancel(?:ed|led)|aborted)|execution (?:was )?(?:cancel(?:ed|led)|aborted))/i;
 
 const STEP_PURE_TIMEOUT_TEXT_RE =
-  /(?:^|\n)\s*(?:command|execution|operation|process|request)\s+timed\s*out\b|(?:^|\n)\s*TIMED\s*OUT\b/i;
+  /(?:^|\n)\s*(?:(?:error:\s*)?(?:(?:command|execution|operation|process|request|task)\s+)?timed\s*out\b|(?:error:\s*)?(?:context\s+)?deadline\s+exceeded\b|TIMED\s*OUT\b|Status:\s*(?:TIMED_OUT|TIMEOUT)\b|(?:(?:命令|执行|操作|进程|任务|检查)(?:已|在\s*\d+\s*[秒sS]后)?超时|(?:\d+\s*(?:秒|s|ms)\s*)?超时(?:\s*[（(][^)\n]*[）)])?)\s*[.。!！]?\s*(?:\n|$))/i;
+
+const HARNESS_TIMEOUT_LINE_RE =
+  /^\s*(?:(?:error:\s*)?(?:(?:command|execution|operation|process|request|task)\s+timed\s*out\b|timed\s*out\s+after\b)|(?:error:\s*)?(?:context\s+)?deadline\s+exceeded\b|TIMED\s*OUT\b|Status:\s*(?:TIMED_OUT|TIMEOUT)\b|(?:命令|执行|操作|进程|任务|检查)(?:已|在\s*\d+\s*[秒sS]后)?超时|\d+\s*(?:秒|s|ms)\s*超时|Verify\s*\[TIMEOUT\b|##\s*\[TIMEOUT\b)/i;
+
+const BG_TASK_ID_FROM_LAUNCH_RE = /\btask\s+id\s*[:=]\s*["']?([^\s"'<>]+)["']?/i;
+const BG_TASK_SYSTEM_FINISH_RE = /Task\s+id\s+"([^"]+)"\s+(finished with result|failed with error|was cancel(?:ed|led) with result)\s*:/i;
+const BG_TASK_SENDER_RE = /\bsender=([^\s\]]+\/task-[^\s\]]+)/i;
 
 const REAL_CODE_ERROR_TEXT_RE =
-  /(?:Encountered error in step execution|Atomic edit aborted|Partial edit applied|Tool error \(|Verify \[FAIL|## \[FAIL|## \[ERROR|(?:^|\n)\s*(?:AssertionError|TypeError|SyntaxError|ReferenceError|ImportError|ModuleNotFoundError|ValueError|NameError|AttributeError|KeyError|IndexError|FileNotFoundError|RuntimeError|IndentationError|ZeroDivisionError|ZodError|✖\s+|not ok\s+\d+|FAIL\s+\S))/m;
+  /(?:Encountered error in step execution|Atomic edit aborted|Partial edit applied|Tool error \(|Verify \[FAIL|## \[FAIL|## \[ERROR|(?:^|\n)\s*(?:AssertionError|TypeError|SyntaxError|ReferenceError|RangeError|ImportError|ModuleNotFoundError|ValueError|NameError|AttributeError|KeyError|IndexError|FileNotFoundError|RuntimeError|IndentationError|ZeroDivisionError|ZodError|ValidationError|CompileError|ParseError|✖\s+(?!0\s+problems?\b)|✘\s*\[ERROR\]|not ok\s+\d+|FAIL(?:ED)?\s+\S|E\s+assert\b|Assertion\s+failed\b|Traceback \(most recent call last\):|FATAL ERROR:|Compilation failed\b|Build failed\b|Transform failed\b|error(?:\[E\d{4}\]|\s+(?:TS|CS)\d{4})\s*:|Syntax error\b|ℹ\s+fail\s+[1-9]\d*\b)|(?:^|\n)\s*[^\n]+?(?:\(\d+,\d+\)|:\d+(?::\d+)?)\s*[-:]\s*error(?:\s+[A-Z]+\d+)?\s*:|(?:^|\n)\s*Error:\s+(?!.*(?:timed?\s*out\b|deadline\s+exceeded\b|超时)))/m;
 
 const SPECIFIC_ERROR_KIND_RE =
   /\b(ModuleNotFoundError|ImportError|SyntaxError|IndentationError|NameError|AttributeError|TypeError|ValueError|KeyError|IndexError|ReferenceError|RangeError|AssertionError|FileNotFoundError|PermissionError|ZeroDivisionError|RuntimeError|ZodError|ValidationError|TS\d{4}|error\[E\d{4}\])\b/i;
+
+const BUILD_CHECK_KIND_RE =
+  /\b(?:build|bundle|compile|tsc|vue-tsc|svelte-check|typecheck|type-check|lint|eslint|oxlint|biome|ruff|flake8|mypy|pyright|basedpyright|pylint|stylelint|shellcheck|clippy|vet|webpack|rollup|tsup|esbuild|vite\s+build|electron-vite\s+build|next\s+build|nuxt\s+build|astro\s+build|cargo\s+(?:build|check|clippy)|go\s+(?:build|vet)|dotnet\s+build|gradle\s+build|mvn\s+(?:compile|package))\b/i;
+
+const FILTER_STAGE_CMD_RE =
+  /^(?:&\s+)?(?:(?:[a-z]:)?[\\/][^\s]+?[\\/])?(?:select-string|sls|grep|egrep|fgrep|rg|ripgrep|findstr)(?:\.exe)?(?:\s|$)/i;
+
+const WIN_DRIVE_OR_UNC_PATH_BEFORE_TRAILING_BS_RE =
+  /^(?:[a-zA-Z]:(?:[\\/][^"'`<>|;&=()]*)?|(?:\\\\|\.\.?\\)[^"'`<>|;&=()]*)$/;
+const WIN_REL_PATH_BEFORE_TRAILING_BS_RE =
+  /^(?:[^"'`<>|;&=()\s][^"'`<>|;&=()]*\\[^"'`<>|;&=()]*|[^\s"'`<>|;&=()]+)$/;
+
+const PURE_SETUP_CLAUSE_RE =
+  /^(?:(?:cd|chdir|pushd|set-location|push-location|sl)(?:\s|$)|export\s+[a-z_][a-z0-9_]*=|set\s+(?:"[a-z_][a-z0-9_]*=|[a-z_][a-z0-9_]*=)|\$env:[a-z0-9_]+\s*=|[a-z_][a-z0-9_]*=(?:"[^"]*"|'[^']*'|\S+)(?:\s+[a-z_][a-z0-9_]*=(?:"[^"]*"|'[^']*'|\S+))*$)/i;
+
+const READ_ONLY_STAGE_HEAD_RE =
+  /^(?:git(?:\.exe)?\s+(?:(?:-C\s+(?:"[^"]*"|'[^']*'|\S+)|--no-pager|-c\s+(?:"[^"]*"|'[^']*'|\S+))\s+)*(?:diff|status|log|show|branch|rev-parse|ls-files|grep|blame|shortlog|describe|tag|reflog|ls-tree|cat-file|check-ignore|for-each-ref)|(?:cat|head|tail|less|more|ls|dir|echo|printf|pwd|which|where|type|rg|ripgrep|grep|egrep|fgrep|select-string|sls|findstr|get-content|get-childitem|get-location|get-item|gc|gci|gl|stat|wc|file|tree|find|write-output|write-host|format-table|select-object|measure-object|sort-object|test-path|resolve-path|true)(?:\.exe)?)(?:\s|$)/i;
+
+const RUNNER_PREFIX_RE =
+  /^(?:(?:npx(?:\.cmd)?(?:\s+(?:-y|--yes|--no-install|-p\s+\S+))*|npm(?:\.cmd)?\s+exec(?:\s+--)?|(?:pnpm|yarn|bun)(?:\.cmd)?\s+(?:exec|dlx)(?:\s+--)?|bunx(?:\.cmd)?|(?:uv|poetry|pipenv|pdm|hatch)(?:\.exe)?\s+run|(?:python3?|py)(?:\.exe)?(?:\s+-[a-zA-Z0-9]+)*\s+-m|dotnet(?:\.exe)?\s+tool\s+run)\s+)+/i;
+
+const STATIC_CHECK_DIRECT_RE =
+  /^(?:(?:tsc|vue-tsc|svelte-check|typecheck|type-check|eslint|oxlint|biome|ruff|flake8|mypy|pyright|basedpyright|pylint|stylelint|shellcheck)(?:\.(?:exe|cmd|bat))?(?:\s|$)|prettier(?:\.(?:exe|cmd))?\s+(?:.*\s)?--check(?:\s|$)|cargo(?:\.exe)?\s+(?:clippy|check)(?:\s|$)|go(?:\.exe)?\s+vet(?:\s|$)|deno(?:\.exe)?\s+(?:lint|check)(?:\s|$))/i;
+
+const PM_SCRIPT_CALL_RE =
+  /^(?:npm(?:\.cmd)?\s+(?:(?:--(?:prefix|cwd|dir|filter|workspace)(?:=|\s+)\S+|-(?:w|C)\s+\S+)\s+)*run(?:-script)?\s+|(?:pnpm|yarn|bun)(?:\.cmd)?\s+(?:(?:--(?:prefix|cwd|dir|filter|workspace)(?:=|\s+)\S+|-w|-(?:C|F)\s+\S+)\s+)*(?:run\s+)?)([a-z0-9_.:/-]+)(?:\s|$)/i;
+
+const STATIC_PM_SCRIPT_NAME_RE =
+  /^(?:[a-z0-9_.:-]+[:_-])?(?:typecheck|type-check|tsc|lint|eslint|oxlint|biome|ruff|mypy|pyright|stylelint|check:types|check-types|types:check)(?:[:_-][a-z0-9_.:-]+)?$/i;
+
+const NON_STATIC_SCRIPT_TOKEN_RE =
+  /(?:^|[:_-])(?:test|tests|spec|e2e|smoke|build|bundle|dist|compile|all)(?:$|[:_-])/i;
+
+const STATIC_CHECK_NAME_RE =
+  /^(?:tsc|vue-tsc|svelte-check|typecheck|type-check|eslint|oxlint|biome|ruff|flake8|mypy|pyright|basedpyright|pylint|stylelint|lint)(?:[:_\s-][a-z0-9_.-]*)?$/i;
+
+const STATIC_CHECK_CRASH_RE =
+  /(?:Encountered error in step execution|Atomic edit aborted|Partial edit applied|Tool error \(|Verify \[FAIL|## \[FAIL|## \[ERROR|(?:^|\n)\s*(?:AssertionError|TypeError|SyntaxError|ReferenceError|ImportError|ModuleNotFoundError|ValueError|NameError|AttributeError|KeyError|IndexError|FileNotFoundError|RuntimeError|IndentationError|ZeroDivisionError|ZodError|RangeError|not ok\s+\d+|FAIL\s+\S)|(?:^|\n)\s*✖\s+(?!\d+\s+problems?\b)|(?:^|\n)\s*at\s+(?:[^\n]+\s+\([^)\n]+:\d+:\d+\)|(?:file:\/\/)?[^\s()]+:\d+:\d+)\s*(?:\n|$))/m;
+
+const STATIC_CHECK_CRASH_BANNER_RE =
+  /(?:FATAL ERROR:|Oops!\s+Something went wrong|Traceback \(most recent call last\):|UnhandledPromiseRejection|ERR_UNHANDLED_REJECTION|ERR_MODULE_NOT_FOUND|ERR_REQUIRE_ESM|(?:^|\n)\s*Error:\s+(?:Cannot find module|ENOENT\b|Failed to load)|Segmentation fault|thread '[^']+' panicked at|(?:^|\n)\s*panic:)/im;
+
+const TEST_RUNNER_CMD_RE =
+  /\b(?:vitest|jest|pytest|mocha|ava|playwright|cypress|unittest|rspec|phpunit|ctest|node\s+--test|cargo\s+test|go\s+test|dotnet\s+test|bun\s+test|npm\s+(?:t|test|run\s+[a-z0-9_.:/-]*test[a-z0-9_.:/-]*)|pnpm\s+(?:run\s+)?[a-z0-9_.:/-]*test[a-z0-9_.:/-]*|yarn\s+(?:run\s+)?[a-z0-9_.:/-]*test[a-z0-9_.:/-]*)\b/i;
+
+const STRONG_VERIFY_STAGE_RE =
+  /^(?:(?:vitest|jest|pytest|mocha|ava|playwright|cypress|unittest|rspec|phpunit|ctest|webpack|rollup|tsup|esbuild|gradle|gradlew|mvn|mvnw|make|cmake)(?:\.(?:exe|cmd|bat|ps1|sh))?(?:\s|$)|node(?:\.exe)?\s+(?:--[a-z0-9-]+(?:=\S+)?\s+)*--test(?:\s|$)|deno(?:\.exe)?\s+test(?:\s|$)|(?:cargo|go|dotnet)(?:\.exe)?\s+(?:test|build)(?:\s|$)|(?:electron-)?vite(?:\.(?:exe|cmd))?\s+build(?:\s|$)|(?:next|nuxt|astro|svelte-kit|remix|rsbuild|parcel|turbo|nx)(?:\.(?:exe|cmd))?\s+(?:build|test)(?:\s|$)|npm(?:\.cmd)?\s+(?:(?:--(?:prefix|cwd|dir|filter|workspace)(?:=|\s+)\S+|-(?:w|C)\s+\S+)\s+)*(?:t|test|run(?:-script)?\s+[a-z0-9_.:/-]*(?:test|build|e2e|smoke)[a-z0-9_.:/-]*)(?:\s|$)|(?:pnpm|yarn|bun)(?:\.cmd)?\s+(?:(?:--(?:prefix|cwd|dir|filter|workspace)(?:=|\s+)\S+|-w|-(?:C|F)\s+\S+)\s+)*(?:t|test|(?:run\s+)?[a-z0-9_.:/-]*(?:test|build|e2e|smoke)[a-z0-9_.:/-]*)(?:\s|$))/i;
+
+const STRONG_VERIFY_NAME_RE =
+  /\b(?:vitest|jest|pytest|mocha|ava|playwright|cypress|unit|e2e|smoke|integration|build|test|tests)\b/i;
+
+const EPHEMERAL_BRAIN_PATH_RE =
+  /(?:^|\/)(?:\.gemini\/antigravity(?:-[a-z0-9._-]+)?\/brain\/[^/]+\/|brain\/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\/)/i;
+
+const EPHEMERAL_OS_TEMP_PATH_RE =
+  /^(?:(?:\/private)?\/tmp\/|\/var\/tmp\/|(?:\/private)?\/var\/folders\/[^/]+\/[^/]+\/t\/|[a-z]:\/users\/[^/]+\/appdata\/local\/temp\/|[a-z]:\/windows\/temp\/)/i;
+
+const RUNTIME_OS_TMPDIR_NORM = (() => {
+  try {
+    const raw = os.tmpdir();
+    if (!raw) return "";
+    const n = normPath(raw).replace(/\/+$/, "");
+    return n ? `${n}/` : "";
+  } catch {
+    return "";
+  }
+})();
+
+const DIAG_SOURCE_EXT_RE = /\.(?:[cm]?[tj]sx?|vue|svelte|py|pyi|rs|go|java|kt|cs|rb|php|css|scss|less|html)$/i;
+const DIAG_LOCATED_FILE_RE =
+  /^(?:"([^"\r\n<>|?*]+)"|'([^'\r\n<>|?*]+)'|((?:[a-zA-Z]:[\\/]|(?:\.\.?[\\/])?|\/)?[^:\r\n<>|?*]+?\.[a-zA-Z0-9]+))\s*(?:\(\d+,\d+\)(?:\s*[-:]|\s*$)|:\d+(?::\d+)?(?:\s*[-:]|\s*$))/;
+const DIAG_STANDALONE_FILE_RE =
+  /^(?:"([^"\r\n<>|?*]+)"|'([^'\r\n<>|?*]+)'|((?:[a-zA-Z]:[\\/]|(?:\.\.?[\\/])?|\/)?[^:\r\n<>|?*]+?\.[a-zA-Z0-9]+))$/;
+const DIAG_PROSE_PREFIX_RE =
+  /^(?:error|warning|info|note|help|found|failed|cannot|unable|see|in|at|from|the|type|property|argument|did\s+you)\s+/i;
+const DIAG_UNATTRIBUTED_TOP_ERROR_RE =
+  /^(?:error\s+TS\d{4}\s*:|[^\s].*?(?:\(\d+,\d+\)|:\d+(?::\d+)?)\s*[-:]?\s*error\b)/i;
 
 function isStepCanceledResult(step) {
   if (!step || typeof step !== "object") return false;
@@ -1125,8 +1210,1774 @@ function isStepCanceledResult(step) {
   return Boolean(text && STEP_CANCELED_TEXT_RE.test(text));
 }
 
+const BG_TASK_LAUNCH_LINE_RE =
+  /^\s*(?:tool is running as a background task|command is still running in the background|running as a background task|background task with task id)\b/i;
+
+function splitHarnessHeaderAndOutput(text) {
+  const normalized = String(text || "").replace(/\r\n/g, "\n").replace(/\r/g, "\n");
+  const idxMatch = normalized.match(/(?:^|\n)(?:Log output|Command output):\s*(?:\n|$)/i);
+  if (!idxMatch) {
+    return { headerPart: normalized, outputPart: normalized, hasOutputSection: false };
+  }
+  return {
+    headerPart: normalized.slice(0, idxMatch.index),
+    outputPart: normalized.slice(idxMatch.index + idxMatch[0].length),
+    hasOutputSection: true
+  };
+}
+
+function isStepBackgroundLaunchResult(step, bareTool = "") {
+  if (!step || typeof step !== "object") return false;
+  if (bareTool !== "run_command") return false;
+  if (step.status === "ERROR" || step.is_error === true || step.isError === true) return false;
+  const code = step.exit_code ?? step.exitCode;
+  if (typeof code === "number") return false;
+  const text = typeof step.content === "string" ? step.content : "";
+  if (!text) return false;
+  const { headerPart } = splitHarnessHeaderAndOutput(text);
+  if (extractHarnessExitCode(headerPart) !== null) return false;
+  for (const rawLine of headerPart.split("\n").slice(0, 6)) {
+    const line = rawLine.trim();
+    if (!line || /^(?:Created At|Completed At):\s+/i.test(line)) continue;
+    if (BG_TASK_LAUNCH_LINE_RE.test(line)) return true;
+  }
+  return false;
+}
+
+function extractBackgroundTaskIdFromLaunch(step) {
+  const text = typeof step?.content === "string" ? step.content : "";
+  if (!text) return "";
+  const { headerPart } = splitHarnessHeaderAndOutput(text);
+  const m = headerPart.match(BG_TASK_ID_FROM_LAUNCH_RE);
+  return m && m[1] ? m[1].trim().replace(/[.,;)\]]+$/, "") : "";
+}
+
+function hasTruthyArtifactMetadata(callArgs) {
+  if (!callArgs || typeof callArgs !== "object") return false;
+  const raw = callArgs.ArtifactMetadata ?? callArgs.artifactMetadata;
+  if (!raw) return false;
+  if (typeof raw === "object") return Object.keys(raw).length > 0;
+  if (typeof raw === "string") {
+    const unwrapped = unwrapQuotedWrapperArg(raw).trim().toLowerCase();
+    return Boolean(unwrapped && unwrapped !== "false" && unwrapped !== "null" && unwrapped !== "undefined" && unwrapped !== "{}");
+  }
+  return Boolean(raw);
+}
+
+function isTruthyBooleanArg(raw) {
+  if (raw === true) return true;
+  if (typeof raw === "string") {
+    return unwrapQuotedWrapperArg(raw).trim().toLowerCase() === "true";
+  }
+  return false;
+}
+
+function isEphemeralNonProjectPath(normFilePath, callArgs = null, options = {}) {
+  if (hasTruthyArtifactMetadata(callArgs)) {
+    return true;
+  }
+  if (!normFilePath) return false;
+  const p = String(normFilePath).replace(/\\/g, "/").replace(/\/+/g, "/").toLowerCase();
+  const wsNorm = options?.workspaceCwd ? normPath(options.workspaceCwd).replace(/\/+$/, "") : "";
+  if (wsNorm) {
+    const stripPrivate = (s) => s.replace(/^\/private(?=\/(?:var|tmp)(?:\/|$))/, "");
+    const pCmp = stripPrivate(p);
+    const wsCmp = stripPrivate(wsNorm);
+    if (p === wsNorm || p.startsWith(`${wsNorm}/`) || pCmp === wsCmp || pCmp.startsWith(`${wsCmp}/`)) {
+      return false;
+    }
+  }
+  if (EPHEMERAL_BRAIN_PATH_RE.test(p)) return true;
+  if (EPHEMERAL_OS_TEMP_PATH_RE.test(p)) return true;
+  if (RUNTIME_OS_TMPDIR_NORM && p.startsWith(RUNTIME_OS_TMPDIR_NORM)) return true;
+  return false;
+}
+
+function hasEvenRemainingDoubleQuotes(str, startIdx) {
+  let count = 0;
+  let inSingle = false;
+  let inDouble = false;
+  for (let j = startIdx; j < str.length; j++) {
+    const c = str[j];
+    if (inSingle) {
+      if (c === "'") inSingle = false;
+      continue;
+    }
+    if (!inDouble && c === "'") {
+      inSingle = true;
+      continue;
+    }
+    if (inDouble) {
+      if (c === "`" && j + 1 < str.length && (str[j + 1] === '"' || str[j + 1] === "`")) {
+        j++;
+        continue;
+      }
+      if (c === "\\" && j + 1 < str.length) {
+        if (str[j + 1] === "\\") {
+          j++;
+          continue;
+        }
+        if (str[j + 1] === '"') {
+          const after = str[j + 2];
+          if (after !== undefined && !/[\s;|&<>)]/.test(after)) {
+            j++;
+            continue;
+          }
+        }
+      }
+    }
+    if (c === '"') {
+      count += 1;
+      inDouble = !inDouble;
+    }
+  }
+  return count % 2 === 0;
+}
+
+function splitOutsideQuotesWithOps(str, isSepFn) {
+  const parts = [];
+  const ops = [];
+  let cur = "";
+  let quote = "";
+  let quoteStartIdx = -1;
+  for (let i = 0; i < str.length; i++) {
+    const ch = str[i];
+    if (quote) {
+      if (quote === '"') {
+        if (ch === "`" && i + 1 < str.length && (str[i + 1] === '"' || str[i + 1] === "`")) {
+          cur += ch + str[++i];
+          continue;
+        }
+        if (ch === "\\" && i + 1 < str.length) {
+          if (str[i + 1] === "\\") {
+            cur += ch + str[++i];
+            continue;
+          }
+          if (str[i + 1] === '"') {
+            const quoteContent = str.slice(quoteStartIdx + 1, i);
+            const nextAfter = str[i + 2];
+            const atTokenEnd = nextAfter === undefined || /[\s;|&<>)]/.test(nextAfter);
+            const isWinTrailingBs =
+              atTokenEnd &&
+              (WIN_DRIVE_OR_UNC_PATH_BEFORE_TRAILING_BS_RE.test(quoteContent) ||
+                (WIN_REL_PATH_BEFORE_TRAILING_BS_RE.test(quoteContent) &&
+                  hasEvenRemainingDoubleQuotes(str, i + 2)));
+            if (!isWinTrailingBs) {
+              cur += ch + str[++i];
+              continue;
+            }
+          }
+        }
+      }
+      cur += ch;
+      if (ch === quote) {
+        quote = "";
+        quoteStartIdx = -1;
+      }
+      continue;
+    }
+    if (ch === '"' || ch === "'") {
+      quote = ch;
+      quoteStartIdx = i;
+      cur += ch;
+      continue;
+    }
+    const sepLen = isSepFn(str, i);
+    if (sepLen > 0) {
+      if (cur.trim()) {
+        parts.push(cur.trim());
+        ops.push(str.slice(i, i + sepLen));
+      }
+      cur = "";
+      i += sepLen - 1;
+      continue;
+    }
+    cur += ch;
+  }
+  if (cur.trim()) {
+    parts.push(cur.trim());
+  } else if (ops.length > 0 && ops.length >= parts.length) {
+    ops.pop();
+  }
+  return { parts, ops };
+}
+
+function splitOutsideQuotes(str, isSepFn) {
+  return splitOutsideQuotesWithOps(str, isSepFn).parts;
+}
+
+const SHELL_WRAPPER_CMD_RE =
+  /^(?:(?:powershell|pwsh)(?:\.exe)?\s+(?:(?:-(?:NoProfile|NonInteractive|NoLogo|nop|noni)|-ExecutionPolicy\s+\S+)\s+)*(?:-Command|-c)\s+|(?:bash|sh|zsh)(?:\.exe)?\s+(?:-[a-zA-Z]*c)\s+|cmd(?:\.exe)?\s+(?:\/[a-zA-Z]+\s+)*\/c\s+)(.+)$/i;
+
+function unwrapShellPayloadToken(payload) {
+  const s = String(payload || "")
+    .replace(/\s+2>&1\s*$/g, "")
+    .replace(/\s+2>(?:\/dev\/null|\$null|nul)\s*$/gi, "")
+    .trim();
+  if (!s) return "";
+  if (s.length >= 2 && (s[0] === '"' || s[0] === "'")) {
+    const q = s[0];
+    let closedAt = -1;
+    for (let i = 1; i < s.length; i++) {
+      const ch = s[i];
+      if (q === '"') {
+        if (ch === "`" && i + 1 < s.length && (s[i + 1] === '"' || s[i + 1] === "`")) {
+          i++;
+          continue;
+        }
+        if (ch === "\\" && i + 1 < s.length && (s[i + 1] === "\\" || s[i + 1] === '"')) {
+          if (s[i + 1] === "\\") {
+            i++;
+            continue;
+          }
+          const atEnd = i + 2 === s.length;
+          if (!atEnd || !WIN_DRIVE_OR_UNC_PATH_BEFORE_TRAILING_BS_RE.test(s.slice(1, i))) {
+            i++;
+            continue;
+          }
+        }
+      }
+      if (ch === q) {
+        closedAt = i;
+        break;
+      }
+    }
+    if (closedAt === s.length - 1) {
+      const inner = s.slice(1, -1);
+      if (q === "'") return inner.trim();
+      return inner.replace(/\\"/g, '"').replace(/`"/g, '"').trim();
+    }
+    return "";
+  }
+  return s;
+}
+
+function unwrapSingleShellWrapperClause(clause) {
+  const stages = splitOutsideQuotes(String(clause || "").trim(), (s, i) => (s[i] === "|" ? 1 : 0));
+  if (stages.length !== 1) return "";
+  const head = normalizeStageCommandHead(stages[0]);
+  const m = head.match(SHELL_WRAPPER_CMD_RE);
+  if (!m || !m[1]) return "";
+  return unwrapShellPayloadToken(m[1]);
+}
+
+function splitShellClauses(commandText, depth = 0) {
+  if (!commandText || typeof commandText !== "string") return { clauses: [], operators: [] };
+  const cleaned = depth === 0 ? unwrapQuotedWrapperArg(commandText).trim() : commandText.trim();
+  if (!cleaned) return { clauses: [], operators: [] };
+  const { parts, ops } = splitOutsideQuotesWithOps(cleaned, (s, i) => {
+    if (s[i] === ";") return 1;
+    if ((s[i] === "&" && s[i + 1] === "&") || (s[i] === "|" && s[i + 1] === "|")) return 2;
+    return 0;
+  });
+  if (depth >= 2 || parts.length === 0) {
+    return { clauses: parts, operators: ops };
+  }
+  const expandedClauses = [];
+  const expandedOps = [];
+  for (let idx = 0; idx < parts.length; idx++) {
+    const unwrapped = unwrapSingleShellWrapperClause(parts[idx]);
+    if (unwrapped && unwrapped !== parts[idx]) {
+      const sub = splitShellClauses(unwrapped, depth + 1);
+      if (sub.clauses.length > 0) {
+        for (let j = 0; j < sub.clauses.length; j++) {
+          expandedClauses.push(sub.clauses[j]);
+          if (j < sub.operators.length) expandedOps.push(sub.operators[j]);
+        }
+        if (idx < ops.length) expandedOps.push(ops[idx]);
+        continue;
+      }
+    }
+    expandedClauses.push(parts[idx]);
+    if (idx < ops.length) expandedOps.push(ops[idx]);
+  }
+  return { clauses: expandedClauses, operators: expandedOps };
+}
+
+function getTrailingSemicolonSegment(commandText) {
+  const { clauses, operators } = splitShellClauses(commandText);
+  if (clauses.length === 0) return { clauses: [], operators: [] };
+  let lastSemi = -1;
+  for (let i = 0; i < operators.length; i++) {
+    if (operators[i] === ";") lastSemi = i;
+  }
+  if (lastSemi < 0) return { clauses, operators };
+  return {
+    clauses: clauses.slice(lastSemi + 1),
+    operators: operators.slice(lastSemi + 1)
+  };
+}
+
+function isPureSetupClause(clause) {
+  const trimmed = String(clause || "").trim();
+  if (!trimmed) return false;
+  const stages = splitOutsideQuotes(trimmed, (s, i) => (s[i] === "|" ? 1 : 0));
+  if (stages.length !== 1) return false;
+  return PURE_SETUP_CLAUSE_RE.test(trimmed);
+}
+
+function stripExecPathPrefix(stageStr) {
+  const quotedExec = stageStr.match(/^("([^"]+)"|'([^']+)')(?:\s+(.*))?$/);
+  if (quotedExec) {
+    const rawExec = quotedExec[2] ?? quotedExec[3] ?? "";
+    const rest = quotedExec[4] || "";
+    if (!/(?:^|[\\/])scripts[\\/]/i.test(rawExec) && /[\\/]/.test(rawExec)) {
+      const base = rawExec.replace(/^.*[\\/]/, "");
+      return rest ? `${base} ${rest}` : base;
+    }
+    return stageStr;
+  }
+  const unquotedExec = stageStr.match(/^([^\s"']+)(?:\s+(.*))?$/);
+  if (unquotedExec) {
+    const rawExec = unquotedExec[1];
+    const rest = unquotedExec[2] || "";
+    if (!/(?:^|[\\/])scripts[\\/]/i.test(rawExec) && /[\\/]/.test(rawExec)) {
+      const base = rawExec.replace(/^.*[\\/]/, "");
+      return rest ? `${base} ${rest}` : base;
+    }
+  }
+  return stageStr;
+}
+
+function normalizeStageCommandHead(stage) {
+  let s = String(stage || "").trim();
+  if (!s) return "";
+  s = s.replace(/^&\s+/, "");
+  while (true) {
+    s = stripExecPathPrefix(s);
+    const envCmd = s.match(/^(?:env|cross-env)(?:\s+(?:-u\s+\S+|-i))*\s+(.*)$/i);
+    if (envCmd) {
+      s = envCmd[1].trim();
+      continue;
+    }
+    const assign = s.match(/^[a-z_][a-z0-9_]*=(?:"[^"]*"|'[^']*'|[^\s]+)\s+(.*)$/i);
+    if (assign) {
+      s = assign[1].trim();
+      continue;
+    }
+    break;
+  }
+  return stripExecPathPrefix(s);
+}
+
+function stripRunnerPrefix(normalizedHead) {
+  return String(normalizedHead || "").replace(RUNNER_PREFIX_RE, "").trim();
+}
+
+function isReadOnlyClause(clause) {
+  const trimmed = String(clause || "").trim();
+  if (!trimmed) return false;
+  const stages = splitOutsideQuotes(trimmed, (s, i) => (s[i] === "|" ? 1 : 0));
+  if (stages.length === 0) return false;
+  const head = normalizeStageCommandHead(stages[0]);
+  return READ_ONLY_STAGE_HEAD_RE.test(head);
+}
+
+function clauseHasFilterStage(clause) {
+  const trimmed = String(clause || "").trim();
+  if (!trimmed) return false;
+  const stages = splitOutsideQuotes(trimmed, (s, i) => (s[i] === "|" ? 1 : 0));
+  for (const rawStage of stages) {
+    const cleanedStage = rawStage
+      .replace(/\b2>&1\b/g, "")
+      .replace(/\b2>(?:\/dev\/null|\$null|nul)\b/gi, "")
+      .trim();
+    const norm = normalizeStageCommandHead(cleanedStage);
+    if (norm && FILTER_STAGE_CMD_RE.test(norm)) return true;
+  }
+  return false;
+}
+
+function isAllReadOnlyOrSetupCommand(commandText) {
+  const { clauses } = splitShellClauses(commandText);
+  if (clauses.length === 0) return false;
+  const nonSetup = clauses.filter((c) => !isPureSetupClause(c));
+  if (nonSetup.length === 0) return true;
+  return nonSetup.every((c) => isReadOnlyClause(c));
+}
+
+function isNonConvergingPassCommand(commandText) {
+  if (!commandText || typeof commandText !== "string" || !commandText.trim()) return false;
+  const { clauses, operators } = getTrailingSemicolonSegment(commandText);
+  if (clauses.length === 0) return false;
+  if (operators.includes("||")) return true;
+  const nonSetup = clauses.filter((c) => !isPureSetupClause(c));
+  if (nonSetup.length === 0) return true;
+  return nonSetup.every((c) => isReadOnlyClause(c) || clauseHasFilterStage(c));
+}
+
+function extractFinalPipelineStage(commandText) {
+  if (!commandText || typeof commandText !== "string") return "";
+  const { clauses } = splitShellClauses(commandText);
+  if (clauses.length === 0) return "";
+  const lastClause = clauses[clauses.length - 1];
+  const stages = splitOutsideQuotes(lastClause, (s, i) => (s[i] === "|" ? 1 : 0));
+  if (stages.length === 0) return "";
+  const cleanedStage = stages[stages.length - 1]
+    .replace(/\b2>&1\b/g, "")
+    .replace(/\b2>(?:\/dev\/null|\$null|nul)\b/gi, "")
+    .trim();
+  return normalizeStageCommandHead(cleanedStage);
+}
+
+function isFilterTerminalCommand(commandText) {
+  const finalStage = extractFinalPipelineStage(commandText);
+  return Boolean(finalStage && FILTER_STAGE_CMD_RE.test(finalStage));
+}
+
+function stripZeroMatchOutputMeta(outputText) {
+  if (!outputText || typeof outputText !== "string") return "";
+  const normalized = outputText.replace(/\r\n/g, "\n").replace(/\r/g, "\n");
+  const outLines = [];
+  for (const rawLine of normalized.split("\n")) {
+    const line = rawLine
+      .trim()
+      .replace(/^<\/?SYSTEM_MESSAGE>\s*/i, "")
+      .replace(/\s*<\/?SYSTEM_MESSAGE>$/i, "")
+      .trim();
+    if (!line) continue;
+    if (/^(?:Created At|Completed At):\s+/i.test(line)) continue;
+    if (/^A pre-tool hook changed the arguments of this tool call before it ran\.(?:\s+Changed:\s+.+)?$/i.test(line)) {
+      continue;
+    }
+    if (/^\$\s+/.test(line)) continue;
+    if (/^(?:Command\s+)?exited with code\s+1\.?$/i.test(line)) continue;
+    if (/^(?:Command|Log)\s+output:\s*$/i.test(line)) continue;
+    if (/^(?:\(no output\)|No output from the command\.?)$/i.test(line)) continue;
+    if (/^Log:\s+(?:file:\/\/\/?\S.*|\[[^\]]+\]\(file:\/\/[^)]+\)|(?:[a-zA-Z]:[\\/]|\/)[^\n]*\.(?:log|txt))$/i.test(line)) {
+      continue;
+    }
+    outLines.push(line);
+  }
+  return outLines.join("\n").trim();
+}
+
+function extractHarnessExitCode(text) {
+  if (!text || typeof text !== "string") return null;
+  const { headerPart } = splitHarnessHeaderAndOutput(text);
+  const m = headerPart.match(/(?:^|\n)\s*(?:Command\s+)?exited with code\s+(\d+)\.?(?:\s*(?:<\/SYSTEM_MESSAGE>)?\s*(?:\n|$))/i);
+  if (m && m[1] !== undefined) {
+    const code = Number(m[1]);
+    return Number.isFinite(code) ? code : null;
+  }
+  return null;
+}
+
+function isZeroMatchFilterExit(commandText, outputText, explicitExitCode = null) {
+  const effectiveCode =
+    typeof explicitExitCode === "number" ? explicitExitCode : extractHarnessExitCode(outputText);
+  if (effectiveCode !== 1) return false;
+  const { clauses, operators } = splitShellClauses(commandText);
+  if (clauses.length === 0) return false;
+  if (operators.includes("||")) return false;
+  if (operators.includes("&&")) {
+    for (let idx = 0; idx < clauses.length - 1; idx++) {
+      if (!isPureSetupClause(clauses[idx])) return false;
+    }
+  }
+  const lastClause = clauses[clauses.length - 1];
+  const stages = splitOutsideQuotes(lastClause, (s, i) => (s[i] === "|" ? 1 : 0));
+  if (stages.length === 0) return false;
+  const finalStage = normalizeStageCommandHead(
+    stages[stages.length - 1]
+      .replace(/\b2>&1\b/g, "")
+      .replace(/\b2>(?:\/dev\/null|\$null|nul)\b/gi, "")
+      .trim()
+  );
+  if (!finalStage || !FILTER_STAGE_CMD_RE.test(finalStage)) return false;
+  return stripZeroMatchOutputMeta(outputText) === "";
+}
+
+function analyzeDiagnosticFilePaths(bodyText) {
+  if (!bodyText || typeof bodyText !== "string") {
+    return { paths: [], hasUnattributedDiagnostic: false };
+  }
+  const out = [];
+  const seen = new Set();
+  let hasUnattributedDiagnostic = false;
+  const lines = bodyText
+    .replace(/\x1b\[[0-9;]*m/g, "")
+    .replace(/\r\n/g, "\n")
+    .replace(/\r/g, "\n")
+    .split("\n");
+  for (const rawLine of lines) {
+    const trimmed = rawLine.trim();
+    if (!trimmed) continue;
+    if (/^error\s+TS\d{4}\s*:/i.test(trimmed)) {
+      hasUnattributedDiagnostic = true;
+      continue;
+    }
+    if (/^(?:https?:\/\/|file:\/\/|\$\s+|error\s+|warning\s+|found\s+\d+|✖|✔|- )/i.test(trimmed)) {
+      continue;
+    }
+    const isIndented = /^\s/.test(rawLine);
+    let candidateLine = trimmed;
+    const pointerPrefix = candidateLine.match(/^(?:-->|┌─|╭─\[)\s*(.+)$/);
+    if (pointerPrefix) {
+      candidateLine = pointerPrefix[1].trim();
+      if (trimmed.startsWith("╭─[") && candidateLine.endsWith("]")) {
+        candidateLine = candidateLine.slice(0, -1).trim();
+      }
+    }
+    let m = candidateLine.match(DIAG_LOCATED_FILE_RE);
+    if (!m && !isIndented && !DIAG_PROSE_PREFIX_RE.test(candidateLine)) {
+      m = candidateLine.match(DIAG_STANDALONE_FILE_RE);
+    }
+    const rawCandidate = m ? (m[1] || m[2] || m[3] || "").trim() : "";
+    if (!rawCandidate || !DIAG_SOURCE_EXT_RE.test(rawCandidate)) {
+      if (!isIndented && DIAG_UNATTRIBUTED_TOP_ERROR_RE.test(trimmed)) {
+        hasUnattributedDiagnostic = true;
+      }
+      continue;
+    }
+    const rawNorm = normPath(rawCandidate);
+    if (!rawNorm) {
+      if (!isIndented && DIAG_UNATTRIBUTED_TOP_ERROR_RE.test(trimmed)) {
+        hasUnattributedDiagnostic = true;
+      }
+      continue;
+    }
+    const norm = path.posix.normalize(rawNorm).replace(/^(?:\.\.?\/)+/, "");
+    if (!norm || norm === "." || norm === "..") {
+      if (!isIndented && DIAG_UNATTRIBUTED_TOP_ERROR_RE.test(trimmed)) {
+        hasUnattributedDiagnostic = true;
+      }
+      continue;
+    }
+    if (/(?:^|\/)(?:node_modules|site-packages)\//i.test(norm)) continue;
+    if (!seen.has(norm)) {
+      seen.add(norm);
+      out.push(norm);
+    }
+  }
+  return { paths: out, hasUnattributedDiagnostic };
+}
+
+function extractDiagnosticFilePaths(bodyText) {
+  return analyzeDiagnosticFilePaths(bodyText).paths;
+}
+
+function normalizedPathsOverlap(diagPath, candidatePath) {
+  if (!diagPath || !candidatePath) return false;
+  const a = path.posix.normalize(String(diagPath)).replace(/^(?:\.\.?\/)+/, "");
+  const b = path.posix.normalize(String(candidatePath)).replace(/^(?:\.\.?\/)+/, "");
+  if (!a || !b || a === "." || b === ".") return false;
+  if (a === b) return true;
+  if (a.endsWith(`/${b}`) || b.endsWith(`/${a}`)) return true;
+  return false;
+}
+
+function hasAnyPathOverlap(diagPaths, candidateFilesSet) {
+  if (!candidateFilesSet || candidateFilesSet.size === 0) return false;
+  for (const dp of diagPaths) {
+    for (const cf of candidateFilesSet) {
+      if (normalizedPathsOverlap(dp, cf)) return true;
+    }
+  }
+  return false;
+}
+
+function isStaticTypeOrLintCheck(name = "", cmd = "") {
+  const cleanedCmd = unwrapQuotedWrapperArg(String(cmd || "")).trim();
+  if (cleanedCmd) {
+    if (isFilterTerminalCommand(cleanedCmd)) return false;
+    const { clauses, operators } = splitShellClauses(cleanedCmd);
+    if (clauses.length === 0 || operators.includes("||")) return false;
+    const nonSetup = clauses.filter((c) => !isPureSetupClause(c));
+    if (nonSetup.length !== 1) return false;
+    const singleClause = nonSetup[0];
+    if (isReadOnlyClause(singleClause) || clauseHasFilterStage(singleClause)) return false;
+    const stages = splitOutsideQuotes(singleClause, (s, i) => (s[i] === "|" ? 1 : 0));
+    if (stages.length === 0) return false;
+    const head = normalizeStageCommandHead(stages[0]);
+    const stripped = stripRunnerPrefix(head);
+    if (STATIC_CHECK_DIRECT_RE.test(stripped)) return true;
+    const pmMatch = stripped.match(PM_SCRIPT_CALL_RE);
+    if (pmMatch && pmMatch[1]) {
+      const scriptName = pmMatch[1];
+      return STATIC_PM_SCRIPT_NAME_RE.test(scriptName) && !NON_STATIC_SCRIPT_TOKEN_RE.test(scriptName);
+    }
+    return false;
+  }
+  const trimmedName = String(name || "").trim();
+  if (!trimmedName) return false;
+  if (TEST_RUNNER_CMD_RE.test(trimmedName) || NON_STATIC_SCRIPT_TOKEN_RE.test(trimmedName)) return false;
+  return STATIC_CHECK_NAME_RE.test(trimmedName);
+}
+
+function isStrongVerifyPassBlock(block) {
+  if (!block) return false;
+  const cmd = unwrapQuotedWrapperArg(String(block.cmd || "")).trim();
+  if (cmd) {
+    if (isNonConvergingPassCommand(cmd)) return false;
+    const { clauses } = getTrailingSemicolonSegment(cmd);
+    for (const clause of clauses) {
+      if (isPureSetupClause(clause) || isReadOnlyClause(clause) || clauseHasFilterStage(clause)) continue;
+      const stages = splitOutsideQuotes(clause, (s, i) => (s[i] === "|" ? 1 : 0));
+      if (stages.length === 0) continue;
+      const stripped = stripRunnerPrefix(normalizeStageCommandHead(stages[0]));
+      if (STRONG_VERIFY_STAGE_RE.test(stripped)) return true;
+    }
+  }
+  const isPureStaticCmd = Boolean(cmd && isStaticTypeOrLintCheck("", cmd));
+  if (!isPureStaticCmd && block.name && STRONG_VERIFY_NAME_RE.test(String(block.name))) {
+    return true;
+  }
+  if (
+    !isPureStaticCmd &&
+    block.body &&
+    (/\b[1-9]\d*\s+passed\b/i.test(block.body) || /(?:^|\n)\s*(?:ℹ\s+)?pass\s+[1-9]\d*\b/im.test(block.body))
+  ) {
+    return true;
+  }
+  return false;
+}
+
+function evaluateRunChecksResult(text, activeCandidateFiles = null) {
+  if (!text || typeof text !== "string") {
+    return { recognized: false, outcome: "pass", profileContent: "" };
+  }
+  const normalized = text.replace(/\r\n/g, "\n").replace(/\r/g, "\n");
+  const lines = normalized.split("\n");
+  const blocks = [];
+  let current = null;
+  const headerMatch = normalized.match(/^Checks:\s*(\d+)\/(\d+)\s+passed(?:,\s*(\d+)\s+failed)?/m);
+  const sawHeader = Boolean(headerMatch);
+  const headerPassedCount = headerMatch ? Number(headerMatch[1]) : 0;
+  const headerTotalCount = headerMatch ? Number(headerMatch[2]) : 0;
+  const headerFailedCount = headerMatch
+    ? headerMatch[3] !== undefined
+      ? Number(headerMatch[3])
+      : Math.max(0, headerTotalCount - headerPassedCount)
+    : 0;
+
+  const flush = () => {
+    if (!current) return;
+    current.body = current.bodyLines.join("\n").trim();
+    delete current.bodyLines;
+    blocks.push(current);
+    current = null;
+  };
+
+  for (const line of lines) {
+    const compactPass = line.match(/^- \[PASS[^\]]*\]\s+(.+?)(?:\s+\(`(.+?)`\))?:\s*(.*)$/);
+    if (compactPass) {
+      flush();
+      blocks.push({
+        kind: "pass",
+        name: compactPass[1].trim(),
+        cmd: (compactPass[2] || "").trim(),
+        body: (compactPass[3] || "").trim(),
+        exitCode: 0,
+        rawLine: line
+      });
+      continue;
+    }
+    const heading = line.match(/^## \[(PASS|FAIL|TIMEOUT|ERROR|SKIPPED)([^\]]*)\]\s*(.*)$/i);
+    if (heading) {
+      flush();
+      const tag = heading[1].toUpperCase();
+      const meta = heading[2] || "";
+      const name = (heading[3] || "").trim();
+      const exitMatch = meta.match(/exit\s+(\d+)/i);
+      const exitCode = exitMatch ? Number(exitMatch[1]) : tag === "PASS" ? 0 : null;
+      current = {
+        kind: tag.toLowerCase(),
+        name,
+        cmd: "",
+        exitCode,
+        bodyLines: [],
+        sawCmdLine: false,
+        rawLine: line
+      };
+      continue;
+    }
+    if (current) {
+      if (!current.sawCmdLine && /^\$\s+/.test(line.trim())) {
+        current.cmd = line.trim().replace(/^\$\s+/, "").trim();
+        current.sawCmdLine = true;
+      } else {
+        current.bodyLines.push(line);
+      }
+    }
+  }
+  flush();
+
+  if (!sawHeader && blocks.length === 0) {
+    return { recognized: false, outcome: "pass", profileContent: "" };
+  }
+
+  const passBlocks = blocks.filter((b) => b.kind === "pass");
+  const convergingPassBlocks = passBlocks.filter((b) => !b.cmd || !isNonConvergingPassCommand(b.cmd));
+  const timeoutOrSkippedBlocks = [];
+  const hasStrongPass = convergingPassBlocks.some((b) => isStrongVerifyPassBlock(b));
+
+  const realFailBlocks = [];
+  const benignBlocks = [];
+  for (const b of blocks) {
+    if (b.kind === "error") {
+      realFailBlocks.push(b);
+      continue;
+    }
+    if (b.kind === "timeout") {
+      if (hasRealCodeErrorOutput(b.body || "")) {
+        realFailBlocks.push(b);
+      } else {
+        timeoutOrSkippedBlocks.push(b);
+      }
+      continue;
+    }
+    if (b.kind === "skipped") {
+      timeoutOrSkippedBlocks.push(b);
+      continue;
+    }
+    if (b.kind !== "fail") continue;
+    if (isZeroMatchFilterExit(b.cmd, b.body, b.exitCode)) {
+      benignBlocks.push({ ...b, benignReason: "zero_match_filter" });
+      continue;
+    }
+    if (
+      hasStrongPass &&
+      activeCandidateFiles &&
+      activeCandidateFiles.size > 0 &&
+      isStaticTypeOrLintCheck(b.name, b.cmd) &&
+      !STATIC_CHECK_CRASH_RE.test(b.body || "") &&
+      !STATIC_CHECK_CRASH_BANNER_RE.test(b.body || "")
+    ) {
+      const { paths: diagPaths, hasUnattributedDiagnostic } = analyzeDiagnosticFilePaths(b.body);
+      if (!hasUnattributedDiagnostic && diagPaths.length > 0 && !hasAnyPathOverlap(diagPaths, activeCandidateFiles)) {
+        benignBlocks.push({ ...b, benignReason: "unrelated_static_noise" });
+        continue;
+      }
+    }
+    realFailBlocks.push(b);
+  }
+
+  const blockResults = [
+    ...convergingPassBlocks.map((b) => ({
+      name: b.name || formatCheckDisplayName("", b.cmd),
+      cmd: b.cmd || "",
+      kind: classifyCheckKind(b.name, b.cmd),
+      outcome: "pass",
+      exitCode: 0,
+      body: b.body || ""
+    })),
+    ...timeoutOrSkippedBlocks
+      .filter((b) => b.kind === "timeout")
+      .map((b) => ({
+        name: b.name || formatCheckDisplayName("", b.cmd),
+        cmd: b.cmd || "",
+        kind: classifyCheckKind(b.name, b.cmd),
+        outcome: "timeout",
+        exitCode: b.exitCode === 124 ? 124 : null,
+        body: b.body || ""
+      })),
+    ...realFailBlocks.map((b) => ({
+      name: b.name || formatCheckDisplayName("", b.cmd),
+      cmd: b.cmd || "",
+      kind: classifyCheckKind(b.name, b.cmd),
+      outcome: "fail",
+      exitCode: typeof b.exitCode === "number" && b.exitCode > 0 ? b.exitCode : 1,
+      body: b.body || ""
+    }))
+  ];
+
+  const accountedNonPass = realFailBlocks.length + timeoutOrSkippedBlocks.length + benignBlocks.length;
+  const missingFailureCount =
+    headerFailedCount > 0 && accountedNonPass < headerFailedCount
+      ? headerFailedCount - accountedNonPass
+      : 0;
+  if (missingFailureCount > 0) {
+    blockResults.push({
+      name: "",
+      cmd: "",
+      kind: "check",
+      outcome: "fail",
+      exitCode: null,
+      body: "",
+      missingDetails: true,
+      missingFailureCount,
+      summaryHeader: headerMatch ? headerMatch[0].trim() : `Checks: ${headerPassedCount}/${headerTotalCount} passed, ${headerFailedCount} failed`
+    });
+  }
+  if (realFailBlocks.length > 0 || missingFailureCount > 0) {
+    const profileParts = [
+      ...passBlocks.map((b) => `${b.rawLine}\n${b.body || ""}`),
+      ...realFailBlocks.map((b) => `${b.rawLine}\n${b.body || ""}`)
+    ];
+    return {
+      recognized: true,
+      outcome: "fail",
+      profileContent: profileParts.length > 0 ? profileParts.join("\n\n") : normalized,
+      blockResults,
+      headerTotalCount,
+      headerFailedCount,
+      missingFailureCount
+    };
+  }
+  if (timeoutOrSkippedBlocks.length > 0) {
+    return { recognized: true, outcome: "timeout_only", profileContent: "", blockResults, headerTotalCount, headerFailedCount, missingFailureCount: 0 };
+  }
+  if (
+    convergingPassBlocks.length > 0 ||
+    (passBlocks.length === 0 && sawHeader && headerFailedCount === 0 && headerPassedCount > 0)
+  ) {
+    return { recognized: true, outcome: "pass", profileContent: "", blockResults, headerTotalCount, headerFailedCount, missingFailureCount: 0 };
+  }
+  if (benignBlocks.length > 0) {
+    return { recognized: true, outcome: "neutral", profileContent: "", blockResults, headerTotalCount, headerFailedCount, missingFailureCount: 0 };
+  }
+  return { recognized: true, outcome: "neutral", profileContent: "", blockResults, headerTotalCount, headerFailedCount, missingFailureCount: 0 };
+}
+
+export function classifyCheckKind(name = "", cmd = "") {
+  const combined = `${name || ""} ${cmd || ""}`.trim();
+  if (!combined) return "check";
+  if (TEST_RUNNER_CMD_RE.test(cmd || "")) return "test";
+  if (
+    BUILD_CHECK_KIND_RE.test(combined) &&
+    !/\b(?:vitest|jest|pytest|mocha|ava|playwright|cypress|unittest|rspec|phpunit|node\s+--test|npm\s+(?:t|test))\b/i.test(
+      combined
+    )
+  ) {
+    return "build";
+  }
+  if (/\b(?:test|tests|spec|e2e|smoke|unit|integration|vitest|jest|pytest|mocha)\b/i.test(combined)) {
+    return "test";
+  }
+  return "check";
+}
+
+export function formatCheckDisplayName(name = "", cmd = "") {
+  const cleanName = String(name || "").replace(/\s+/g, " ").trim();
+  if (cleanName) return cleanName.slice(0, 80);
+  const cleanCmd = String(cmd || "").replace(/\s+/g, " ").trim();
+  if (cleanCmd) return cleanCmd.slice(0, 80);
+  return "check";
+}
+
+const GENERIC_CHECK_NAMES = new Set([
+  "test",
+  "tests",
+  "unit",
+  "spec",
+  "vitest",
+  "jest",
+  "pytest",
+  "mocha",
+  "ava",
+  "playwright",
+  "cypress",
+  "build",
+  "tsc",
+  "typecheck",
+  "type-check",
+  "lint",
+  "eslint",
+  "biome",
+  "check",
+  "checks",
+  "verify",
+  "run_checks"
+]);
+
+const GENERIC_TEST_STEMS = new Set(["index", "main", "app", "test", "tests", "spec", "specs", "unit", "all"]);
+
+function splitShellArgsSimple(text = "") {
+  const out = [];
+  let cur = "";
+  let quote = "";
+  const s = String(text || "");
+  for (let i = 0; i < s.length; i++) {
+    const ch = s[i];
+    if (quote) {
+      if (ch === quote) {
+        quote = "";
+      } else if (ch === "\\" && quote === '"' && i + 1 < s.length && (s[i + 1] === '"' || s[i + 1] === "\\")) {
+        cur += s[++i];
+      } else {
+        cur += ch;
+      }
+      continue;
+    }
+    if (ch === '"' || ch === "'") {
+      quote = ch;
+      continue;
+    }
+    if (/\s/.test(ch)) {
+      if (cur) {
+        out.push(cur);
+        cur = "";
+      }
+      continue;
+    }
+    cur += ch;
+  }
+  if (cur) out.push(cur);
+  return out;
+}
+
+function normalizeCheckTargetToken(raw = "") {
+  let t = String(raw || "").trim();
+  if (!t) return "";
+  t = t.replace(/^["']+|["']+$/g, "").replace(/\\/g, "/");
+  t = t.replace(/^\.\/+/, "").replace(/\/+$/, "");
+  if (!t || t === "." || t === "./" || t === "..." || t === "./..." || t === "*" || t === "**") {
+    return "";
+  }
+  return t.toLowerCase();
+}
+
+function stripTestFileStem(pathToken = "") {
+  const norm = normalizeCheckTargetToken(pathToken);
+  if (!norm) return "";
+  const parts = norm.split("/");
+  const base = parts[parts.length - 1] || "";
+  const stripped = base
+    .replace(/\.(?:test|spec|e2e)\.(?:[cm]?[jt]sx?|py|rb|php|go|rs)$/i, "")
+    .replace(/\.(?:[cm]?[jt]sx?|py|rb|php|go|rs)$/i, "")
+    .replace(/^(?:test_|spec_)/i, "")
+    .replace(/(?:_test|_spec|\.test|\.spec)$/i, "");
+  return stripped.trim();
+}
+
+function splitCheckTargetSubSelector(token = "") {
+  const s = String(token || "");
+  const doubleColonIdx = s.indexOf("::");
+  if (doubleColonIdx > 0) {
+    return { base: s.slice(0, doubleColonIdx), sub: s.slice(doubleColonIdx) };
+  }
+  const lineMatch = s.match(/^(.+?[./][^:]+)(:\d+(?::\d+)?)$/);
+  if (lineMatch) {
+    return { base: lineMatch[1], sub: lineMatch[2] };
+  }
+  return { base: s, sub: "" };
+}
+
+const DEFAULT_FILTER_VALUE_FLAGS = new Set([
+  "-t",
+  "--testnamepattern",
+  "--test-name-pattern",
+  "--test-skip-pattern",
+  "-k",
+  "--grep",
+  "-g",
+  "--fgrep",
+  "--filter",
+  "-f",
+  "-m",
+  "--mark",
+  "--tag",
+  "--tags",
+  "--group",
+  "--suite",
+  "--case",
+  "--match",
+  "--select",
+  "--test-match",
+  "--test-filter",
+  "-run",
+  "--run",
+  "-skip",
+  "--skip"
+]);
+
+const DEFAULT_SELECTOR_VALUE_FLAGS = new Set(["-p", "--project", "-w", "--workspace"]);
+
+const DEFAULT_NARROWING_BOOL_FLAGS = new Set([
+  "--only",
+  "--only-failures",
+  "--lf",
+  "--last-failed",
+  "--ff",
+  "--failed-first",
+  "--changed",
+  "--onlychanged",
+  "--only-changed",
+  "--related",
+  "--exact"
+]);
+
+const DEFAULT_IGNORED_VALUE_FLAGS = new Set([
+  "--reporter",
+  "-r",
+  "--config",
+  "-c",
+  "--timeout",
+  "--test-timeout",
+  "--workers",
+  "--maxworkers",
+  "--max-workers",
+  "--pool",
+  "--tb",
+  "--maxfail",
+  "--dir",
+  "--root",
+  "--cwd",
+  "--prefix",
+  "--env",
+  "--environment",
+  "--output",
+  "-o"
+]);
+
+export function extractCheckIdentity(kind = "check", name = "", command = "", { missingDetails = false, batchKeys = null } = {}) {
+  const safeKind = kind || classifyCheckKind(name, command);
+  if (missingDetails) {
+    const cleanBatchKeys = Array.isArray(batchKeys)
+      ? Array.from(new Set(batchKeys.map((k) => String(k || "").trim()).filter(Boolean))).sort()
+      : [];
+    return {
+      kind: safeKind,
+      tool: "run_checks",
+      targets: [],
+      pathTargets: [],
+      scopeSelectors: [],
+      filters: [],
+      isBroad: false,
+      isMissingSummary: true,
+      batchKeys: cleanBatchKeys,
+      checkKey: cleanBatchKeys.length > 0 ? `run_checks:missing:${cleanBatchKeys.join(",")}` : "run_checks:missing"
+    };
+  }
+  const cleanCmd = unwrapQuotedWrapperArg(String(command || "")).trim();
+  let primaryStage = "";
+  if (cleanCmd) {
+    const { clauses } = getTrailingSemicolonSegment(cleanCmd);
+    for (let idx = clauses.length - 1; idx >= 0; idx--) {
+      const clause = clauses[idx];
+      if (isPureSetupClause(clause) || isReadOnlyClause(clause)) continue;
+      const stages = splitOutsideQuotes(clause, (s, i) => (s[i] === "|" ? 1 : 0));
+      if (stages.length > 0) {
+        const stage0 = stages[0]
+          .replace(/\b2>&1\b/g, "")
+          .replace(/\b[12]>(?:\/dev\/null|\$null|nul|\S+)\b/gi, "")
+          .trim();
+        primaryStage = stripRunnerPrefix(normalizeStageCommandHead(stage0));
+        break;
+      }
+    }
+  }
+
+  let tool = "";
+  let pathTargets = [];
+  let scopeSelectors = [];
+  let filters = [];
+  let isBroad = false;
+
+  if (primaryStage) {
+    const rawTokens = splitShellArgsSimple(primaryStage);
+    const headRaw = (rawTokens[0] || "").replace(/\\/g, "/");
+    const head = headRaw.split("/").pop().replace(/\.(?:exe|cmd|bat|ps1|sh)$/i, "").toLowerCase();
+    const rest = rawTokens.slice(1);
+
+    const collectArgs = (
+      argsList,
+      {
+        filterValueFlags = DEFAULT_FILTER_VALUE_FLAGS,
+        selectorValueFlags = DEFAULT_SELECTOR_VALUE_FLAGS,
+        narrowingBoolFlags = DEFAULT_NARROWING_BOOL_FLAGS,
+        ignoredValueFlags = DEFAULT_IGNORED_VALUE_FLAGS,
+        skipSubcommands = new Set(),
+        parseFlagsAfterDoubleDash = false,
+        positionalAsFilter = false,
+        cargoTestMode = false
+      } = {}
+    ) => {
+      const paths = [];
+      const selectors = [];
+      const filt = [];
+      let afterDoubleDash = false;
+      for (let idx = 0; idx < argsList.length; idx++) {
+        const tok = argsList[idx];
+        if (!tok) continue;
+        if (!afterDoubleDash && tok === "--") {
+          afterDoubleDash = true;
+          continue;
+        }
+        if (!afterDoubleDash && idx === 0 && skipSubcommands.has(tok.toLowerCase())) {
+          continue;
+        }
+        const canParseFlag = !afterDoubleDash || parseFlagsAfterDoubleDash;
+        if (canParseFlag && tok.startsWith("-")) {
+          const eqIdx = tok.indexOf("=");
+          const flagName = (eqIdx >= 0 ? tok.slice(0, eqIdx) : tok).toLowerCase();
+          const inlineVal = eqIdx >= 0 ? tok.slice(eqIdx + 1) : null;
+          if (cargoTestMode) {
+            if (flagName === "--test" || flagName === "--bin" || flagName === "--example") {
+              const val = inlineVal !== null ? inlineVal : idx + 1 < argsList.length ? argsList[++idx] : "";
+              const normVal = normalizeCheckTargetToken(val);
+              if (normVal) selectors.push(`cargo-target:${flagName.slice(2)}:${normVal}`);
+              continue;
+            }
+            if (flagName === "--lib" || flagName === "--doc" || flagName === "--bins" || flagName === "--tests") {
+              selectors.push(`cargo-target:${flagName.slice(2)}`);
+              continue;
+            }
+            if (flagName === "-p" || flagName === "--package") {
+              const val = inlineVal !== null ? inlineVal : idx + 1 < argsList.length ? argsList[++idx] : "";
+              const normVal = normalizeCheckTargetToken(val);
+              if (normVal) selectors.push(`ws:${normVal}`);
+              continue;
+            }
+            if (flagName === "--exact" || flagName === "--ignored") {
+              filt.push(`narrow:${flagName}`);
+              continue;
+            }
+          }
+          if (flagName === "--shard") {
+            const val = inlineVal !== null ? inlineVal : idx + 1 < argsList.length ? argsList[++idx] : "";
+            const normVal = normalizeCheckTargetToken(val);
+            if (normVal) filt.push(`shard:${normVal}`);
+            continue;
+          }
+          if (selectorValueFlags.has(flagName)) {
+            const val = inlineVal !== null ? inlineVal : idx + 1 < argsList.length ? argsList[++idx] : "";
+            const normVal = normalizeCheckTargetToken(val);
+            if (normVal) {
+              const prefix = flagName === "-w" || flagName === "--workspace" ? "ws" : "project";
+              selectors.push(`${prefix}:${normVal}`);
+            }
+            continue;
+          }
+          if (filterValueFlags.has(flagName)) {
+            const val = inlineVal !== null ? inlineVal : idx + 1 < argsList.length ? argsList[++idx] : "";
+            const normVal = normalizeCheckTargetToken(val);
+            if (normVal) filt.push(`filter:${normVal}`);
+            continue;
+          }
+          if (narrowingBoolFlags.has(flagName)) {
+            filt.push(`narrow:${flagName}`);
+            continue;
+          }
+          if (ignoredValueFlags.has(flagName)) {
+            if (inlineVal === null && idx + 1 < argsList.length && !argsList[idx + 1].startsWith("-")) {
+              idx += 1;
+            }
+            continue;
+          }
+          continue;
+        }
+        const normPos = normalizeCheckTargetToken(tok);
+        if (normPos) {
+          if (positionalAsFilter) {
+            filt.push(`filter:${normPos}`);
+          } else {
+            paths.push(normPos);
+          }
+        }
+      }
+      return {
+        pathTargets: Array.from(new Set(paths)).sort(),
+        scopeSelectors: Array.from(new Set(selectors)).sort(),
+        filters: Array.from(new Set(filt)).sort()
+      };
+    };
+
+    if (head === "npm" || head === "pnpm" || head === "yarn" || head === "bun") {
+      let idx = 0;
+      const wsTargets = [];
+      while (idx < rest.length && rest[idx].startsWith("-")) {
+        const flag = rest[idx].toLowerCase();
+        if (flag === "-w" || flag === "--workspace" || flag === "--filter" || flag === "-f") {
+          if (idx + 1 < rest.length) {
+            const normWs = normalizeCheckTargetToken(rest[++idx]);
+            if (normWs) wsTargets.push(`ws:${normWs}`);
+          }
+        } else if (flag.startsWith("--workspace=") || flag.startsWith("--filter=")) {
+          const normWs = normalizeCheckTargetToken(flag.slice(flag.indexOf("=") + 1));
+          if (normWs) wsTargets.push(`ws:${normWs}`);
+        } else if (flag === "--prefix" || flag === "--cwd" || flag === "--dir" || flag === "-c") {
+          if (idx + 1 < rest.length) idx += 1;
+        }
+        idx += 1;
+      }
+      let sub = (rest[idx] || "").toLowerCase();
+      let afterSub = rest.slice(idx + 1);
+      if (sub === "run" || sub === "run-script") {
+        sub = (afterSub[0] || "").toLowerCase();
+        afterSub = afterSub.slice(1);
+      }
+      const parsed = collectArgs(afterSub, {
+        parseFlagsAfterDoubleDash: true,
+        narrowingBoolFlags: new Set([...DEFAULT_NARROWING_BOOL_FLAGS, "-o"]),
+        ignoredValueFlags: new Set(Array.from(DEFAULT_IGNORED_VALUE_FLAGS).filter((f) => f !== "-o"))
+      });
+      pathTargets = parsed.pathTargets;
+      filters = parsed.filters;
+      if (sub === "t" || sub === "test") {
+        tool = "pkg-test";
+        scopeSelectors = Array.from(new Set([...wsTargets, ...parsed.scopeSelectors])).sort();
+        isBroad = pathTargets.length === 0 && scopeSelectors.length === 0 && filters.length === 0;
+      } else if (sub === "build") {
+        tool = "pkg-build";
+        scopeSelectors = Array.from(new Set([...wsTargets, ...parsed.scopeSelectors])).sort();
+        isBroad = pathTargets.length === 0 && scopeSelectors.length === 0 && filters.length === 0;
+      } else if (sub) {
+        tool = "pkg-script";
+        scopeSelectors = Array.from(new Set([`script:${sub}`, ...wsTargets, ...parsed.scopeSelectors])).sort();
+        isBroad = false;
+      } else {
+        tool = head;
+        scopeSelectors = Array.from(new Set([...wsTargets, ...parsed.scopeSelectors])).sort();
+        isBroad = pathTargets.length === 0 && scopeSelectors.length === 0 && filters.length === 0;
+      }
+    } else if (head === "node") {
+      const hasTestFlag = rest.some((t) => t === "--test");
+      if (hasTestFlag) {
+        tool = "node-test";
+        const parsed = collectArgs(rest, {
+          filterValueFlags: new Set(["--test-name-pattern", "--test-skip-pattern"]),
+          selectorValueFlags: new Set(),
+          narrowingBoolFlags: new Set(["--test-only"]),
+          ignoredValueFlags: new Set([
+            "--test-reporter",
+            "--test-reporter-destination",
+            "--test-concurrency",
+            "--test-timeout",
+            "--import",
+            "--loader",
+            "--require",
+            "-r",
+            "--conditions",
+            "-c"
+          ]),
+          parseFlagsAfterDoubleDash: true
+        });
+        pathTargets = parsed.pathTargets;
+        scopeSelectors = parsed.scopeSelectors;
+        filters = parsed.filters;
+        isBroad = pathTargets.length === 0 && scopeSelectors.length === 0 && filters.length === 0;
+      } else {
+        tool = "node";
+        const parsed = collectArgs(rest);
+        pathTargets = parsed.pathTargets;
+        scopeSelectors = parsed.scopeSelectors;
+        filters = parsed.filters;
+        isBroad = pathTargets.length === 0 && scopeSelectors.length === 0 && filters.length === 0;
+      }
+    } else if (head === "cargo") {
+      const sub = (rest[0] || "").toLowerCase();
+      tool = sub ? `cargo-${sub}` : "cargo";
+      const isCargoTest = sub === "test" || sub === "nextest";
+      const parsed = collectArgs(rest.slice(sub ? 1 : 0), {
+        parseFlagsAfterDoubleDash: isCargoTest,
+        positionalAsFilter: isCargoTest,
+        cargoTestMode: isCargoTest
+      });
+      pathTargets = parsed.pathTargets;
+      scopeSelectors = parsed.scopeSelectors;
+      filters = parsed.filters;
+      isBroad = pathTargets.length === 0 && scopeSelectors.length === 0 && filters.length === 0;
+    } else if (head === "go") {
+      const sub = (rest[0] || "").toLowerCase();
+      tool = sub ? `go-${sub}` : "go";
+      const parsed = collectArgs(rest.slice(sub ? 1 : 0), {
+        narrowingBoolFlags: new Set([...DEFAULT_NARROWING_BOOL_FLAGS, "-short"])
+      });
+      pathTargets = parsed.pathTargets;
+      scopeSelectors = parsed.scopeSelectors;
+      filters = parsed.filters;
+      isBroad = pathTargets.length === 0 && scopeSelectors.length === 0 && filters.length === 0;
+    } else if (head === "dotnet" || head === "deno") {
+      const sub = (rest[0] || "").toLowerCase();
+      tool = sub ? `${head}-${sub}` : head;
+      const parsed = collectArgs(rest.slice(sub ? 1 : 0), { parseFlagsAfterDoubleDash: true });
+      pathTargets = parsed.pathTargets;
+      scopeSelectors = parsed.scopeSelectors;
+      filters = parsed.filters;
+      isBroad = pathTargets.length === 0 && scopeSelectors.length === 0 && filters.length === 0;
+    } else if (head === "vitest" || head === "jest" || head === "playwright" || head === "cypress" || head === "mocha" || head === "pytest") {
+      tool = head;
+      const isJestLike = head === "vitest" || head === "jest";
+      const parsed = collectArgs(rest, {
+        skipSubcommands: head === "vitest" || head === "playwright" || head === "cypress" ? new Set(["run", "test"]) : new Set(),
+        parseFlagsAfterDoubleDash: true,
+        narrowingBoolFlags: isJestLike ? new Set([...DEFAULT_NARROWING_BOOL_FLAGS, "-o"]) : DEFAULT_NARROWING_BOOL_FLAGS,
+        ignoredValueFlags: isJestLike
+          ? new Set(Array.from(DEFAULT_IGNORED_VALUE_FLAGS).filter((f) => f !== "-o"))
+          : DEFAULT_IGNORED_VALUE_FLAGS
+      });
+      pathTargets = parsed.pathTargets;
+      scopeSelectors = parsed.scopeSelectors;
+      filters = parsed.filters;
+      isBroad = pathTargets.length === 0 && scopeSelectors.length === 0 && filters.length === 0;
+    } else if (head === "electron-vite" || head === "vite" || head === "next" || head === "nuxt" || head === "turbo" || head === "nx") {
+      const sub = (rest[0] || "").toLowerCase();
+      tool = sub ? `${head}-${sub}` : head;
+      const parsed = collectArgs(rest.slice(sub ? 1 : 0));
+      pathTargets = parsed.pathTargets;
+      scopeSelectors = parsed.scopeSelectors;
+      filters = parsed.filters;
+      isBroad = pathTargets.length === 0 && scopeSelectors.length === 0 && filters.length === 0;
+    } else if (head) {
+      tool = head;
+      const parsed = collectArgs(rest);
+      pathTargets = parsed.pathTargets;
+      scopeSelectors = parsed.scopeSelectors;
+      filters = parsed.filters;
+      isBroad = pathTargets.length === 0 && scopeSelectors.length === 0 && filters.length === 0;
+    }
+  }
+
+  const cleanName = String(name || "").trim().toLowerCase().replace(/\s+/g, " ");
+  if (!tool) {
+    if (cleanName && !GENERIC_CHECK_NAMES.has(cleanName)) {
+      tool = "named";
+      scopeSelectors = [`name:${cleanName}`];
+      isBroad = false;
+    } else {
+      tool = cleanName || safeKind;
+      isBroad = true;
+    }
+  } else if (
+    pathTargets.length === 0 &&
+    scopeSelectors.length === 0 &&
+    filters.length === 0 &&
+    cleanName &&
+    !GENERIC_CHECK_NAMES.has(cleanName) &&
+    cleanName !== tool
+  ) {
+    const rawCmdLower = cleanCmd.toLowerCase();
+    if (!rawCmdLower || (!rawCmdLower.includes(cleanName) && cleanName.length <= 40)) {
+      scopeSelectors = [`name:${cleanName}`];
+      isBroad = false;
+    }
+  }
+
+  const targets = Array.from(new Set([...scopeSelectors, ...pathTargets, ...filters])).sort();
+  const checkKey = `${safeKind}:${tool}:${targets.length > 0 ? targets.join("|") : "*"}`;
+  return {
+    kind: safeKind,
+    tool,
+    targets,
+    pathTargets,
+    scopeSelectors,
+    filters,
+    isBroad,
+    isMissingSummary: false,
+    checkKey
+  };
+}
+
+function checkTargetCovers(passTarget, failTarget) {
+  if (!passTarget || !failTarget) return false;
+  if (passTarget === failTarget) return true;
+  const passHasPrefix = /^(?:filter|shard|narrow|script|ws|project|name|cargo-target):/.test(passTarget);
+  const failHasPrefix = /^(?:filter|shard|narrow|script|ws|project|name|cargo-target):/.test(failTarget);
+  if (passHasPrefix || failHasPrefix) return false;
+  const passParts = splitCheckTargetSubSelector(passTarget);
+  const failParts = splitCheckTargetSubSelector(failTarget);
+  if (passParts.sub) {
+    if (!failParts.sub) return false;
+    if (passParts.sub !== failParts.sub && !failParts.sub.startsWith(`${passParts.sub}::`)) {
+      return false;
+    }
+  }
+  const pBase = passParts.base;
+  const fBase = failParts.base;
+  if (pBase === fBase) return true;
+  if (fBase.endsWith(`/${pBase}`) || pBase.endsWith(`/${fBase}`)) return true;
+  if (fBase.startsWith(`${pBase}/`)) return true;
+  const passHasSlash = pBase.includes("/");
+  const failHasSlash = fBase.includes("/");
+  if (passHasSlash !== failHasSlash) {
+    const passStem = stripTestFileStem(pBase);
+    const failStem = stripTestFileStem(fBase);
+    if (passStem && failStem && passStem === failStem && !GENERIC_TEST_STEMS.has(passStem)) {
+      return true;
+    }
+  }
+  return false;
+}
+
+function areCheckToolsCompatibleForBroadPass(passId, failId) {
+  if (!passId || !failId) return false;
+  if (passId.tool === failId.tool) return true;
+  if (passId.kind === "test" && passId.tool === "pkg-test") return true;
+  if (
+    passId.kind === "build" &&
+    passId.tool === "pkg-build" &&
+    (failId.tool === "pkg-build" ||
+      failId.tool.endsWith("-build") ||
+      failId.tool === "webpack" ||
+      failId.tool === "rollup" ||
+      failId.tool === "esbuild" ||
+      failId.tool === "tsup")
+  ) {
+    return true;
+  }
+  return false;
+}
+
+export function doesPassResolveFailure(passId, failId) {
+  if (!passId || !failId) return false;
+  if (failId.isMissingSummary) return false;
+  if (passId.kind !== failId.kind) return false;
+  if (passId.checkKey === failId.checkKey) return true;
+  if (passId.isBroad) {
+    return areCheckToolsCompatibleForBroadPass(passId, failId);
+  }
+  if (failId.isBroad) {
+    return false;
+  }
+  if (passId.tool !== failId.tool && passId.tool !== "named" && failId.tool !== "named") {
+    return false;
+  }
+  const passFilters = Array.isArray(passId.filters) ? passId.filters : [];
+  const failFilters = Array.isArray(failId.filters) ? failId.filters : [];
+  if (passFilters.some((pf) => !failFilters.includes(pf))) {
+    return false;
+  }
+  const passSelectors = Array.isArray(passId.scopeSelectors) ? passId.scopeSelectors : [];
+  const failSelectors = Array.isArray(failId.scopeSelectors) ? failId.scopeSelectors : [];
+  if (passSelectors.some((ps) => !failSelectors.includes(ps))) {
+    return false;
+  }
+  if (failSelectors.some((fs) => /^(?:script|name):/.test(fs) && !passSelectors.includes(fs))) {
+    return false;
+  }
+  const passPaths = Array.isArray(passId.pathTargets) ? passId.pathTargets : [];
+  const failPaths = Array.isArray(failId.pathTargets) ? failId.pathTargets : [];
+  if (passPaths.length > 0) {
+    if (failPaths.length === 0) return false;
+    if (!failPaths.every((ft) => passPaths.some((pt) => checkTargetCovers(pt, ft)))) {
+      return false;
+    }
+  }
+  if (failPaths.length === 0 && failSelectors.length === 0 && failFilters.length === 0) {
+    return false;
+  }
+  return true;
+}
+
+export function extractBatchCheckIdentities(commands = [], blockResults = []) {
+  const byKey = new Map();
+  const batchCommands = [];
+  const seenCmdKey = new Set();
+  const addEntry = (rawName, rawCmd) => {
+    const name = String(rawName || "").replace(/\s+/g, " ").trim();
+    const command = String(rawCmd || "").replace(/\s+/g, " ").trim();
+    if (!name && !command) return;
+    const kind = classifyCheckKind(name, command);
+    const id = extractCheckIdentity(kind, name, command);
+    if (!id || id.isMissingSummary) return;
+    if (!byKey.has(id.checkKey)) {
+      byKey.set(id.checkKey, id);
+    }
+    if (!seenCmdKey.has(id.checkKey) && batchCommands.length < 12) {
+      seenCmdKey.add(id.checkKey);
+      batchCommands.push({
+        name: name.slice(0, 60),
+        command: command.slice(0, 120)
+      });
+    }
+  };
+  let cmdList = commands;
+  if (typeof cmdList === "string") {
+    try {
+      const parsed = JSON.parse(cmdList);
+      cmdList = Array.isArray(parsed) ? parsed : [];
+    } catch {
+      cmdList = [];
+    }
+  }
+  if (Array.isArray(cmdList)) {
+    for (const c of cmdList) {
+      if (typeof c === "string") addEntry("", c);
+      else if (c && typeof c === "object") addEntry(c.name || "", c.command || c.cmd || "");
+    }
+  }
+  if (Array.isArray(blockResults)) {
+    for (const b of blockResults) {
+      if (!b || b.missingDetails) continue;
+      addEntry(b.name || "", b.cmd || b.command || "");
+    }
+  }
+  const batchKeys = Array.from(byKey.keys()).sort();
+  const identities = batchKeys.map((k) => byKey.get(k));
+  return { identities, batchKeys, batchCommands };
+}
+
+export function doesBatchPassResolveMissingFailure(passBatchIds = [], failSlot = null, { passTotalCount = 0 } = {}) {
+  if (!failSlot || typeof failSlot !== "object") return false;
+  const passIds = Array.isArray(passBatchIds) ? passBatchIds.filter(Boolean) : [];
+  let failIds =
+    Array.isArray(failSlot._batchIdentities) && failSlot._batchIdentities.length > 0
+      ? failSlot._batchIdentities
+      : [];
+  if (failIds.length === 0 && Array.isArray(failSlot.batchCommands) && failSlot.batchCommands.length > 0) {
+    failIds = extractBatchCheckIdentities(failSlot.batchCommands, []).identities;
+  }
+  const failTotal = Math.max(0, Number(failSlot.batchTotalCount || 0));
+  const failKeys = Array.isArray(failSlot.batchKeys) ? failSlot.batchKeys.filter(Boolean) : [];
+  const effPassTotal = Math.max(passIds.length, Number(passTotalCount || 0));
+
+  if (failIds.length > 0 && (failTotal === 0 || failIds.length >= failTotal)) {
+    if (passIds.length === 0) return false;
+    return failIds.every((req) => passIds.some((p) => doesPassResolveFailure(p, req)));
+  }
+  if (failKeys.length > 0 && (failTotal === 0 || failKeys.length >= failTotal)) {
+    if (passIds.length === 0) return false;
+    const passKeySet = new Set(passIds.map((p) => p.checkKey));
+    return failKeys.every((fk) => passKeySet.has(fk));
+  }
+  if (failTotal > 0 && effPassTotal < failTotal) {
+    return false;
+  }
+  if (failIds.length > 0) {
+    return failIds.every((req) => passIds.some((p) => doesPassResolveFailure(p, req)));
+  }
+  if (failKeys.length > 0) {
+    const passKeySet = new Set(passIds.map((p) => p.checkKey));
+    return failKeys.every((fk) => passKeySet.has(fk));
+  }
+  return effPassTotal > 0;
+}
+
+function stripHarnessMetaLinesForErrorScan(rawText) {
+  if (!rawText || typeof rawText !== "string") return "";
+  const lines = rawText
+    .replace(/\x1b\[[0-9;]*m/g, "")
+    .replace(/\r\n/g, "\n")
+    .replace(/\r/g, "\n")
+    .split("\n");
+  const kept = [];
+  for (const rawLine of lines) {
+    const trimmed = rawLine.trim();
+    if (!trimmed) continue;
+    if (/^(?:Created At|Completed At|Task|Status|Task Description):\s+/i.test(trimmed)) continue;
+    if (/^\[Message\]\s+(?:timestamp|sender|priority|content)=/i.test(trimmed)) continue;
+    if (/^A pre-tool hook changed the arguments of this tool call before it ran\b/i.test(trimmed)) continue;
+    if (/^(?:The tool's output was truncated|Here is a preview with the middle of the output truncated)/i.test(trimmed)) {
+      continue;
+    }
+    if (/^(?:Command\s+)?exited with code\s+\d+\.?$/i.test(trimmed)) continue;
+    if (/^(?:Command output|Log output):\s*$/i.test(trimmed)) continue;
+    if (/^No output from the command\.?$/i.test(trimmed)) continue;
+    if (/^Log:\s+(?:file:\/\/\/?\S.*|\[[^\]]+\]\(file:\/\/[^)]+\)|(?:[a-zA-Z]:[\\/]|\/)[^\n]*\.(?:log|txt))$/i.test(trimmed)) {
+      continue;
+    }
+    kept.push(rawLine);
+  }
+  return kept.join("\n").trim();
+}
+
+function splitTrustedHarnessMetadataAndBody(rawText, hasOutputSection, headerPart, outputPart) {
+  if (hasOutputSection) {
+    return {
+      trustedHeader: String(headerPart || ""),
+      bodyText: stripHarnessMetaLinesForErrorScan(outputPart || "")
+    };
+  }
+  const lines = String(rawText || "").replace(/\r\n/g, "\n").replace(/\r/g, "\n").split("\n");
+  const headerLines = [];
+  const bodyLines = [];
+  let inHeader = true;
+  for (const rawLine of lines) {
+    const trimmed = rawLine.trim();
+    if (inHeader) {
+      if (!trimmed) continue;
+      if (
+        /^(?:Created At|Completed At|Task|Status|Task Description):/i.test(trimmed) ||
+        /^\[Message\]/i.test(trimmed) ||
+        /^A pre-tool hook changed/i.test(trimmed) ||
+        /^The tool's output was truncated/i.test(trimmed) ||
+        /^Here is a preview/i.test(trimmed) ||
+        /^No output from the command\.?$/i.test(trimmed) ||
+        /^(?:Command\s+)?exited with code\s+\d+\.?$/i.test(trimmed) ||
+        /^Log:\s+(?:file:\/\/\/?\S.*|\[[^\]]+\]\(file:\/\/[^)]+\)|(?:[a-zA-Z]:[\\/]|\/)[^\n]*\.(?:log|txt))$/i.test(trimmed) ||
+        HARNESS_TIMEOUT_LINE_RE.test(trimmed) ||
+        STEP_CANCELED_TEXT_RE.test(trimmed) ||
+        /\b(?:was killed|killed by user|terminated by user)\b/i.test(trimmed)
+      ) {
+        headerLines.push(trimmed);
+        continue;
+      }
+      inHeader = false;
+    }
+    bodyLines.push(rawLine);
+  }
+  return {
+    trustedHeader: headerLines.join("\n"),
+    bodyText: stripHarnessMetaLinesForErrorScan(bodyLines.join("\n"))
+  };
+}
+
+function hasRealCodeErrorOutput(rawBody) {
+  const cleaned = stripHarnessMetaLinesForErrorScan(rawBody);
+  if (!cleaned) return false;
+  if (REAL_CODE_ERROR_TEXT_RE.test(cleaned)) return true;
+  if (/\b([1-9]\d*)\s+failed\b/i.test(cleaned)) return true;
+  return false;
+}
+
+function extractCheckErrorDetails(rawBody) {
+  const cleaned = stripHarnessMetaLinesForErrorScan(rawBody);
+  if (!cleaned) return { firstErrorLine: "", errorExcerpt: "" };
+  let redacted = cleaned;
+  try {
+    redacted = redactSecrets(cleaned).text;
+  } catch {}
+  const lines = redacted
+    .split("\n")
+    .map((l) => l.replace(/\s+$/g, ""))
+    .filter((l) => l.trim().length > 0);
+  if (lines.length === 0) return { firstErrorLine: "", errorExcerpt: "" };
+
+  let anchorIdx = -1;
+  for (let idx = 0; idx < lines.length; idx++) {
+    if (REAL_CODE_ERROR_TEXT_RE.test(lines[idx])) {
+      anchorIdx = idx;
+      break;
+    }
+  }
+  if (anchorIdx < 0) {
+    for (let idx = 0; idx < lines.length; idx++) {
+      if (/\b(?:error|fail(?:ed|ure)?|exception|assert|panic|fatal)\b/i.test(lines[idx]) && !/\b0\s+(?:errors?|failed)\b/i.test(lines[idx])) {
+        anchorIdx = idx;
+        break;
+      }
+    }
+  }
+  const firstIdx = anchorIdx >= 0 ? anchorIdx : 0;
+  const firstErrorLine = lines[firstIdx].trim().slice(0, 220);
+
+  const startIdx = Math.max(0, firstIdx - 1);
+  const selected = [];
+  let charBudget = 0;
+  for (let idx = startIdx; idx < lines.length && selected.length < 10; idx++) {
+    const line = lines[idx].slice(0, 260);
+    if (charBudget + line.length + 1 > 1000 && selected.length > 0) break;
+    selected.push(line);
+    charBudget += line.length + 1;
+  }
+  return {
+    firstErrorLine,
+    errorExcerpt: selected.join("\n")
+  };
+}
+
+function classifyCheckCompletionOutcome({
+  verb = "",
+  rawText = "",
+  headerPart = "",
+  outputPart = "",
+  hasOutputSection = false,
+  explicitExitCode = null
+} = {}) {
+  const { trustedHeader, bodyText } = splitTrustedHarnessMetadataAndBody(
+    rawText,
+    hasOutputSection,
+    headerPart,
+    outputPart
+  );
+  const lowerVerb = String(verb || "").toLowerCase();
+  if (
+    lowerVerb.includes("cancel") ||
+    STEP_CANCELED_TEXT_RE.test(trustedHeader) ||
+    /^\s*Status:\s*(?:CANCELED|CANCELLED|KILLED|ABORTED)\b/im.test(trustedHeader) ||
+    /\b(?:was killed|killed by user|terminated by user)\b/i.test(trustedHeader)
+  ) {
+    return { outcome: "canceled", exitCode: null, body: bodyText };
+  }
+
+  const exitCode =
+    typeof explicitExitCode === "number" && Number.isFinite(explicitExitCode)
+      ? explicitExitCode
+      : extractHarnessExitCode(trustedHeader);
+  const hasTrustedTimeout = hasOutputSection
+    ? STEP_PURE_TIMEOUT_TEXT_RE.test(trustedHeader) || HARNESS_TIMEOUT_LINE_RE.test(trustedHeader)
+    : HARNESS_TIMEOUT_LINE_RE.test(trustedHeader);
+  const hasRealErr = hasRealCodeErrorOutput(bodyText);
+
+  if (hasTrustedTimeout) {
+    if (hasRealErr) {
+      return {
+        outcome: "fail",
+        exitCode: typeof exitCode === "number" && exitCode > 0 ? exitCode : 1,
+        body: bodyText
+      };
+    }
+    if (exitCode === null || exitCode === 124) {
+      return {
+        outcome: "timeout",
+        exitCode: exitCode === 124 ? 124 : null,
+        body: bodyText
+      };
+    }
+  }
+
+  if (lowerVerb.includes("failed with error")) {
+    return {
+      outcome: "fail",
+      exitCode: typeof exitCode === "number" && exitCode > 0 ? exitCode : 1,
+      body: bodyText
+    };
+  }
+  if (exitCode === 0) {
+    return { outcome: "pass", exitCode: 0, body: bodyText };
+  }
+  if (typeof exitCode === "number" && exitCode > 0) {
+    return { outcome: "fail", exitCode, body: bodyText };
+  }
+  return null;
+}
+
+function parseSingleBackgroundTaskCompletion(segmentText) {
+  if (!segmentText || typeof segmentText !== "string") return null;
+  const finishMatch = segmentText.match(BG_TASK_SYSTEM_FINISH_RE);
+  let taskId = finishMatch && finishMatch[1] ? finishMatch[1].trim() : "";
+  let verb = finishMatch && finishMatch[2] ? finishMatch[2].toLowerCase() : "";
+  let afterBanner = finishMatch ? segmentText.slice((finishMatch.index || 0) + finishMatch[0].length) : "";
+  if (!taskId) {
+    const senderMatch = segmentText.match(BG_TASK_SENDER_RE);
+    if (!senderMatch || !senderMatch[1]) return null;
+    taskId = senderMatch[1].trim();
+    afterBanner = segmentText;
+  }
+  const { headerPart: harnessHeader, outputPart: rawCmdOutput, hasOutputSection } = splitHarnessHeaderAndOutput(afterBanner);
+  const cmdOutput =
+    hasOutputSection || finishMatch
+      ? rawCmdOutput
+      : rawCmdOutput.replace(/^\s*\[Message\][^\n]*(?:\n|$)/i, "");
+
+  const classified = classifyCheckCompletionOutcome({
+    verb,
+    rawText: afterBanner,
+    headerPart: harnessHeader,
+    outputPart: cmdOutput,
+    hasOutputSection
+  });
+  if (!classified) return null;
+  return {
+    taskId,
+    outcome: classified.outcome,
+    exitCode: classified.exitCode,
+    body: classified.body
+  };
+}
+
+function parseBackgroundTaskCompletions(msgText) {
+  if (!msgText || typeof msgText !== "string") return [];
+  const stripped = msgText
+    .replace(/\r\n/g, "\n")
+    .replace(/\r/g, "\n")
+    .replace(/<\/?SYSTEM_MESSAGE>/gi, "\n");
+  const segments = stripped.split(
+    /(?=(?:^|\n)\s*(?:\[Message\]\s+(?:timestamp|sender|priority|content)=|Task\s+id\s+"[^"]+"\s+(?:finished|failed|was cancel(?:ed|led))\b))/i
+  );
+  const out = [];
+  for (const seg of segments) {
+    const parsed = parseSingleBackgroundTaskCompletion(seg.trim());
+    if (parsed) out.push(parsed);
+  }
+  return out;
+}
+
 function isStepTimeoutOnlyResult(step, bareTool = "") {
   if (!step || typeof step !== "object") return false;
+  if (isStepBackgroundLaunchResult(step, bareTool)) return false;
   const text = typeof step.content === "string" ? step.content : "";
   // Never mask atomic/edit errors or explicit FAIL/ERROR banners as timeout-only
   if (
@@ -1141,16 +2992,28 @@ function isStepTimeoutOnlyResult(step, bareTool = "") {
     return false;
   }
   if (text && (text.includes("Verify [TIMEOUT") || text.includes("Verify [NOT RUN:"))) {
-    return true;
+    const idx = text.indexOf("Verify [TIMEOUT");
+    const afterVerify = idx >= 0 ? text.slice(idx).replace(/^Verify \[TIMEOUT[^\]]*\][^\n]*(?:\n|$)/i, "") : "";
+    return !hasRealCodeErrorOutput(afterVerify);
   }
   if (text && (text.includes("## [TIMEOUT") || text.includes("## [SKIPPED]"))) {
-    return true;
+    return !hasRealCodeErrorOutput(text);
   }
+  const rawCode = step.exit_code ?? step.exitCode;
+  const explicitCode = typeof rawCode === "number" && Number.isFinite(rawCode) ? rawCode : null;
   if (step.timed_out === true || step.timedOut === true) {
-    return !(text && REAL_CODE_ERROR_TEXT_RE.test(text));
+    return !hasRealCodeErrorOutput(text) && (explicitCode === null || explicitCode === 124);
   }
-  if (text && STEP_PURE_TIMEOUT_TEXT_RE.test(text) && !REAL_CODE_ERROR_TEXT_RE.test(text)) {
-    if (!bareTool || !READ_ONLY_INSPECT_TOOLS.has(bareTool)) {
+  if (text && (!bareTool || !READ_ONLY_INSPECT_TOOLS.has(bareTool))) {
+    const { headerPart, outputPart, hasOutputSection } = splitHarnessHeaderAndOutput(text);
+    const classified = classifyCheckCompletionOutcome({
+      rawText: text,
+      headerPart,
+      outputPart,
+      hasOutputSection,
+      explicitExitCode: explicitCode
+    });
+    if (classified && classified.outcome === "timeout") {
       return true;
     }
   }
@@ -1192,6 +3055,7 @@ function extractFailureProfile(failedResults) {
 function isStepFailureResult(step, bareTool = "") {
   if (!step || typeof step !== "object") return false;
   if (isStepCanceledResult(step)) return false;
+  if (isStepBackgroundLaunchResult(step, bareTool)) return false;
   if (isStepTimeoutOnlyResult(step, bareTool)) return false;
   if (step.status === "ERROR" || step.is_error === true || step.isError === true) return true;
   const code = step.exit_code ?? step.exitCode;
@@ -1230,7 +3094,7 @@ function isStepFailureResult(step, bareTool = "") {
   return false;
 }
 
-function extractCallEditPaths(call) {
+function extractCallEditPaths(call, options = {}) {
   const { bareTool, args } = unwrapEffectiveTool(call);
   const paths = [];
   if (
@@ -1241,14 +3105,14 @@ function extractCallEditPaths(call) {
     bareTool === "multi_replace_file_content"
   ) {
     const p = normPath(args.Path ?? args.path ?? args.TargetFile ?? args.targetFile ?? args.filePath ?? args.AbsolutePath);
-    if (p) paths.push(p);
+    if (p && !isEphemeralNonProjectPath(p, args, options)) paths.push(p);
   } else if ((bareTool === "apply_edits" || /(?:^|_)apply_edits$/.test(bareTool)) && !args.dryRun) {
     const baseCwd = args.cwd || "";
     if (Array.isArray(args.edits)) {
       for (const e of args.edits) {
         if (e && e.path) {
           const p = normPath(e.path, baseCwd);
-          if (p) paths.push(p);
+          if (p && !isEphemeralNonProjectPath(p, null, options)) paths.push(p);
         }
       }
     }
@@ -1256,8 +3120,34 @@ function extractCallEditPaths(call) {
   return paths;
 }
 
-const REAL_VERIFY_CMD_RE =
-  /\b(?:test|vitest|jest|pytest|mocha|ava|playwright|cypress|cargo\s+(?:test|check|build|clippy)|go\s+(?:test|build|vet)|tsc|typecheck|lint|eslint|biome|ruff|flake8|mypy|gradle|mvn|dotnet\s+(?:test|build)|make|cmake|npm\s+(?:test|t|run\s+(?:build|check|verify|lint|test|typecheck|prefix:budget|verify:pkg|brief:check))|pnpm\s+(?:build|check|verify|lint|test|typecheck)|yarn\s+(?:build|check|verify|lint|test|typecheck)|bun\s+(?:test|build)|node\s+--test)\b/i;
+const REAL_VERIFY_STAGE_RE =
+  /^(?:(?:vitest|jest|pytest|mocha|ava|playwright|cypress|unittest|rspec|phpunit|ctest|tsc|vue-tsc|svelte-check|typecheck|type-check|eslint|oxlint|biome|ruff|flake8|mypy|pyright|basedpyright|pylint|stylelint|shellcheck|webpack|rollup|tsup|esbuild|swc|gradle|gradlew|mvn|mvnw|make|cmake|doc-health-check|health-check|healthcheck)(?:\.(?:exe|cmd|bat|ps1|sh))?(?:\s|$)|prettier(?:\.(?:exe|cmd))?\s+(?:.*\s)?--check(?:\s|$)|node(?:\.exe)?\s+(?:--[a-z0-9-]+(?:=\S+)?\s+)*--test(?:\s|$)|deno(?:\.exe)?\s+(?:test|check|lint)(?:\s|$)|cargo(?:\.exe)?\s+(?:test|check|build|clippy)(?:\s|$)|go(?:\.exe)?\s+(?:test|build|vet)(?:\s|$)|dotnet(?:\.exe)?\s+(?:test|build)(?:\s|$)|(?:electron-)?vite(?:\.(?:exe|cmd))?\s+build(?:\s|$)|(?:next|nuxt|astro|svelte-kit|remix|rsbuild|parcel|turbo|nx)(?:\.(?:exe|cmd))?\s+(?:build|typecheck|lint|check|test)(?:\s|$)|npm(?:\.cmd)?\s+(?:(?:--(?:prefix|cwd|dir|filter|workspace)(?:=|\s+)\S+|-(?:w|C)\s+\S+)\s+)*(?:t|test|run(?:-script)?\s+[a-z0-9_.:/-]*(?:build|check|verify|lint|test|typecheck|type-check|validate|audit|smoke|e2e|health|prefix:budget)[a-z0-9_.:/-]*)(?:\s|$)|(?:pnpm|yarn|bun)(?:\.cmd)?\s+(?:(?:--(?:prefix|cwd|dir|filter|workspace)(?:=|\s+)\S+|-w|-(?:C|F)\s+\S+)\s+)*(?:t|test|(?:run\s+)?[a-z0-9_.:/-]*(?:build|check|verify|lint|test|typecheck|type-check|validate|audit|smoke|e2e|health|prefix:budget)[a-z0-9_.:/-]*)(?:\s|$)|(?:(?:node|tsx|ts-node|bun|deno|python3?|py|bash|sh|zsh|pwsh|powershell|ruby|perl)(?:\.exe)?(?:\s+(?:-ExecutionPolicy\s+\S+|-[a-zA-Z0-9-]+))*\s+)?(?:"[^"]*[\\/]scripts[\\/]|'[^']*[\\/]scripts[\\/]|["']?(?:(?:[a-z]:[\\/][^"'\s]*[\\/]|[\\/][^"'\s]*[\\/]|\.\.?[\\/])?)scripts[\\/])[a-z0-9_.-]*(?:check|verify|lint|test|validate|build|audit)[a-z0-9_.-]*)/i;
+
+function isRealVerifyCommand(cmdStr) {
+  const { clauses } = splitShellClauses(cmdStr);
+  if (clauses.length === 0) return false;
+  for (const clause of clauses) {
+    if (isPureSetupClause(clause) || isReadOnlyClause(clause)) continue;
+    const stages = splitOutsideQuotes(clause, (s, i) => (s[i] === "|" ? 1 : 0));
+    if (stages.length === 0) continue;
+    const stripped = stripRunnerPrefix(normalizeStageCommandHead(stages[0]));
+    if (REAL_VERIFY_STAGE_RE.test(stripped)) return true;
+  }
+  return false;
+}
+
+function isConvergingVerifyCommand(cmdStr) {
+  const { clauses, operators } = getTrailingSemicolonSegment(cmdStr);
+  if (clauses.length === 0 || operators.includes("||")) return false;
+  for (const clause of clauses) {
+    if (isPureSetupClause(clause) || isReadOnlyClause(clause) || clauseHasFilterStage(clause)) continue;
+    const stages = splitOutsideQuotes(clause, (s, i) => (s[i] === "|" ? 1 : 0));
+    if (stages.length === 0) continue;
+    const stripped = stripRunnerPrefix(normalizeStageCommandHead(stages[0]));
+    if (REAL_VERIFY_STAGE_RE.test(stripped)) return true;
+  }
+  return false;
+}
 
 function isCheckOrVerifyCall(call) {
   const { bareTool, args } = unwrapEffectiveTool(call);
@@ -1265,8 +3155,8 @@ function isCheckOrVerifyCall(call) {
     return true;
   }
   if (bareTool === "run_command" && args && typeof args === "object") {
-    const cmdStr = String(args.CommandLine ?? args.commandLine ?? args.command ?? "");
-    return REAL_VERIFY_CMD_RE.test(cmdStr);
+    const cmdStr = unwrapQuotedWrapperArg(String(args.CommandLine ?? args.commandLine ?? args.command ?? ""));
+    return isRealVerifyCommand(cmdStr);
   }
   if ((bareTool === "apply_edits" || /(?:^|_)apply_edits$/.test(bareTool)) && args && args.verify) {
     return true;
@@ -1835,11 +3725,204 @@ export function analyzeTranscriptCache(steps, options = {}) {
   let editEpoch = 0;
   const lastPassCheckEpoch = new Map();
   let pendingEditFiles = new Set();
-  const fileOscState = new Map(); // normPath -> { label, failCycles, oscCount, seenErrorKinds, bestPassedCount }
+  const sessionEditedFiles = new Set();
+  const fileLastEditEpoch = new Map(); // normPath -> editEpoch
+  const fileOscState = new Map(); // normPath -> { label, failCycles, oscCount, seenErrorKinds, bestPassedCount, lastFailEditEpoch, lastFailStep }
+  const pendingBgChecks = new Map(); // taskId -> { cmdStr, launchEditEpoch, launchStep, canConverge, filesAtLaunch: Set<string> }
+  const deferredBgPasses = new Map(); // launchEditEpoch -> max launchStep of passed checks waiting for same-epoch siblings
+  const epochBgFailedStep = new Map(); // launchEditEpoch -> max settlement step index of a real check failure in that epoch
+  let checkSeq = 0;
+  let latestCheck = null;
+  const checkSlots = new Map(); // checkKey -> latest confirmed pass/fail record for that specific check identity
+  const checkHistory = []; // bounded chronological check settlements (including stale late background notices)
+  const MAX_CHECK_HISTORY = 20;
 
-  const recordFileFailureCycle = (filesIterable, failedResults) => {
+  const pushCheckHistory = (entry) => {
+    if (!entry) return;
+    checkHistory.push(entry);
+    if (checkHistory.length > MAX_CHECK_HISTORY) {
+      checkHistory.splice(0, checkHistory.length - MAX_CHECK_HISTORY);
+    }
+  };
+
+  const resolveMissingRunChecksFailures = (passEpoch, passStepIndex, passBatchIds = [], passTotalCount = 0) => {
+    for (const [k, slot] of Array.from(checkSlots.entries())) {
+      if (slot && slot.outcome === "fail" && slot.missingDetails) {
+        if ((slot.editEpoch ?? 0) > passEpoch) continue;
+        if (slot.editEpoch === passEpoch && (slot.stepIndex ?? -1) >= passStepIndex && passStepIndex >= 0) {
+          continue;
+        }
+        if (!doesBatchPassResolveMissingFailure(passBatchIds, slot, { passTotalCount })) {
+          continue;
+        }
+        checkSlots.delete(k);
+      }
+    }
+  };
+
+  const recordCheckOutcome = ({
+    outcome,
+    kind = "",
+    name = "",
+    command = "",
+    exitCode = null,
+    body = "",
+    files = [],
+    editEpoch: recEpoch = editEpoch,
+    stepIndex = -1,
+    launchStep = -1,
+    at = null,
+    missingDetails = false,
+    missingFailureCount = 0,
+    summaryHeader = "",
+    batchKeys = null,
+    batchIdentities = null,
+    batchCommands = null,
+    batchTotalCount = 0,
+    batchNames = null
+  }) => {
+    if (outcome !== "pass" && outcome !== "fail" && outcome !== "timeout") return;
+    checkSeq += 1;
+    const safeKind = kind || classifyCheckKind(name, command);
+    const safeName = missingDetails && !name && !command
+      ? (summaryHeader || "run_checks")
+      : formatCheckDisplayName(name, command);
+    const cleanCmd = String(command || "").trim().slice(0, 140);
+    const cleanFiles = Array.from(new Set(files || []))
+      .filter(Boolean)
+      .map((f) => shortTargetLabel(f, 48))
+      .slice(0, 3);
+    const effectiveLaunchStep = launchStep >= 0 ? launchStep : stepIndex;
+    const identity = extractCheckIdentity(safeKind, name, cleanCmd, { missingDetails, batchKeys });
+    const cleanBatchNames = Array.isArray(batchNames)
+      ? Array.from(new Set(batchNames.map((n) => String(n || "").replace(/\s+/g, " ").trim()).filter(Boolean))).slice(0, 4)
+      : [];
+
+    if (outcome === "timeout") {
+      const rec = {
+        outcome: "timeout",
+        kind: safeKind,
+        checkKey: identity.checkKey,
+        name: safeName,
+        command: cleanCmd,
+        exitCode: exitCode === 124 ? 124 : null,
+        firstErrorLine: "",
+        errorExcerpt: "",
+        missingDetails: false,
+        missingFailureCount: 0,
+        summaryHeader: "",
+        files: cleanFiles,
+        editEpoch: recEpoch,
+        launchStep: effectiveLaunchStep,
+        stepIndex,
+        seq: checkSeq,
+        at: at || null
+      };
+      latestCheck = rec;
+      pushCheckHistory({ ...rec, stale: false, staleReason: null });
+      return;
+    }
+    if (outcome === "fail") {
+      const { firstErrorLine, errorExcerpt } = missingDetails
+        ? { firstErrorLine: "", errorExcerpt: "" }
+        : extractCheckErrorDetails(body);
+      const rec = {
+        outcome: "fail",
+        kind: safeKind,
+        checkKey: identity.checkKey,
+        _identity: identity,
+        ...(missingDetails && Array.isArray(batchIdentities) && batchIdentities.length > 0
+          ? { _batchIdentities: batchIdentities }
+          : {}),
+        name: safeName,
+        command: cleanCmd,
+        exitCode: missingDetails
+          ? null
+          : typeof exitCode === "number" && exitCode > 0
+            ? exitCode
+            : 1,
+        firstErrorLine,
+        errorExcerpt,
+        missingDetails: Boolean(missingDetails),
+        missingFailureCount: missingDetails ? Math.max(1, Number(missingFailureCount) || 1) : 0,
+        ...(missingDetails && Array.isArray(identity.batchKeys) && identity.batchKeys.length > 0
+          ? { batchKeys: identity.batchKeys.slice(0, 12) }
+          : {}),
+        ...(missingDetails && Array.isArray(batchCommands) && batchCommands.length > 0
+          ? { batchCommands: batchCommands.slice(0, 10) }
+          : {}),
+        ...(missingDetails && Number(batchTotalCount || 0) > 0
+          ? { batchTotalCount: Number(batchTotalCount) }
+          : {}),
+        summaryHeader: typeof summaryHeader === "string" ? summaryHeader.trim().slice(0, 140) : "",
+        files: cleanFiles,
+        editEpoch: recEpoch,
+        launchStep: effectiveLaunchStep,
+        stepIndex,
+        seq: checkSeq,
+        at: at || null
+      };
+      checkSlots.set(identity.checkKey, rec);
+      latestCheck = rec;
+      pushCheckHistory({ ...rec, _identity: undefined, _batchIdentities: undefined, stale: false, staleReason: null });
+      return;
+    }
+    // outcome === "pass"
+    const prevSameSlot = checkSlots.get(identity.checkKey);
+    if (prevSameSlot && prevSameSlot.outcome === "fail") {
+      if ((prevSameSlot.editEpoch ?? 0) > recEpoch) return;
+      if (prevSameSlot.editEpoch === recEpoch && (prevSameSlot.stepIndex ?? -1) >= stepIndex && stepIndex >= 0) {
+        return;
+      }
+    }
+    for (const [slotKey, slot] of Array.from(checkSlots.entries())) {
+      if (!slot || slot.outcome !== "fail") continue;
+      const failId = slot._identity || extractCheckIdentity(slot.kind, slot.name, slot.command, { missingDetails: slot.missingDetails });
+      if (!doesPassResolveFailure(identity, failId)) continue;
+      if ((slot.editEpoch ?? 0) > recEpoch) continue;
+      if (slot.editEpoch === recEpoch && (slot.stepIndex ?? -1) >= stepIndex && stepIndex >= 0) {
+        continue;
+      }
+      checkSlots.delete(slotKey);
+    }
+    const rec = {
+      outcome: "pass",
+      kind: safeKind,
+      checkKey: identity.checkKey,
+      _identity: identity,
+      name: safeName,
+      command: cleanCmd,
+      ...(cleanBatchNames.length > 1 ? { batchNames: cleanBatchNames } : {}),
+      exitCode: 0,
+      firstErrorLine: "",
+      errorExcerpt: "",
+      missingDetails: false,
+      missingFailureCount: 0,
+      summaryHeader: "",
+      files: cleanFiles,
+      editEpoch: recEpoch,
+      launchStep: effectiveLaunchStep,
+      stepIndex,
+      seq: checkSeq,
+      at: at || null
+    };
+    checkSlots.set(identity.checkKey, rec);
+    if (
+      !(latestCheck && latestCheck.outcome === "fail" && latestCheck.stepIndex === stepIndex && stepIndex >= 0) &&
+      !(latestCheck && (latestCheck.editEpoch ?? 0) > recEpoch)
+    ) {
+      latestCheck = rec;
+    }
+    pushCheckHistory({ ...rec, _identity: undefined, _batchIdentities: undefined, stale: false, staleReason: null });
+  };
+
+  const recordFileFailureCycle = (filesIterable, failedResults, failEditEpoch = editEpoch, failStep = -1) => {
     const uniqueFiles = Array.from(new Set(filesIterable)).filter(Boolean);
     if (uniqueFiles.length === 0) return;
+    if (failStep >= 0) {
+      epochBgFailedStep.set(failEditEpoch, Math.max(epochBgFailedStep.get(failEditEpoch) ?? -1, failStep));
+      deferredBgPasses.delete(failEditEpoch);
+    }
     const { errorKind, passedCount } = extractFailureProfile(failedResults);
     for (const f of uniqueFiles) {
       let st = fileOscState.get(f);
@@ -1849,12 +3932,16 @@ export function analyzeTranscriptCache(steps, options = {}) {
           failCycles: 1,
           oscCount: 1,
           seenErrorKinds: new Set(errorKind !== "generic" ? [errorKind] : []),
-          bestPassedCount: passedCount !== null ? passedCount : 0
+          bestPassedCount: passedCount !== null ? passedCount : 0,
+          lastFailEditEpoch: failEditEpoch,
+          lastFailStep: failStep
         };
         fileOscState.set(f, st);
         continue;
       }
       st.failCycles += 1;
+      st.lastFailEditEpoch = Math.max(st.lastFailEditEpoch ?? 0, failEditEpoch);
+      st.lastFailStep = Math.max(st.lastFailStep ?? -1, failStep);
       const passedImproved = passedCount !== null && passedCount > st.bestPassedCount;
       const isNewSpecificError = errorKind !== "generic" && !st.seenErrorKinds.has(errorKind);
       if (passedCount !== null && passedCount > st.bestPassedCount) {
@@ -1869,6 +3956,263 @@ export function analyzeTranscriptCache(steps, options = {}) {
         // Progressed past prior error class into a distinct new failure stage
       } else {
         st.oscCount += 1;
+      }
+    }
+  };
+
+  const hasSiblingBgCheckForEpoch = (epoch) => {
+    const failMark = epochBgFailedStep.get(epoch) ?? -1;
+    for (const other of pendingBgChecks.values()) {
+      if (other.canConverge && other.launchEditEpoch === epoch && other.launchStep > failMark) {
+        return true;
+      }
+    }
+    return false;
+  };
+
+  const applyBgPassToState = (launchEditEpoch, launchStep) => {
+    if (launchStep <= (epochBgFailedStep.get(launchEditEpoch) ?? -1)) return;
+    for (const [f, st] of Array.from(fileOscState.entries())) {
+      if (
+        (st.lastFailEditEpoch ?? 0) <= launchEditEpoch &&
+        (st.lastFailStep ?? -1) < launchStep
+      ) {
+        fileOscState.delete(f);
+      }
+    }
+    for (const f of Array.from(pendingEditFiles)) {
+      if ((fileLastEditEpoch.get(f) ?? 0) <= launchEditEpoch) {
+        pendingEditFiles.delete(f);
+      }
+    }
+  };
+
+  const flushDeferredBgPassIfReady = (epoch) => {
+    if (hasSiblingBgCheckForEpoch(epoch)) return;
+    if (!deferredBgPasses.has(epoch)) return;
+    const passLaunchStep = deferredBgPasses.get(epoch);
+    deferredBgPasses.delete(epoch);
+    applyBgPassToState(epoch, passLaunchStep);
+  };
+
+  const findCoveringNewerSlot = (taskIdentity, launchEditEpoch, launchStep) => {
+    let broaderReason = null;
+    for (const slot of checkSlots.values()) {
+      if (!slot) continue;
+      const slotEpoch = slot.editEpoch ?? 0;
+      const slotLaunchStep = slot.launchStep ?? slot.stepIndex ?? -1;
+      const isNewer =
+        slotEpoch > launchEditEpoch ||
+        (slotEpoch === launchEditEpoch && slotLaunchStep > launchStep);
+      if (!isNewer) continue;
+      if (slot.checkKey === taskIdentity.checkKey) {
+        return "superseded_same_check";
+      }
+      if (slot.outcome === "pass") {
+        const slotId =
+          slot._identity ||
+          extractCheckIdentity(slot.kind, slot.name, slot.command, { missingDetails: slot.missingDetails });
+        if (doesPassResolveFailure(slotId, taskIdentity)) {
+          broaderReason = "superseded_by_newer_check";
+        }
+      }
+    }
+    return broaderReason;
+  };
+
+  const settleBackgroundCheck = (taskId, outcome, exitCode, bodyText, currentStepIdx = -1, stepAt = null) => {
+    if (!taskId || !pendingBgChecks.has(taskId)) return;
+    const task = pendingBgChecks.get(taskId);
+    pendingBgChecks.delete(taskId);
+    const taskKind = classifyCheckKind("", task.cmdStr);
+    const taskName = formatCheckDisplayName("", task.cmdStr);
+    const taskIdentity = extractCheckIdentity(taskKind, taskName, task.cmdStr);
+    const cleanTaskFiles = Array.from(new Set(task.filesAtLaunch || []))
+      .filter(Boolean)
+      .map((f) => shortTargetLabel(f, 48))
+      .slice(0, 3);
+    const settleStepMark = currentStepIdx >= 0 ? currentStepIdx : task.launchStep;
+
+    const coveringStaleReason = findCoveringNewerSlot(taskIdentity, task.launchEditEpoch, task.launchStep);
+    const isOlderEpochThanLatestCheck = Boolean(
+      latestCheck && task.launchEditEpoch < (latestCheck.editEpoch ?? 0)
+    );
+    const timeoutStaleReason =
+      coveringStaleReason ||
+      (isOlderEpochThanLatestCheck && latestCheck?.outcome === "fail" ? "superseded_by_newer_check" : null);
+
+    if (outcome === "canceled") {
+      if (task.canConverge) {
+        flushDeferredBgPassIfReady(task.launchEditEpoch);
+      }
+      return;
+    }
+    if (outcome === "timeout") {
+      if (timeoutStaleReason) {
+        checkSeq += 1;
+        pushCheckHistory({
+          outcome: "timeout",
+          kind: taskKind,
+          checkKey: taskIdentity.checkKey,
+          name: taskName,
+          command: String(task.cmdStr || "").trim().slice(0, 140),
+          exitCode: exitCode === 124 ? 124 : null,
+          firstErrorLine: "",
+          errorExcerpt: "",
+          missingDetails: false,
+          missingFailureCount: 0,
+          summaryHeader: "",
+          files: cleanTaskFiles,
+          editEpoch: task.launchEditEpoch,
+          launchStep: task.launchStep,
+          stepIndex: settleStepMark,
+          seq: checkSeq,
+          at: stepAt || null,
+          stale: true,
+          staleReason: timeoutStaleReason
+        });
+        if (task.canConverge) {
+          flushDeferredBgPassIfReady(task.launchEditEpoch);
+        }
+        return;
+      }
+      recordCheckOutcome({
+        outcome: "timeout",
+        kind: taskKind,
+        name: taskName,
+        command: task.cmdStr,
+        exitCode,
+        body: bodyText,
+        files: task.filesAtLaunch,
+        editEpoch: task.launchEditEpoch,
+        launchStep: task.launchStep,
+        stepIndex: settleStepMark,
+        at: stepAt
+      });
+      return;
+    }
+    if (outcome === "pass") {
+      if (!task.canConverge) return;
+      if (coveringStaleReason) {
+        checkSeq += 1;
+        pushCheckHistory({
+          outcome: "pass",
+          kind: taskKind,
+          checkKey: taskIdentity.checkKey,
+          name: taskName,
+          command: String(task.cmdStr || "").trim().slice(0, 140),
+          exitCode: 0,
+          firstErrorLine: "",
+          errorExcerpt: "",
+          missingDetails: false,
+          missingFailureCount: 0,
+          summaryHeader: "",
+          files: cleanTaskFiles,
+          editEpoch: task.launchEditEpoch,
+          launchStep: task.launchStep,
+          stepIndex: settleStepMark,
+          seq: checkSeq,
+          at: stepAt || null,
+          stale: true,
+          staleReason: coveringStaleReason
+        });
+        return;
+      }
+      recordCheckOutcome({
+        outcome: "pass",
+        kind: taskKind,
+        name: taskName,
+        command: task.cmdStr,
+        exitCode: 0,
+        body: bodyText,
+        files: task.filesAtLaunch,
+        editEpoch: task.launchEditEpoch,
+        launchStep: task.launchStep,
+        stepIndex: task.launchStep,
+        at: stepAt
+      });
+      if (task.launchStep <= (epochBgFailedStep.get(task.launchEditEpoch) ?? -1)) {
+        flushDeferredBgPassIfReady(task.launchEditEpoch);
+        return;
+      }
+      if (hasSiblingBgCheckForEpoch(task.launchEditEpoch)) {
+        const prev = deferredBgPasses.get(task.launchEditEpoch) ?? -1;
+        deferredBgPasses.set(task.launchEditEpoch, Math.max(prev, task.launchStep));
+        return;
+      }
+      const prevDeferred = deferredBgPasses.get(task.launchEditEpoch) ?? -1;
+      deferredBgPasses.delete(task.launchEditEpoch);
+      applyBgPassToState(task.launchEditEpoch, Math.max(task.launchStep, prevDeferred));
+      return;
+    }
+    if (outcome === "fail") {
+      if (isZeroMatchFilterExit(task.cmdStr, bodyText, exitCode)) {
+        if (task.canConverge) {
+          flushDeferredBgPassIfReady(task.launchEditEpoch);
+        }
+        return;
+      }
+      // A real failure for this snapshot poisons any concurrent sibling pass for the same editEpoch
+      const failStepMark = settleStepMark;
+      if (coveringStaleReason) {
+        const { firstErrorLine, errorExcerpt } = extractCheckErrorDetails(bodyText);
+        checkSeq += 1;
+        pushCheckHistory({
+          outcome: "fail",
+          kind: taskKind,
+          checkKey: taskIdentity.checkKey,
+          name: taskName,
+          command: String(task.cmdStr || "").trim().slice(0, 140),
+          exitCode: typeof exitCode === "number" && exitCode > 0 ? exitCode : 1,
+          firstErrorLine,
+          errorExcerpt,
+          missingDetails: false,
+          missingFailureCount: 0,
+          summaryHeader: "",
+          files: cleanTaskFiles,
+          editEpoch: task.launchEditEpoch,
+          launchStep: task.launchStep,
+          stepIndex: failStepMark,
+          seq: checkSeq,
+          at: stepAt || null,
+          stale: true,
+          staleReason: coveringStaleReason
+        });
+      } else {
+        recordCheckOutcome({
+          outcome: "fail",
+          kind: taskKind,
+          name: taskName,
+          command: task.cmdStr,
+          exitCode,
+          body: bodyText,
+          files: task.filesAtLaunch,
+          editEpoch: task.launchEditEpoch,
+          launchStep: task.launchStep,
+          stepIndex: failStepMark,
+          at: stepAt
+        });
+      }
+      epochBgFailedStep.set(
+        task.launchEditEpoch,
+        Math.max(epochBgFailedStep.get(task.launchEditEpoch) ?? -1, failStepMark)
+      );
+      deferredBgPasses.delete(task.launchEditEpoch);
+      const stillTracked = Array.from(task.filesAtLaunch).filter(
+        (f) => pendingEditFiles.has(f) && (fileLastEditEpoch.get(f) ?? 0) <= task.launchEditEpoch
+      );
+      if (stillTracked.length > 0) {
+        recordFileFailureCycle(
+          stillTracked,
+          [{ content: bodyText || "", exit_code: exitCode ?? 1, status: "ERROR" }],
+          task.launchEditEpoch,
+          failStepMark
+        );
+        for (const f of stillTracked) {
+          if ((fileLastEditEpoch.get(f) ?? 0) <= task.launchEditEpoch) {
+            pendingEditFiles.delete(f);
+          }
+        }
       }
     }
   };
@@ -1983,10 +4327,18 @@ export function analyzeTranscriptCache(steps, options = {}) {
     }
 
     if (step.type === "SYSTEM_MESSAGE") {
+      const msgText = extractStepText(step.content ?? step.text).trim();
       if (hasSeenPlanner) {
-        const msgText = extractStepText(step.content ?? step.text).trim();
         if (msgText.length > 0 && !TTL_KEEPALIVE_STEP_RE.test(msgText)) {
           systemMsgSincePrev = true;
+        }
+      }
+      if (!stepIsSubagent && msgText.length > 0 && pendingBgChecks.size > 0) {
+        const bgCompletions = parseBackgroundTaskCompletions(msgText);
+        for (const bgDone of bgCompletions) {
+          if (bgDone && pendingBgChecks.has(bgDone.taskId)) {
+            settleBackgroundCheck(bgDone.taskId, bgDone.outcome, bgDone.exitCode, bgDone.body, i, step.created_at || null);
+          }
         }
       }
       if (stepIsSubagent) {
@@ -2126,8 +4478,11 @@ export function analyzeTranscriptCache(steps, options = {}) {
 
     const currTurnTools = [];
     const turnEditedFiles = [];
-    let turnRanCheck = false;
+    let turnRanSyncCheck = false;
     const callBareTools = [];
+    const callInfoList = [];
+    const callInfoById = new Map();
+    const turnLaunchedBgChecks = [];
     const resultByCallId = new Map();
     const bareToolByCallId = new Map();
     for (const r of followingResults) {
@@ -2147,8 +4502,89 @@ export function analyzeTranscriptCache(steps, options = {}) {
       followingResults.length > 0 && followingResults.every((r) => isStepCanceledResult(r));
     const isTurnAborted = isStepLevelAborted || allFollowingCanceled;
 
-    // Track duplicate read_file / view_file calls, edit invalidations, loop fingerprints & edit<->fail oscillations
+    // Pre-collect non-canceled edited project paths & metadata for this turn so parallel tool_calls
+    // (e.g. run_checks ordered before edit_file) share one consistent candidate set and editEpoch.
+    const preparedCalls = [];
     if (Array.isArray(step.tool_calls)) {
+      for (let callIdx = 0; callIdx < step.tool_calls.length; callIdx++) {
+        const call = step.tool_calls[callIdx];
+        const name = call?.name || "";
+        const args = getCallArgs(call);
+        const eff = unwrapEffectiveTool(call);
+        const desc = describeToolCall(call);
+        const callId = call?.id ?? call?.tool_call_id ?? call?.call_id ?? null;
+        const callIdKey = callId !== null && callId !== undefined && String(callId).trim() !== "" ? String(callId) : null;
+        const isCheckCall = isCheckOrVerifyCall(call);
+        const isRunChecks = desc.bareTool === "run_checks" || /(?:^|_)run_checks$/.test(desc.bareTool);
+        const isManageTask = desc.bareTool === "manage_task" || /(?:^|_)manage_task$/.test(desc.bareTool);
+        const cmdStr =
+          desc.bareTool === "run_command"
+            ? unwrapQuotedWrapperArg(String(eff.args?.CommandLine ?? eff.args?.commandLine ?? eff.args?.command ?? ""))
+            : "";
+        const verifyCmdStr =
+          desc.bareTool === "apply_edits" || /(?:^|_)apply_edits$/.test(desc.bareTool)
+            ? unwrapQuotedWrapperArg(
+                typeof eff.args?.verify === "string"
+                  ? eff.args.verify
+                  : String(eff.args?.verify?.command ?? "")
+              )
+            : "";
+        const isDaemon = isTruthyBooleanArg(eff.args?.IsDaemon ?? eff.args?.isDaemon);
+        const matchedResult = (callIdKey && resultByCallId.get(callIdKey)) || followingResults[callIdx];
+        const callCanceled = matchedResult ? isStepCanceledResult(matchedResult) : false;
+        const callIsBgLaunch = matchedResult ? isStepBackgroundLaunchResult(matchedResult, desc.bareTool) : false;
+        const callIsZeroMatchFilter =
+          !callIsBgLaunch &&
+          desc.bareTool === "run_command" &&
+          Boolean(matchedResult) &&
+          isZeroMatchFilterExit(
+            cmdStr,
+            typeof matchedResult.content === "string" ? matchedResult.content : "",
+            matchedResult.exit_code ?? matchedResult.exitCode
+          );
+        const edited = extractCallEditPaths(call, options);
+        if (!stepIsSubagent && !isTurnAborted && !callCanceled && edited.length > 0) {
+          for (const ep of edited) {
+            turnEditedFiles.push(ep);
+            sessionEditedFiles.add(ep);
+          }
+          const editCallFailed =
+            !matchedResult || callIsBgLaunch ? false : isStepFailureResult(matchedResult, desc.bareTool);
+          if (!editCallFailed) editEpoch += 1;
+        }
+        preparedCalls.push({
+          call,
+          name,
+          args,
+          eff,
+          desc,
+          callIdKey,
+          isCheckCall,
+          isRunChecks,
+          isManageTask,
+          cmdStr,
+          verifyCmdStr,
+          isDaemon,
+          matchedResult,
+          callCanceled,
+          callIsBgLaunch,
+          callIsZeroMatchFilter,
+          edited
+        });
+      }
+      if (!stepIsSubagent && !isTurnAborted && turnEditedFiles.length > 0) {
+        for (const ep of turnEditedFiles) {
+          fileLastEditEpoch.set(ep, editEpoch);
+        }
+      }
+    }
+
+    const staticCandidateFiles = !stepIsSubagent && !isTurnAborted
+      ? new Set([...turnEditedFiles, ...pendingEditFiles, ...fileOscState.keys(), ...sessionEditedFiles])
+      : null;
+
+    // Track duplicate read_file / view_file calls, edit invalidations, loop fingerprints & edit<->fail oscillations
+    if (preparedCalls.length > 0) {
       const invalidatePath = (pNorm) => {
         if (!pNorm) return;
         const base = path.posix.basename(pNorm);
@@ -2166,16 +4602,30 @@ export function analyzeTranscriptCache(steps, options = {}) {
       };
 
       if (stepIsSubagent) {
-        subRaw.subagentToolCalls += step.tool_calls.length;
+        subRaw.subagentToolCalls += preparedCalls.length;
       } else {
-        subRaw.primaryToolCalls += step.tool_calls.length;
+        subRaw.primaryToolCalls += preparedCalls.length;
       }
 
-      for (let callIdx = 0; callIdx < step.tool_calls.length; callIdx++) {
-        const call = step.tool_calls[callIdx];
-        const name = call?.name || "";
-        const args = getCallArgs(call);
-        const desc = describeToolCall(call);
+      for (let callIdx = 0; callIdx < preparedCalls.length; callIdx++) {
+        const {
+          call,
+          name,
+          args,
+          eff,
+          desc,
+          callIdKey,
+          isCheckCall,
+          isRunChecks,
+          isManageTask,
+          cmdStr,
+          verifyCmdStr,
+          isDaemon,
+          matchedResult,
+          callCanceled,
+          callIsBgLaunch,
+          callIsZeroMatchFilter
+        } = preparedCalls[callIdx];
         callBareTools.push(desc.bareTool);
 
         const callMeasure = estimateTextTokens(serializeToolCallPayload(call));
@@ -2200,15 +4650,37 @@ export function analyzeTranscriptCache(steps, options = {}) {
           consumed: false
         };
         pendingToolCalls.push(callMeta);
-        const callId = call?.id ?? call?.tool_call_id ?? call?.call_id ?? null;
-        const callIdKey = callId !== null && callId !== undefined && String(callId).trim() !== "" ? String(callId) : null;
+        const runChecksEval =
+          isRunChecks && matchedResult && !callCanceled && !callIsBgLaunch
+            ? evaluateRunChecksResult(
+                typeof matchedResult.content === "string" ? matchedResult.content : "",
+                staticCandidateFiles
+              )
+            : null;
+        const callInfo = {
+          bareTool: desc.bareTool,
+          args: eff.args,
+          cmdStr,
+          verifyCmdStr,
+          isDaemon,
+          isCheckCall,
+          isRunChecks,
+          isManageTask,
+          matchedResult,
+          runChecksEval
+        };
+        callInfoList.push(callInfo);
         if (callIdKey) {
           pendingCallsById.set(callIdKey, callMeta);
           bareToolByCallId.set(callIdKey, desc.bareTool);
+          callInfoById.set(callIdKey, callInfo);
         }
-        const matchedResult = (callIdKey && resultByCallId.get(callIdKey)) || followingResults[callIdx];
-        const callCanceled = matchedResult ? isStepCanceledResult(matchedResult) : false;
-        const callFailed = matchedResult ? isStepFailureResult(matchedResult, desc.bareTool) : false;
+        const callFailed =
+          !matchedResult || callCanceled || callIsBgLaunch || callIsZeroMatchFilter
+            ? false
+            : runChecksEval && runChecksEval.recognized
+              ? runChecksEval.outcome === "fail"
+              : isStepFailureResult(matchedResult, desc.bareTool);
         const resultBytes =
           matchedResult && typeof matchedResult.content === "string"
             ? Buffer.byteLength(matchedResult.content, "utf8")
@@ -2223,21 +4695,55 @@ export function analyzeTranscriptCache(steps, options = {}) {
           });
         }
 
-        const edited = extractCallEditPaths(call);
-        const isCheckCall = isCheckOrVerifyCall(call);
         if (!stepIsSubagent && !isTurnAborted && !callCanceled) {
-          for (const ep of edited) turnEditedFiles.push(ep);
-          if (edited.length > 0 && !callFailed) editEpoch += 1;
-          if (isCheckCall) turnRanCheck = true;
+          if (isCheckCall) {
+            if (callIsBgLaunch) {
+              if (!isDaemon) {
+                const bgTaskId = extractBackgroundTaskIdFromLaunch(matchedResult);
+                if (bgTaskId) {
+                  turnLaunchedBgChecks.push({ taskId: bgTaskId, cmdStr });
+                }
+              }
+            } else if (!callIsZeroMatchFilter && !(runChecksEval && runChecksEval.recognized && runChecksEval.outcome === "neutral")) {
+              turnRanSyncCheck = true;
+            }
+          }
+          if (isManageTask && matchedResult) {
+            const mtAction = unwrapQuotedWrapperArg(String(eff.args?.Action ?? eff.args?.action ?? "")).toLowerCase();
+            const mtTaskId = unwrapQuotedWrapperArg(String(eff.args?.TaskId ?? eff.args?.taskId ?? ""));
+            if (mtAction === "kill" && mtTaskId) {
+              settleBackgroundCheck(mtTaskId, "canceled", null, "", i, step.created_at || null);
+            } else if (mtAction === "status" && mtTaskId && pendingBgChecks.has(mtTaskId)) {
+              const mtText = typeof matchedResult.content === "string" ? matchedResult.content : "";
+              const { headerPart: mtHeader, outputPart: mtRawBody, hasOutputSection } = splitHarnessHeaderAndOutput(mtText);
+              const mtClassified = classifyCheckCompletionOutcome({
+                rawText: mtText,
+                headerPart: mtHeader,
+                outputPart: mtRawBody,
+                hasOutputSection
+              });
+              if (mtClassified) {
+                settleBackgroundCheck(
+                  mtTaskId,
+                  mtClassified.outcome,
+                  mtClassified.exitCode,
+                  mtClassified.body,
+                  i,
+                  step.created_at || null
+                );
+              }
+            }
+          }
         }
 
         if (!stepIsSubagent && !isTurnAborted && !callCanceled && !IGNORED_LOOP_TOOLS.has(desc.bareTool)) {
           let effectiveFp = desc.fingerprint;
-          // Passing verification after a fresh edit is healthy TDD progress, not a doom loop
+          // Passing verification (or benign 0-match filter check) after a fresh edit is healthy TDD progress, not a doom loop
           if (
             isCheckCall &&
             Boolean(matchedResult) &&
             !callFailed &&
+            !callIsBgLaunch &&
             editEpoch > 0 &&
             editEpoch > (lastPassCheckEpoch.get(desc.fingerprint) ?? 0)
           ) {
@@ -2308,41 +4814,263 @@ export function analyzeTranscriptCache(steps, options = {}) {
       inToolLoop = !isTurnAborted && (hasActiveToolCalls || followingResults.length > 0);
       if (!isTurnAborted) {
         const failedResults = [];
+        const turnCheckEvents = [];
         let turnTimedOutOnly = false;
+        let turnHasConvergingPass = false;
         for (let rIdx = 0; rIdx < followingResults.length; rIdx++) {
           const r = followingResults[rIdx];
           const rid = r?.tool_call_id ?? r?.call_id ?? r?.toolCallId ?? null;
+          const info =
+            (rid !== null && rid !== undefined && callInfoById.get(String(rid))) || callInfoList[rIdx] || null;
           const bareTool =
-            (rid !== null && rid !== undefined && bareToolByCallId.get(String(rid))) || callBareTools[rIdx] || "";
+            (rid !== null && rid !== undefined && bareToolByCallId.get(String(rid))) ||
+            info?.bareTool ||
+            callBareTools[rIdx] ||
+            "";
+          if (isStepCanceledResult(r) || isStepBackgroundLaunchResult(r, bareTool)) {
+            continue;
+          }
+          const rText = typeof r?.content === "string" ? r.content : "";
+          if (info?.isRunChecks) {
+            const rc =
+              info.runChecksEval && info.matchedResult === r
+                ? info.runChecksEval
+                : evaluateRunChecksResult(rText, staticCandidateFiles);
+            if (rc.recognized) {
+              const batchMeta = extractBatchCheckIdentities(info.args?.commands, rc.blockResults || []);
+              const batchTotalCount = Number(rc.headerTotalCount || batchMeta.identities.length || 0);
+              const passedBatchNames =
+                rc.outcome === "pass" && Array.isArray(rc.blockResults)
+                  ? rc.blockResults
+                      .filter((b) => b && b.outcome === "pass")
+                      .map((b) => b.name || formatCheckDisplayName("", b.cmd))
+                      .filter(Boolean)
+                  : [];
+              if (Array.isArray(rc.blockResults)) {
+                for (let bIdx = 0; bIdx < rc.blockResults.length; bIdx++) {
+                  const blk = rc.blockResults[bIdx];
+                  const isLastCleanPass =
+                    rc.outcome === "pass" &&
+                    blk.outcome === "pass" &&
+                    passedBatchNames.length > 1 &&
+                    bIdx === rc.blockResults.length - 1;
+                  turnCheckEvents.push({
+                    outcome: blk.outcome,
+                    kind: blk.kind,
+                    name: blk.name,
+                    command: blk.cmd,
+                    exitCode: blk.exitCode,
+                    body: blk.body,
+                    missingDetails: Boolean(blk.missingDetails),
+                    missingFailureCount: Number(blk.missingFailureCount || 0),
+                    summaryHeader: blk.summaryHeader || "",
+                    ...(blk.missingDetails
+                      ? {
+                          batchKeys: batchMeta.batchKeys,
+                          batchIdentities: batchMeta.identities,
+                          batchCommands: batchMeta.batchCommands,
+                          batchTotalCount
+                        }
+                      : {}),
+                    ...(isLastCleanPass ? { batchNames: passedBatchNames } : {})
+                  });
+                }
+              }
+              if (rc.outcome === "fail") {
+                failedResults.push({ ...r, content: rc.profileContent || rText });
+              } else if (rc.outcome === "timeout_only") {
+                turnTimedOutOnly = true;
+              } else if (rc.outcome === "pass") {
+                turnHasConvergingPass = true;
+                if ((rc.headerFailedCount ?? 0) === 0) {
+                  resolveMissingRunChecksFailures(editEpoch, i, batchMeta.identities, batchTotalCount);
+                }
+              }
+              continue;
+            }
+          }
+          if (bareTool === "run_command" && info?.cmdStr) {
+            if (isZeroMatchFilterExit(info.cmdStr, rText, r?.exit_code ?? r?.exitCode)) {
+              continue;
+            }
+          }
+          const isApplyEditsCall = bareTool === "apply_edits" || /(?:^|_)apply_edits$/.test(bareTool);
+          const checkCmdForEvent =
+            bareTool === "run_command"
+              ? info?.cmdStr || ""
+              : isApplyEditsCall
+                ? info?.verifyCmdStr || ""
+                : "";
+          const checkCode =
+            typeof (r?.exit_code ?? r?.exitCode) === "number"
+              ? (r?.exit_code ?? r?.exitCode)
+              : extractHarnessExitCode(rText);
           if (isStepFailureResult(r, bareTool)) {
             failedResults.push(r);
+            if (info?.isCheckCall) {
+              turnCheckEvents.push({
+                outcome: "fail",
+                kind: classifyCheckKind("", checkCmdForEvent),
+                name: formatCheckDisplayName("", checkCmdForEvent),
+                command: checkCmdForEvent,
+                exitCode: typeof checkCode === "number" && checkCode > 0 ? checkCode : 1,
+                body: rText
+              });
+            }
           } else if (isStepTimeoutOnlyResult(r, bareTool)) {
             turnTimedOutOnly = true;
+            if (info?.isCheckCall) {
+              turnCheckEvents.push({
+                outcome: "timeout",
+                kind: classifyCheckKind("", checkCmdForEvent),
+                name: formatCheckDisplayName("", checkCmdForEvent),
+                command: checkCmdForEvent,
+                exitCode: checkCode === 124 ? 124 : null,
+                body: rText
+              });
+            }
+          } else if (info?.isCheckCall) {
+            if (bareTool === "run_command") {
+              if (isConvergingVerifyCommand(info.cmdStr)) {
+                turnHasConvergingPass = true;
+                turnCheckEvents.push({
+                  outcome: "pass",
+                  kind: classifyCheckKind("", info.cmdStr),
+                  name: formatCheckDisplayName("", info.cmdStr),
+                  command: info.cmdStr,
+                  exitCode: 0,
+                  body: rText
+                });
+              }
+            } else if (isApplyEditsCall) {
+              if (!info.verifyCmdStr || !isNonConvergingPassCommand(info.verifyCmdStr)) {
+                turnHasConvergingPass = true;
+                if (info.verifyCmdStr) {
+                  turnCheckEvents.push({
+                    outcome: "pass",
+                    kind: classifyCheckKind("", info.verifyCmdStr),
+                    name: formatCheckDisplayName("", info.verifyCmdStr),
+                    command: info.verifyCmdStr,
+                    exitCode: 0,
+                    body: rText
+                  });
+                }
+              }
+            } else {
+              turnHasConvergingPass = true;
+            }
+          }
+        }
+        if (turnCheckEvents.length > 0) {
+          const eventOrder = { pass: 0, timeout: 1, fail: 2 };
+          turnCheckEvents.sort((a, b) => (eventOrder[a.outcome] ?? 0) - (eventOrder[b.outcome] ?? 0));
+          const eventFiles = turnEditedFiles.length > 0 ? turnEditedFiles : Array.from(pendingEditFiles);
+          for (const ev of turnCheckEvents) {
+            recordCheckOutcome({
+              outcome: ev.outcome,
+              kind: ev.kind,
+              name: ev.name,
+              command: ev.command,
+              exitCode: ev.exitCode,
+              body: ev.body,
+              files: eventFiles,
+              editEpoch,
+              launchStep: i,
+              stepIndex: i,
+              at: step.created_at || null,
+              missingDetails: Boolean(ev.missingDetails),
+              missingFailureCount: Number(ev.missingFailureCount || 0),
+              summaryHeader: ev.summaryHeader || "",
+              batchKeys: ev.batchKeys || null,
+              batchIdentities: ev.batchIdentities || null,
+              batchCommands: ev.batchCommands || null,
+              batchTotalCount: Number(ev.batchTotalCount || 0),
+              batchNames: ev.batchNames || null
+            });
           }
         }
         const turnFailed = failedResults.length > 0;
+        const turnPassLeavesSameKindFailure =
+          turnHasConvergingPass &&
+          !turnFailed &&
+          !turnTimedOutOnly &&
+          turnCheckEvents.length > 0 &&
+          turnCheckEvents.every((ev) => ev.outcome === "pass") &&
+          Array.from(checkSlots.values()).some((slot) => {
+            if (!slot || slot.outcome !== "fail") return false;
+            const failId =
+              slot._identity ||
+              extractCheckIdentity(slot.kind, slot.name, slot.command, { missingDetails: slot.missingDetails });
+            if (failId.isBroad) return false;
+            return turnCheckEvents.some((ev) => {
+              const passId = extractCheckIdentity(ev.kind, ev.name, ev.command);
+              return (
+                !passId.isBroad &&
+                passId.kind === slot.kind &&
+                (passId.tool !== "pkg-test" || (Array.isArray(passId.filters) && passId.filters.length > 0))
+              );
+            });
+          });
+        if (turnLaunchedBgChecks.length > 0) {
+          const filesAtLaunch = new Set([...pendingEditFiles, ...turnEditedFiles]);
+          for (const bg of turnLaunchedBgChecks) {
+            pendingBgChecks.set(bg.taskId, {
+              cmdStr: bg.cmdStr,
+              launchEditEpoch: editEpoch,
+              launchStep: i,
+              canConverge: isConvergingVerifyCommand(bg.cmdStr),
+              filesAtLaunch: new Set(filesAtLaunch)
+            });
+          }
+        }
         if (turnEditedFiles.length > 0 && turnFailed) {
-          recordFileFailureCycle(turnEditedFiles, failedResults);
+          recordFileFailureCycle(turnEditedFiles, failedResults, editEpoch, i);
           pendingEditFiles.clear();
         } else if (
           turnEditedFiles.length > 0 &&
-          turnRanCheck &&
+          turnHasConvergingPass &&
           !turnFailed &&
           !turnTimedOutOnly &&
+          !turnPassLeavesSameKindFailure &&
           followingResults.length > 0
         ) {
-          fileOscState.clear();
-          pendingEditFiles.clear();
+          if (hasSiblingBgCheckForEpoch(editEpoch)) {
+            for (const f of turnEditedFiles) {
+              pendingEditFiles.add(f);
+              fileLastEditEpoch.set(f, editEpoch);
+            }
+            deferredBgPasses.set(editEpoch, Math.max(deferredBgPasses.get(editEpoch) ?? -1, i));
+          } else {
+            fileOscState.clear();
+            pendingEditFiles.clear();
+            deferredBgPasses.clear();
+          }
         } else if (turnEditedFiles.length > 0) {
-          for (const f of turnEditedFiles) pendingEditFiles.add(f);
-        } else if (turnRanCheck && turnFailed) {
+          for (const f of turnEditedFiles) {
+            pendingEditFiles.add(f);
+            fileLastEditEpoch.set(f, editEpoch);
+          }
+        } else if (turnRanSyncCheck && turnFailed) {
+          epochBgFailedStep.set(editEpoch, Math.max(epochBgFailedStep.get(editEpoch) ?? -1, i));
+          deferredBgPasses.delete(editEpoch);
           if (pendingEditFiles.size > 0) {
-            recordFileFailureCycle(pendingEditFiles, failedResults);
+            recordFileFailureCycle(pendingEditFiles, failedResults, editEpoch, i);
             pendingEditFiles.clear();
           }
-        } else if (turnRanCheck && !turnFailed && !turnTimedOutOnly && followingResults.length > 0) {
-          fileOscState.clear();
-          pendingEditFiles.clear();
+        } else if (
+          turnHasConvergingPass &&
+          !turnFailed &&
+          !turnTimedOutOnly &&
+          !turnPassLeavesSameKindFailure &&
+          followingResults.length > 0
+        ) {
+          if (hasSiblingBgCheckForEpoch(editEpoch)) {
+            deferredBgPasses.set(editEpoch, Math.max(deferredBgPasses.get(editEpoch) ?? -1, i));
+          } else {
+            fileOscState.clear();
+            pendingEditFiles.clear();
+            deferredBgPasses.clear();
+          }
         }
       }
     }
@@ -2986,6 +5714,46 @@ export function analyzeTranscriptCache(steps, options = {}) {
     reason: loopReason
   };
 
+  const stripInternalCheckFields = (rec) => {
+    if (!rec || typeof rec !== "object") return null;
+    const { _identity, _batchIdentities, ...clean } = rec;
+    return clean;
+  };
+  const unresolvedFailures = Array.from(checkSlots.values())
+    .filter((r) => r && r.outcome === "fail")
+    .sort((a, b) => (b.seq || 0) - (a.seq || 0))
+    .map((r) => stripInternalCheckFields(r));
+  const latestRealFailure = unresolvedFailures[0] || null;
+  const checksByKind = {};
+  for (const rec of checkSlots.values()) {
+    if (!rec) continue;
+    const k = rec.kind || "check";
+    const cur = checksByKind[k];
+    if (!cur) {
+      checksByKind[k] = stripInternalCheckFields(rec);
+    } else if (rec.outcome === "fail" && cur.outcome !== "fail") {
+      checksByKind[k] = stripInternalCheckFields(rec);
+    } else if (rec.outcome === cur.outcome && (rec.seq || 0) > (cur.seq || 0)) {
+      checksByKind[k] = stripInternalCheckFields(rec);
+    }
+  }
+  const checkStatus = {
+    latestCheck: stripInternalCheckFields(latestCheck),
+    latestRealFailure: latestRealFailure ? { ...latestRealFailure } : null,
+    unresolvedFailures,
+    checksByKind,
+    history: checkHistory.map((h) => stripInternalCheckFields(h)).filter(Boolean),
+    hasConfirmedResult: Boolean(latestCheck)
+  };
+  const hasActiveCheckIssue = Boolean(
+    checkStatus.latestCheck?.outcome === "timeout" ||
+      checkStatus.latestCheck?.outcome === "fail" ||
+      checkStatus.unresolvedFailures.length > 0 ||
+      editFailOscillations >= 2
+  );
+  const effectiveCompactAdvice =
+    compactAdvice === "delay_hot_cache" && hasActiveCheckIssue ? "none" : compactAdvice;
+
   const recentTurns = allTurns.slice(-15);
   const topContextDeltas = deltaAttributions
     .sort((a, b) => b.deltaTokens - a.deltaTokens || a.stepIndex - b.stepIndex)
@@ -3029,7 +5797,7 @@ export function analyzeTranscriptCache(steps, options = {}) {
     ttlRemainingSec,
     ttlStatus,
     cacheTemperature,
-    compactAdvice,
+    compactAdvice: effectiveCompactAdvice,
     estimatedCostSavingsPct,
     estimatedInputCostUsd,
     estimatedSavedUsd,
@@ -3042,6 +5810,7 @@ export function analyzeTranscriptCache(steps, options = {}) {
     multimodalHighCtxTurns,
     duplicateReadCount,
     loopWatch,
+    checkStatus,
     contextComposition,
     subagentBreakdown,
     recentTurns,

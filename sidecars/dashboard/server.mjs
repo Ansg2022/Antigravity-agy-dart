@@ -804,6 +804,14 @@ function refreshWallClockTtl(diag, explicitTtlSec) {
     coldCompactTokens: diag.coldCompactTokens || 60000,
     delayHotMinTokens: diag.delayHotMinTokens || 30000
   });
+  const hasActiveCheckIssue = Boolean(
+    diag?.checkStatus?.latestCheck?.outcome === "timeout" ||
+      diag?.checkStatus?.latestCheck?.outcome === "fail" ||
+      (Array.isArray(diag?.checkStatus?.unresolvedFailures) && diag.checkStatus.unresolvedFailures.length > 0) ||
+      (diag?.loopWatch?.editFailOscillations || 0) >= 2
+  );
+  const effectiveCompactAdvice =
+    compactAdvice === "delay_hot_cache" && hasActiveCheckIssue ? "none" : compactAdvice;
   return {
     ...diag,
     cacheTtlSec: safeTtl,
@@ -811,8 +819,83 @@ function refreshWallClockTtl(diag, explicitTtlSec) {
     ttlRemainingSec,
     ttlStatus,
     cacheTemperature,
-    compactAdvice,
+    compactAdvice: effectiveCompactAdvice,
     serverNowMs: nowMs
+  };
+}
+
+function createEmptyCheckStatus() {
+  return {
+    latestCheck: null,
+    latestRealFailure: null,
+    unresolvedFailures: [],
+    checksByKind: {},
+    history: [],
+    hasConfirmedResult: false
+  };
+}
+
+function sanitizeCheckRecord(rec, allowRawExcerpts = false) {
+  if (!rec || typeof rec !== "object") return null;
+  const copy = {
+    outcome: rec.outcome || "",
+    kind: rec.kind || "check",
+    checkKey: typeof rec.checkKey === "string" ? rec.checkKey : "",
+    name: rec.name || "",
+    command: rec.command || "",
+    exitCode: rec.exitCode ?? null,
+    missingDetails: Boolean(rec.missingDetails),
+    missingFailureCount: Math.max(0, Number(rec.missingFailureCount || 0)),
+    summaryHeader: typeof rec.summaryHeader === "string" ? rec.summaryHeader : "",
+    ...(Array.isArray(rec.batchNames) && rec.batchNames.length > 0 ? { batchNames: rec.batchNames.slice(0, 4) } : {}),
+    ...(Array.isArray(rec.batchKeys) && rec.batchKeys.length > 0 ? { batchKeys: rec.batchKeys.slice(0, 12) } : {}),
+    files: Array.isArray(rec.files) ? rec.files.slice(0, 3) : [],
+    editEpoch: rec.editEpoch ?? 0,
+    launchStep: rec.launchStep ?? rec.stepIndex ?? -1,
+    stepIndex: rec.stepIndex ?? -1,
+    seq: rec.seq ?? 0,
+    at: rec.at || null
+  };
+  if (rec.stale === true) {
+    copy.stale = true;
+    copy.staleReason = rec.staleReason || null;
+  }
+  if (allowRawExcerpts) {
+    copy.firstErrorLine = typeof rec.firstErrorLine === "string" ? rec.firstErrorLine : "";
+    copy.errorExcerpt = typeof rec.errorExcerpt === "string" ? rec.errorExcerpt : "";
+  } else {
+    copy.firstErrorLine = "";
+    copy.errorExcerpt = "";
+  }
+  return copy;
+}
+
+function sanitizeCheckStatusForScope(rawCheckStatus, allowRawExcerpts = false) {
+  if (!rawCheckStatus || typeof rawCheckStatus !== "object") {
+    return createEmptyCheckStatus();
+  }
+  const latestCheck = sanitizeCheckRecord(rawCheckStatus.latestCheck, allowRawExcerpts);
+  const latestRealFailure = sanitizeCheckRecord(rawCheckStatus.latestRealFailure, allowRawExcerpts);
+  const unresolvedFailures = Array.isArray(rawCheckStatus.unresolvedFailures)
+    ? rawCheckStatus.unresolvedFailures.map((r) => sanitizeCheckRecord(r, allowRawExcerpts)).filter(Boolean)
+    : [];
+  const checksByKind = {};
+  if (rawCheckStatus.checksByKind && typeof rawCheckStatus.checksByKind === "object") {
+    for (const [k, v] of Object.entries(rawCheckStatus.checksByKind)) {
+      const cleaned = sanitizeCheckRecord(v, allowRawExcerpts);
+      if (cleaned) checksByKind[k] = cleaned;
+    }
+  }
+  const history = Array.isArray(rawCheckStatus.history)
+    ? rawCheckStatus.history.slice(-20).map((r) => sanitizeCheckRecord(r, allowRawExcerpts)).filter(Boolean)
+    : [];
+  return {
+    latestCheck,
+    latestRealFailure,
+    unresolvedFailures,
+    checksByKind,
+    history,
+    hasConfirmedResult: Boolean(rawCheckStatus.hasConfirmedResult && latestCheck)
   };
 }
 
@@ -887,6 +970,7 @@ function getCacheDiagPayload(data, defaultConvId = "default") {
   const globalTtlKeepaliveMaxCount = store.getGlobalTtlKeepaliveMaxCount();
   const fallbackTtlKeepaliveMaxCount = store.getFallbackNonZeroKeepaliveMaxCount();
   const globalTtlKeepaliveMinContextPct = store.getGlobalTtlKeepaliveMinContextPct();
+  const globalTtlKeepaliveIntervalSec = store.getGlobalTtlKeepaliveIntervalSec();
   const deliveryLatencyMs = store.getTtlKeepaliveDeliveryMs();
   const isSpecificConvForKa = Boolean(
     convId && convId !== "default" && convId !== "all" && convId !== "app"
@@ -905,6 +989,9 @@ function getCacheDiagPayload(data, defaultConvId = "default") {
     !isExplicitSubagentForKa && kaConvId && store.hasCustomTtlKeepaliveOverride(kaConvId)
   );
   const defaultWindowTokens = resolveModelProfile(null).windowTokens;
+  const convIntervalSec = isExplicitSubagentForKa
+    ? globalTtlKeepaliveIntervalSec
+    : store.getTtlKeepaliveIntervalSec(kaConvId || null);
   const ttlKeepalive = {
     conversationId: kaConvId,
     enabled: isExplicitSubagentForKa ? false : store.isTtlKeepaliveEnabled(kaConvId || null),
@@ -913,6 +1000,9 @@ function getCacheDiagPayload(data, defaultConvId = "default") {
     maxCount: store.getTtlKeepaliveMaxCount(kaConvId || null),
     globalMaxCount: globalTtlKeepaliveMaxCount,
     fallbackMaxCount: fallbackTtlKeepaliveMaxCount,
+    intervalSec: convIntervalSec,
+    globalIntervalSec: globalTtlKeepaliveIntervalSec,
+    intervalMode: convIntervalSec > 0 ? "fixed" : "auto",
     minContextPct: globalTtlKeepaliveMinContextPct,
     minContextTokens: initialCustomOverride
       ? 0
@@ -979,6 +1069,7 @@ function getCacheDiagPayload(data, defaultConvId = "default") {
       globalTtlKeepaliveMaxCount,
       fallbackTtlKeepaliveMaxCount,
       globalTtlKeepaliveMinContextPct,
+      globalTtlKeepaliveIntervalSec,
       ttlKeepalive: noTxKeepalive,
       cacheTtlSec: effTtl,
       ttlSource,
@@ -1044,6 +1135,7 @@ function getCacheDiagPayload(data, defaultConvId = "default") {
         oscillatingFiles: [],
         reason: null
       },
+      checkStatus: createEmptyCheckStatus(),
       contextComposition: createEmptyContextComposition(),
       subagentBreakdown: createEmptySubagentBreakdown(),
       recentTurns: [],
@@ -1078,6 +1170,7 @@ function getCacheDiagPayload(data, defaultConvId = "default") {
       if (fallbackPrimaryConvId) {
         const resolvedKa = store.getTtlKeepaliveState(fallbackPrimaryConvId);
         const resolvedCustom = store.hasCustomTtlKeepaliveOverride(fallbackPrimaryConvId);
+        const resolvedInterval = store.getTtlKeepaliveIntervalSec(fallbackPrimaryConvId);
         effectiveTtlKeepalive = {
           ...ttlKeepalive,
           conversationId: fallbackPrimaryConvId,
@@ -1085,6 +1178,8 @@ function getCacheDiagPayload(data, defaultConvId = "default") {
           supported: true,
           isSubagent: false,
           maxCount: store.getTtlKeepaliveMaxCount(fallbackPrimaryConvId),
+          intervalSec: resolvedInterval,
+          intervalMode: resolvedInterval > 0 ? "fixed" : "auto",
           isCustomOverride: resolvedCustom,
           usedCount: resolvedKa.usedCount,
           coldMissTripped: Boolean(resolvedKa.coldMissTripped),
@@ -1093,9 +1188,52 @@ function getCacheDiagPayload(data, defaultConvId = "default") {
         };
       }
     }
+    const resolveObsWorkspaceCwd = () => {
+      if (resolvedObsConvId && isSafeConversationId(resolvedObsConvId)) {
+        try {
+          const leaseCwd = readWatchdogLease(store, resolvedObsConvId)?.cwd;
+          if (leaseCwd && typeof leaseCwd === "string" && leaseCwd.trim()) {
+            return leaseCwd.trim();
+          }
+        } catch {}
+        try {
+          const rootOwner =
+            typeof store.resolveRootSessionId === "function"
+              ? store.resolveRootSessionId(resolvedObsConvId)
+              : resolvedObsConvId;
+          const candidateSids =
+            rootOwner && rootOwner !== resolvedObsConvId ? [resolvedObsConvId, rootOwner] : [resolvedObsConvId];
+          for (const sid of candidateSids) {
+            const cp = typeof store.getSessionCheckpoint === "function" ? store.getSessionCheckpoint(sid) : null;
+            if (cp && typeof cp.worktree === "string" && cp.worktree.trim()) {
+              return cp.worktree.trim();
+            }
+          }
+          const knownRoots = collectKnownWorktrees(store, rootOwner || resolvedObsConvId);
+          if (knownRoots.length > 0) return knownRoots[0];
+        } catch {}
+        try {
+          const summary = lookupConversationSummary(resolvedObsConvId, {
+            transcriptPath,
+            allowDefaultDb: isDefaultRuntimeStoreDb(store)
+          });
+          if (summary?.cwd && typeof summary.cwd === "string" && summary.cwd.trim()) {
+            return summary.cwd.trim();
+          }
+        } catch {}
+      }
+      if (typeof data.cwd === "string" && data.cwd.trim()) {
+        const rawCwd = data.cwd.trim();
+        if (!rawCwd.includes("\0") && !isUncPath(rawCwd) && path.isAbsolute(rawCwd) && !isUnsafeBroadRoot(rawCwd)) {
+          return path.resolve(rawCwd);
+        }
+      }
+      return "";
+    };
+    const obsWorkspaceCwd = resolveObsWorkspaceCwd();
     const historicalTtlByProfile = store.getAllModelTtlCalibrations();
     const calStamp = formatCalibrationCacheStamp(historicalTtlByProfile);
-    const baseKeyPrefix = `${transcriptPath}:${explicitTtlSec ?? "auto"}:${envWindowTokens ?? ""}:${envWarnTokens ?? ""}:${envCritTokens ?? ""}`;
+    const baseKeyPrefix = `${transcriptPath}:${explicitTtlSec ?? "auto"}:${envWindowTokens ?? ""}:${envWarnTokens ?? ""}:${envCritTokens ?? ""}:${obsWorkspaceCwd}`;
     const cacheKey = `${baseKeyPrefix}:${calStamp}`;
     const cached = parsedDiagCache.get(cacheKey);
     let diag;
@@ -1126,6 +1264,7 @@ function getCacheDiagPayload(data, defaultConvId = "default") {
         historicalTtlByProfile,
         conversationId: obsConvId
       };
+      if (obsWorkspaceCwd) diagOpts.workspaceCwd = obsWorkspaceCwd;
       if (explicitTtlSec !== undefined) diagOpts.ttlSec = explicitTtlSec;
       if (envWindowTokens !== undefined) diagOpts.windowTokens = envWindowTokens;
       if (envWarnTokens !== undefined) diagOpts.warnTokens = envWarnTokens;
@@ -1228,6 +1367,16 @@ function getCacheDiagPayload(data, defaultConvId = "default") {
     ) {
       diag = { ...diag, compactAdvice: "none" };
     }
+    const allowCheckExcerpts = Boolean(
+      scope === "conversation" &&
+        !unboundHostTab &&
+        data?.conversationConfirmed !== false &&
+        isSpecificConv
+    );
+    const scopedCheckStatus =
+      scope === "conversation"
+        ? sanitizeCheckStatusForScope(diag.checkStatus, allowCheckExcerpts)
+        : createEmptyCheckStatus();
     return {
       ok: true,
       transcriptFound: true,
@@ -1239,8 +1388,10 @@ function getCacheDiagPayload(data, defaultConvId = "default") {
       globalTtlKeepaliveMaxCount,
       fallbackTtlKeepaliveMaxCount,
       globalTtlKeepaliveMinContextPct,
+      globalTtlKeepaliveIntervalSec,
       ttlKeepalive: effectiveTtlKeepalive,
       ...diag,
+      checkStatus: scopedCheckStatus,
       driftBreakdown: diag.driftBreakdown ?? createEmptyDriftBreakdown(),
       contextComposition: diag.contextComposition ?? createEmptyContextComposition(),
       subagentBreakdown: diag.subagentBreakdown ?? createEmptySubagentBreakdown(),
@@ -1251,6 +1402,7 @@ function getCacheDiagPayload(data, defaultConvId = "default") {
       ok: false,
       transcriptFound: false,
       serverNowMs: Date.now(),
+      checkStatus: createEmptyCheckStatus(),
       driftBreakdown: createEmptyDriftBreakdown(),
       recentBusts: [],
       contextComposition: createEmptyContextComposition(),
@@ -1539,6 +1691,9 @@ function buildStructuredVerificationSummary(slot) {
     Number.isFinite(Number(slot.exitCode))
       ? Number(slot.exitCode)
       : null;
+  if (slot.outcome === "timeout" || slot.timedOut === true) {
+    return "timed out";
+  }
   if (slot.ok) {
     return exitNum !== null ? `passed (exit ${exitNum})` : "passed";
   }
@@ -1549,6 +1704,17 @@ function stripResumeFailureExcerpts(resumeRes) {
   if (!resumeRes || typeof resumeRes !== "object") return resumeRes;
   const cp = resumeRes.sessionCheckpoint;
   if (!cp || typeof cp !== "object") return resumeRes;
+  const stripFailureEntry = (entry) => {
+    if (!entry || typeof entry !== "object") return entry;
+    const copy = { ...entry };
+    delete copy.failureExcerpt;
+    delete copy.firstErrorLine;
+    delete copy.excerpt;
+    delete copy.stderr;
+    delete copy.error;
+    copy.summary = buildStructuredVerificationSummary({ ...copy, ok: false });
+    return copy;
+  };
   const stripSlot = (slot) => {
     if (!slot || typeof slot !== "object") return slot;
     const copy = { ...slot };
@@ -1557,6 +1723,12 @@ function stripResumeFailureExcerpts(resumeRes) {
     delete copy.excerpt;
     delete copy.stderr;
     delete copy.error;
+    if (copy.previousFailure && typeof copy.previousFailure === "object") {
+      copy.previousFailure = stripFailureEntry(copy.previousFailure);
+    }
+    if (Array.isArray(copy.unresolvedFailures)) {
+      copy.unresolvedFailures = copy.unresolvedFailures.map(stripFailureEntry);
+    }
     copy.summary = buildStructuredVerificationSummary(copy);
     return copy;
   };
@@ -1863,6 +2035,23 @@ function handleWatchdogActionMutation(data = {}, defaultConvId = "default") {
       status: getScopedStatus({ conversationId: statusTargetConv, scope, refresh: true, includeRichRescue: confirmed })
     };
   }
+  const parseStrictIntervalSec = (rawVal, { allowNull = false } = {}) => {
+    if (allowNull && rawVal === null) return { ok: true, value: null };
+    if (
+      rawVal === undefined ||
+      rawVal === null ||
+      typeof rawVal === "boolean" ||
+      typeof rawVal === "object" ||
+      (typeof rawVal === "string" && rawVal.trim() === "")
+    ) {
+      return { ok: false };
+    }
+    const parsed = Number(rawVal);
+    if (!Number.isFinite(parsed) || !Number.isInteger(parsed)) return { ok: false };
+    if (parsed === 0) return { ok: true, value: 0 };
+    if (parsed >= 60 && parsed <= 3600) return { ok: true, value: parsed };
+    return { ok: false };
+  };
   if (action === "setGlobalTtlKeepalive") {
     const rawMax = data.maxCount;
     const invalidType =
@@ -1875,13 +2064,43 @@ function handleWatchdogActionMutation(data = {}, defaultConvId = "default") {
     if (!Number.isFinite(parsedMax) || !Number.isInteger(parsedMax) || parsedMax < 0 || parsedMax > 20) {
       return { ok: false, status: 400, error: "Invalid 'maxCount' value: expected integer between 0 and 20" };
     }
+    if (data.intervalSec !== undefined) {
+      const iv = parseStrictIntervalSec(data.intervalSec);
+      if (!iv.ok) {
+        return {
+          ok: false,
+          status: 400,
+          error: "Invalid 'intervalSec' value: expected 0 (auto) or integer between 60 and 3600"
+        };
+      }
+      store.setGlobalTtlKeepaliveIntervalSec(iv.value);
+    }
     store.setGlobalTtlKeepaliveMaxCount(parsedMax);
     const effectiveGlobal = store.getGlobalTtlKeepaliveMaxCount();
     const fallbackMax = store.getFallbackNonZeroKeepaliveMaxCount();
+    const effectiveInterval = store.getGlobalTtlKeepaliveIntervalSec();
     return {
       ok: true,
       globalTtlKeepaliveMaxCount: effectiveGlobal,
       fallbackTtlKeepaliveMaxCount: fallbackMax,
+      globalTtlKeepaliveIntervalSec: effectiveInterval,
+      status: getScopedStatus({ conversationId: statusTargetConv, scope, refresh: true, includeRichRescue: confirmed })
+    };
+  }
+  if (action === "setGlobalTtlKeepaliveInterval") {
+    const iv = parseStrictIntervalSec(data.intervalSec);
+    if (!iv.ok) {
+      return {
+        ok: false,
+        status: 400,
+        error: "Invalid 'intervalSec' value: expected 0 (auto) or integer between 60 and 3600"
+      };
+    }
+    store.setGlobalTtlKeepaliveIntervalSec(iv.value);
+    const effectiveInterval = store.getGlobalTtlKeepaliveIntervalSec();
+    return {
+      ok: true,
+      globalTtlKeepaliveIntervalSec: effectiveInterval,
       status: getScopedStatus({ conversationId: statusTargetConv, scope, refresh: true, includeRichRescue: confirmed })
     };
   }
@@ -1955,12 +2174,25 @@ function handleWatchdogActionMutation(data = {}, defaultConvId = "default") {
         isCustomOverride: false,
         ttlKeepaliveEnabled: store.isTtlKeepaliveEnabled(kaConv),
         ttlKeepaliveMaxCount: store.getTtlKeepaliveMaxCount(kaConv),
+        ttlKeepaliveIntervalSec: store.getTtlKeepaliveIntervalSec(kaConv),
         status: getScopedStatus({ conversationId: kaConv, scope, refresh: true, includeRichRescue: kaRichAllowed })
       };
     }
 
     if (action === "setTtlKeepalive") {
       const wasEnabledBefore = store.isTtlKeepaliveEnabled(kaConv);
+      let validatedInterval = null;
+      if (data.intervalSec !== undefined) {
+        const iv = parseStrictIntervalSec(data.intervalSec, { allowNull: true });
+        if (!iv.ok) {
+          return {
+            ok: false,
+            status: 400,
+            error: "Invalid 'intervalSec' value: expected 0 (auto), integer between 60 and 3600, or null"
+          };
+        }
+        validatedInterval = iv;
+      }
       if (data.maxCount !== undefined) {
         const rawMax = data.maxCount;
         const invalidType =
@@ -1977,10 +2209,21 @@ function handleWatchdogActionMutation(data = {}, defaultConvId = "default") {
           store.setTtlKeepaliveEnabled(true, kaConv);
         }
       }
+      if (validatedInterval !== null) {
+        store.setTtlKeepaliveIntervalSec(validatedInterval.value, kaConv);
+        if (
+          data.enabled === undefined &&
+          !wasEnabledBefore &&
+          typeof validatedInterval.value === "number" &&
+          validatedInterval.value >= 60
+        ) {
+          store.setTtlKeepaliveEnabled(true, kaConv);
+        }
+      }
       if (data.enabled !== undefined) {
         const next = data.enabled === true || data.enabled === "true" || data.enabled === "1";
         store.setTtlKeepaliveEnabled(next, kaConv);
-      } else if (data.maxCount === undefined) {
+      } else if (data.maxCount === undefined && validatedInterval === null) {
         const cur = store.isTtlKeepaliveEnabled(kaConv);
         store.setTtlKeepaliveEnabled(!cur, kaConv);
       }
@@ -1993,6 +2236,7 @@ function handleWatchdogActionMutation(data = {}, defaultConvId = "default") {
         isCustomOverride: store.hasCustomTtlKeepaliveOverride(kaConv),
         ttlKeepaliveEnabled: store.isTtlKeepaliveEnabled(kaConv),
         ttlKeepaliveMaxCount: store.getTtlKeepaliveMaxCount(kaConv),
+        ttlKeepaliveIntervalSec: store.getTtlKeepaliveIntervalSec(kaConv),
         status: getScopedStatus({ conversationId: kaConv, scope, refresh: true, includeRichRescue: kaRichAllowed })
       };
     }

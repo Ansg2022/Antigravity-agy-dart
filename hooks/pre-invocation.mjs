@@ -231,30 +231,47 @@ export function evaluateCacheAlerts(
   const needsHandoffCue =
     diag.compactAdvice === "critical_compact" || diag.compactAdvice === "opportunistic_cold_compact";
 
+  const checkStatus = diag.checkStatus && typeof diag.checkStatus === "object" ? diag.checkStatus : null;
+  const latestCheck = checkStatus?.latestCheck || null;
+  const latestRealFailure = checkStatus?.latestRealFailure || null;
+  const unresolvedFailures = Array.isArray(checkStatus?.unresolvedFailures) ? checkStatus.unresolvedFailures : [];
+  const latestIsTimeout = latestCheck?.outcome === "timeout";
+  const hasActiveCheckFailure = Boolean(
+    latestCheck?.outcome === "fail" ||
+      unresolvedFailures.length > 0 ||
+      (diag.loopWatch?.editFailOscillations || 0) >= 2
+  );
+  const suppressDelayHotCache = Boolean(latestIsTimeout || hasActiveCheckFailure);
+  const timeoutKey = `cache_alert:${sessionId}:check_timeout`;
+  let emittedCriticalWatermark = false;
+
   // 1. Context Watermark alert (fires once per threshold crossing: ok -> warn -> critical)
   if (diag.watermark === "critical" && prevWm !== "critical") {
+    emittedCriticalWatermark = true;
     setAlertMeta(wmKey, "critical");
     const hitPct = (diag.weightedHitRate * 100).toFixed(0);
     if (isZh) {
       const wasteHint = wastedUsdStr ? `，重填浪费约 ${wastedUsdStr}` : "";
-      const handoffHint = needsHandoffCue ? "（建议先复制右侧面板「**交接简报**」）" : "";
+      const handoffHint = needsHandoffCue ? "先复制右侧面板「**交接简报**」，记下做到哪儿，再执行 `/compact`" : "建议在当前任务阶段收尾后执行 `/compact`";
       alerts.push(
-        `当前上下文已达 **${formatK(diag.currentContextTokens)} tokens**（告急水位 >= ${formatK(effectiveCrit)}${windowLabel}，缓存命中率 ${hitPct}%${wasteHint}）。建议在当前任务阶段收尾后执行 \`/compact\`${handoffHint}，随后调用 \`ctx_resume\`。`
+        `这段对话快满了（当前 **${formatK(diag.currentContextTokens)} tokens**，告急水位 >= ${formatK(effectiveCrit)}${windowLabel}，缓存命中率 ${hitPct}%${wasteHint}）。${handoffHint}，随后调用 \`ctx_resume\`。`
       );
     } else {
       const wasteHint = wastedUsdStr ? `, ~${wastedUsdStr} wasted` : "";
-      const handoffHint = needsHandoffCue ? " (or copy Sidecar **Handoff Brief**)" : "";
+      const handoffHint = needsHandoffCue ? "Copy Sidecar **Handoff Brief** first before `/compact`" : "Consider `/compact` at the next milestone";
       alerts.push(
-        `Context at **${formatK(diag.currentContextTokens)} tokens** (critical watermark >= ${formatK(effectiveCrit)}${windowLabel}, cache hit ${hitPct}%${wasteHint}). Consider \`/compact\`${handoffHint} at the next milestone, then call \`ctx_resume\`.`
+        `This conversation is nearly full (**${formatK(diag.currentContextTokens)} tokens**, critical watermark >= ${formatK(effectiveCrit)}${windowLabel}, cache hit ${hitPct}%${wasteHint}). ${handoffHint}, then call \`ctx_resume\`.`
       );
     }
   } else if (diag.watermark === "warn" && prevWm !== "warn" && prevWm !== "critical") {
     if (diag.compactAdvice === "opportunistic_cold_compact" && (isMidTurnContinuation || isBackgroundWakeup)) {
       // Suppress cold-compact handoff banner during mid-turn tool execution loops or background subagent wakeups
+    } else if (diag.compactAdvice === "delay_hot_cache" && suppressDelayHotCache) {
+      // Never emit "delay /compact, keep going" alongside a failing or timed-out check even when hit rate is high
     } else {
       setAlertMeta(wmKey, "warn");
       const hitPct = (diag.weightedHitRate * 100).toFixed(0);
-      if (diag.compactAdvice === "delay_hot_cache") {
+      if (diag.compactAdvice === "delay_hot_cache" && !suppressDelayHotCache) {
         const tempRaw = String(diag.cacheTemperature || "warm").toLowerCase();
         if (isZh) {
           const tempZh = tempRaw === "hot" ? "热缓存" : "温缓存";
@@ -359,41 +376,77 @@ export function evaluateCacheAlerts(
     }
   }
 
-  // 4. Doom-loop / edit<->fail oscillation convergence alert (fires once per escalation level, resets on convergence)
+  // 4. Latest check timeout notice (aligned with dashboard guidance; never inflates oscillation)
+  if (latestIsTimeout) {
+    if (!emittedCriticalWatermark && diag.watermark !== "critical") {
+      const timeoutStamp = `${latestCheck.stepIndex ?? ""}:${latestCheck.name || ""}:${latestCheck.at || ""}`;
+      if (getAlertMeta(timeoutKey, "") !== timeoutStamp) {
+        setAlertMeta(timeoutKey, timeoutStamp);
+        if (isZh) {
+          const priorHint = latestRealFailure?.name
+            ? `（上一次未解决报错：\`${latestRealFailure.name}\`）`
+            : "";
+          alerts.push(`检查超时，结果还不知道。可以重跑这项检查。${priorHint}`);
+        } else {
+          const priorHint = latestRealFailure?.name
+            ? ` (Previous unresolved failure: \`${latestRealFailure.name}\`)`
+            : "";
+          alerts.push(`Check timed out — outcome is still unknown. You can re-run this check.${priorHint}`);
+        }
+      }
+    }
+  } else if (getAlertMeta(timeoutKey, "")) {
+    store.deleteMeta(timeoutKey);
+  }
+
+  // 5. Doom-loop / edit<->fail oscillation convergence alert (fires once per escalation level, resets on convergence)
   const lw = diag.loopWatch;
   if (lw && (lw.status === "warn" || lw.status === "critical")) {
-    const prevLoop = getAlertMeta(loopKey, "");
-    const shouldEmit =
-      (lw.status === "critical" && prevLoop !== "critical") ||
-      (lw.status === "warn" && prevLoop !== "warn" && prevLoop !== "critical");
-    if (shouldEmit) {
-      setAlertMeta(loopKey, lw.status);
-      const details = [];
-      if (lw.editFailOscillations >= 2) {
-        const hasFiles = Array.isArray(lw.oscillatingFiles) && lw.oscillatingFiles.length > 0;
+    const suppressOscForTimeoutOrCritical =
+      emittedCriticalWatermark ||
+      diag.watermark === "critical" ||
+      (latestIsTimeout && lw.reason === "edit_fail_oscillation");
+    if (!suppressOscForTimeoutOrCritical) {
+      const prevLoop = getAlertMeta(loopKey, "");
+      const shouldEmit =
+        (lw.status === "critical" && prevLoop !== "critical") ||
+        (lw.status === "warn" && prevLoop !== "warn" && prevLoop !== "critical");
+      if (shouldEmit) {
+        setAlertMeta(loopKey, lw.status);
+        const details = [];
+        if (lw.editFailOscillations >= 2) {
+          const hasFiles = Array.isArray(lw.oscillatingFiles) && lw.oscillatingFiles.length > 0;
+          if (isZh) {
+            const filesPartZh = hasFiles ? `（\`${lw.oscillatingFiles.join("`, `")}\`）` : "";
+            const roundsZh = lw.editFailOscillations === 2 ? "两轮" : `${lw.editFailOscillations} 轮`;
+            details.push(`这个文件${filesPartZh}改了${roundsZh}，检查都没过`);
+          } else {
+            const filesPart = hasFiles ? ` on \`${lw.oscillatingFiles.join("`, `")}\`` : "";
+            details.push(`**${lw.editFailOscillations}x edit↔fail oscillation**${filesPart}`);
+          }
+        }
+        const hasRepeat = lw.reason === "repeat_loop" || lw.reason === "repeat_and_oscillation";
+        if (hasRepeat && lw.maxRepeatCount >= 3) {
+          if (isZh) {
+            const callPartZh = lw.topRepeatedCall ? `（\`${lw.topRepeatedCall}\` ×${lw.maxRepeatCount}）` : `（×${lw.maxRepeatCount}）`;
+            details.push(`**${Math.round((lw.repeatRate || 0) * 100)}% 重复工具调用**${callPartZh}`);
+          } else {
+            const callPart = lw.topRepeatedCall ? ` (\`${lw.topRepeatedCall}\` ×${lw.maxRepeatCount})` : ` (×${lw.maxRepeatCount})`;
+            details.push(`**${Math.round((lw.repeatRate || 0) * 100)}% tool repeat rate**${callPart}`);
+          }
+        }
         if (isZh) {
-          const filesPartZh = hasFiles ? `（\`${lw.oscillatingFiles.join("`, `")}\`）` : "";
-          details.push(`**${lw.editFailOscillations} 次改错↔失败震荡**${filesPartZh}`);
+          const zhText =
+            lw.editFailOscillations >= 2 && !hasRepeat
+              ? `${details.join(" + ")}。先看最近一次报错。`
+              : `死循环收敛监控（${lw.status.toUpperCase()}）：${details.join(" + ")}。先看最近一次报错，暂停重复打补丁。`;
+          alerts.push(zhText);
         } else {
-          const filesPart = hasFiles ? ` on \`${lw.oscillatingFiles.join("`, `")}\`` : "";
-          details.push(`**${lw.editFailOscillations}x edit↔fail oscillation**${filesPart}`);
+          alerts.push(
+            `Convergence watch (${lw.status.toUpperCase()}): ${details.join(" + ")}. Inspect the latest error first before editing again.`
+          );
         }
       }
-      const hasRepeat = lw.reason === "repeat_loop" || lw.reason === "repeat_and_oscillation";
-      if (hasRepeat && lw.maxRepeatCount >= 3) {
-        if (isZh) {
-          const callPartZh = lw.topRepeatedCall ? `（\`${lw.topRepeatedCall}\` ×${lw.maxRepeatCount}）` : `（×${lw.maxRepeatCount}）`;
-          details.push(`**${Math.round((lw.repeatRate || 0) * 100)}% 重复工具调用**${callPartZh}`);
-        } else {
-          const callPart = lw.topRepeatedCall ? ` (\`${lw.topRepeatedCall}\` ×${lw.maxRepeatCount})` : ` (×${lw.maxRepeatCount})`;
-          details.push(`**${Math.round((lw.repeatRate || 0) * 100)}% tool repeat rate**${callPart}`);
-        }
-      }
-      alerts.push(
-        isZh
-          ? `死循环收敛监控（${lw.status.toUpperCase()}）：${details.join(" + ")}。建议暂停重复打补丁，重新核查根因或切换策略。`
-          : `Convergence watch (${lw.status.toUpperCase()}): ${details.join(" + ")}. Pause repetitive patching, re-check root cause/assumptions, or pivot strategy.`
-      );
     }
   } else if (lw && lw.status === "ok" && getAlertMeta(loopKey, "")) {
     store.deleteMeta(loopKey);
@@ -569,6 +622,56 @@ async function main() {
       }
     }
 
+    let preReadExistingLease = null;
+    let didPreReadExistingLease = false;
+    const resolvePreDiagWorkspaceCwd = () => {
+      try {
+        const directPayloadCwd = watchdogLeaseMod?.extractPayloadWorkspaceRoot
+          ? watchdogLeaseMod.extractPayloadWorkspaceRoot(payload)
+          : typeof payload.cwd === "string"
+            ? payload.cwd.trim()
+            : "";
+        if (directPayloadCwd) return directPayloadCwd;
+      } catch {}
+      if (targetConvId && targetConvId !== "default") {
+        if ((dbExists || store.db) && typeof watchdogLeaseMod?.readWatchdogLease === "function") {
+          try {
+            didPreReadExistingLease = true;
+            preReadExistingLease = watchdogLeaseMod.readWatchdogLease(store, targetConvId);
+            if (preReadExistingLease?.cwd) return preReadExistingLease.cwd;
+          } catch {}
+        }
+        if ((dbExists || store.db) && typeof store.getSessionCheckpoint === "function") {
+          try {
+            const candidateSids = [targetConvId];
+            if (sessionId && sessionId !== "default" && sessionId !== targetConvId) {
+              candidateSids.push(sessionId);
+            }
+            for (const sid of candidateSids) {
+              const cp = store.getSessionCheckpoint(sid);
+              if (cp && typeof cp.worktree === "string" && cp.worktree.trim()) {
+                return cp.worktree.trim();
+              }
+            }
+          } catch {}
+        }
+        if (typeof watchdogLeaseMod?.lookupConversationSummary === "function") {
+          try {
+            const allowDefaultSummaryDb =
+              Boolean(process.env.AGY_DART_SUMMARY_DB_PATH) || cfgSnapshot.sources.dbPath === "default";
+            const quickSummary = watchdogLeaseMod.lookupConversationSummary(targetConvId, {
+              payload,
+              transcriptPath,
+              allowDefaultDb: allowDefaultSummaryDb,
+              checkSubagent: false
+            });
+            if (quickSummary?.cwd) return quickSummary.cwd;
+          } catch {}
+        }
+      }
+      return "";
+    };
+
     let diag = null;
     let loadedSteps = [];
     let txStatMtimeMs = 0;
@@ -587,9 +690,11 @@ async function main() {
       const steps = readTranscriptTail(transcriptPath, 131072, { minUsageSteps: 2 });
       loadedSteps = steps;
       if (steps.length > 0) {
+        const preDiagWorkspaceCwd = resolvePreDiagWorkspaceCwd();
         const diagOpts = {
           conversationId: targetConvId && targetConvId !== "default" ? targetConvId : ""
         };
+        if (preDiagWorkspaceCwd) diagOpts.workspaceCwd = preDiagWorkspaceCwd;
         if (effectiveCfg.cacheTtlSec !== null) diagOpts.ttlSec = effectiveCfg.cacheTtlSec;
         if (effectiveCfg.windowTokens !== null) diagOpts.windowTokens = effectiveCfg.windowTokens;
         if (effectiveCfg.warnTokens !== null) diagOpts.warnTokens = effectiveCfg.warnTokens;
@@ -656,8 +761,9 @@ async function main() {
       }
       if (targetConvId && targetConvId !== "default") {
         try {
-          existingLease =
-            (dbExists || store.db) && typeof watchdogLeaseMod.readWatchdogLease === "function"
+          existingLease = didPreReadExistingLease
+            ? preReadExistingLease
+            : (dbExists || store.db) && typeof watchdogLeaseMod.readWatchdogLease === "function"
               ? watchdogLeaseMod.readWatchdogLease(store, targetConvId)
               : null;
           if (existingLease?.isSubagent) {
