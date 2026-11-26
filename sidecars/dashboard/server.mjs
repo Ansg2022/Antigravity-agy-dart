@@ -6,6 +6,8 @@ import http from "node:http";
 import os from "node:os";
 import { execFile, execSync } from "node:child_process";
 import { fileURLToPath, pathToFileURL } from "node:url";
+import { VERSION_ROUTE, createVersionChecker, parseVersion } from "./version-check.mjs";
+import { UPDATE_MARKER_NAME, UPDATE_ROUTE, createPluginUpdater } from "./version-update.mjs";
 import { getEffectiveConfig } from "../../context/lib/config.js";
 import { executionReceiptsFromSteps, fastToolClaimsFromSteps } from "../../context/lib/execution-receipts.js";
 import { buildHandoffBrief, inferWorkspaceFromStore } from "../../context/lib/handoff.js";
@@ -2292,6 +2294,76 @@ function handleStarPromptMutation(data) {
   return { ok: true, starPrompt: store.evaluateStarPrompt({ markTriggered: false }) };
 }
 
+let _defaultVersionChecker = null;
+let _defaultPluginUpdater = null;
+
+function getDefaultVersionChecker() {
+  if (!_defaultVersionChecker) {
+    _defaultVersionChecker = createVersionChecker({
+      getCurrentVersion: () => getPackageVersion()
+    });
+  }
+  return _defaultVersionChecker;
+}
+
+function getDefaultPluginUpdater() {
+  if (!_defaultPluginUpdater) {
+    _defaultPluginUpdater = createPluginUpdater({
+      sidecarDirectory: __dirname,
+      checkVersion: getDefaultVersionChecker()
+    });
+  }
+  return _defaultPluginUpdater;
+}
+
+const VERSION_CHECK_ALLOWED_KEYS = new Set(["mode", "fresh"]);
+const PLUGIN_UPDATE_ALLOWED_KEYS = new Set(["version"]);
+
+export async function handleVersionCheck(data = {}, checker = getDefaultVersionChecker()) {
+  if (!data || typeof data !== "object" || Array.isArray(data)) {
+    return { ok: false, status: 400, error: "Request body must be a JSON object" };
+  }
+  for (const key of Object.keys(data)) {
+    if (!VERSION_CHECK_ALLOWED_KEYS.has(key)) {
+      return { ok: false, status: 400, error: `Unexpected field '${key}' in request body` };
+    }
+  }
+  const mode = data.mode === undefined ? "manual" : data.mode;
+  if (mode !== "manual" && mode !== "auto") {
+    return { ok: false, status: 400, error: "Invalid 'mode' value: expected 'manual' or 'auto'" };
+  }
+  if (data.fresh !== undefined && typeof data.fresh !== "boolean") {
+    return { ok: false, status: 400, error: "Field 'fresh' must be a boolean" };
+  }
+  return checker(mode, { fresh: Boolean(data.fresh) });
+}
+
+export async function handlePluginUpdate(
+  data = {},
+  updater = getDefaultPluginUpdater(),
+  onUpdated = null
+) {
+  if (!data || typeof data !== "object" || Array.isArray(data)) {
+    return { ok: false, status: 400, error: "Request body must be a JSON object" };
+  }
+  for (const key of Object.keys(data)) {
+    if (!PLUGIN_UPDATE_ALLOWED_KEYS.has(key)) {
+      return { ok: false, status: 400, error: `Unexpected field '${key}' in request body` };
+    }
+  }
+  const parsed = typeof data.version === "string" ? parseVersion(data.version) : null;
+  if (!parsed) {
+    return { ok: false, status: 400, error: "Invalid or missing 'version' SemVer string" };
+  }
+  const result = await updater(parsed.version);
+  if (result?.status === "updated" && typeof onUpdated === "function") {
+    try {
+      onUpdated(result);
+    } catch {}
+  }
+  return result;
+}
+
 function sendJson(res, status, payload, extraHeaders = {}) {
   res.writeHead(status, {
     "Content-Type": "application/json; charset=utf-8",
@@ -2322,13 +2394,16 @@ const MUTATING_ENDPOINTS = new Set([
   "/api/cli-filter",
   "/api/read-dedup",
   "/api/watchdog/action",
-  "/api/star-prompt"
+  "/api/star-prompt",
+  UPDATE_ROUTE
 ]);
 
 export function createStandaloneServer({
   csrfToken = crypto.randomBytes(24).toString("hex"),
   maxBodyBytes = MAX_REQUEST_BODY_BYTES,
-  watchdogOptions = null
+  watchdogOptions = null,
+  versionChecker = null,
+  pluginUpdater = null
 } = {}) {
   getRuntimeStore();
   const monitor = getWatchdogMonitor(watchdogOptions || {});
@@ -2382,15 +2457,18 @@ export function createStandaloneServer({
         return;
       }
 
-      // 2. Enforce POST-only method semantics on /api/search and mutating endpoints first
+      // 2. Enforce POST-only method semantics on /api/search, /api/version and mutating endpoints first
       //    so cross-site <img> GET attacks explicitly return 405 Method Not Allowed (Allow: POST).
-      if ((url.pathname === "/api/search" || MUTATING_ENDPOINTS.has(url.pathname)) && req.method !== "POST") {
+      if (
+        (url.pathname === "/api/search" || url.pathname === VERSION_ROUTE || MUTATING_ENDPOINTS.has(url.pathname)) &&
+        req.method !== "POST"
+      ) {
         sendJson(
           res,
           405,
           {
             error:
-              url.pathname === "/api/search"
+              url.pathname === "/api/search" || url.pathname === VERSION_ROUTE
                 ? "Method Not Allowed: use POST with application/json"
                 : "Method Not Allowed: mutating endpoints require POST"
           },
@@ -2516,6 +2594,26 @@ export function createStandaloneServer({
         return;
       }
 
+      // 5b. POST-only /api/version (rate-limited remote GitHub release version check)
+      if (url.pathname === VERSION_ROUTE) {
+        if (!isJsonContentType(req.headers["content-type"])) {
+          sendJson(res, 415, { error: "Content-Type must be application/json" });
+          return;
+        }
+        const parsed = await readBoundedJsonBody(req, maxBodyBytes);
+        if (!parsed.ok) {
+          sendJson(res, parsed.status, { error: parsed.error });
+          return;
+        }
+        const verRes = await handleVersionCheck(parsed.data, versionChecker || getDefaultVersionChecker());
+        if (verRes.ok === false && verRes.status === 400) {
+          sendJson(res, 400, { error: verRes.error });
+        } else {
+          sendJson(res, 200, verRes);
+        }
+        return;
+      }
+
       // 6. Mutating endpoints: strictly POST + application/json + per-server CSRF token + <= 64 KB body
       if (MUTATING_ENDPOINTS.has(url.pathname)) {
         if (!isJsonContentType(req.headers["content-type"])) {
@@ -2535,7 +2633,8 @@ export function createStandaloneServer({
           "action",
           "category",
           "ext",
-          "jumpId"
+          "jumpId",
+          "version"
         ]);
         if (!mutFieldCheck.ok) {
           sendJson(res, 400, { error: mutFieldCheck.error });
@@ -2571,6 +2670,13 @@ export function createStandaloneServer({
             sendJson(res, spRes.status, { error: spRes.error });
           } else {
             sendJson(res, 200, spRes);
+          }
+        } else if (url.pathname === UPDATE_ROUTE) {
+          const updRes = await handlePluginUpdate(data, pluginUpdater || getDefaultPluginUpdater());
+          if (updRes.ok === false && updRes.status === 400) {
+            sendJson(res, 400, { error: updRes.error });
+          } else {
+            sendJson(res, 200, updRes);
           }
         }
         return;
@@ -2634,6 +2740,10 @@ if (isDirectRun) {
         : [];
     const watchedBackendFiles = [
       __selfPath,
+      path.resolve(__dirname, "../../plugin.json"),
+      path.resolve(__dirname, "version-check.mjs"),
+      path.resolve(__dirname, "update-archive.mjs"),
+      path.resolve(__dirname, "version-update.mjs"),
       path.resolve(__dirname, "../../context/lib/handoff.js"),
       path.resolve(__dirname, "../../context/lib/watchdog.js"),
       path.resolve(__dirname, "../../context/lib/watchdog-lease.js"),
@@ -2684,6 +2794,7 @@ if (isDirectRun) {
       const reloadPollMs = Number.isFinite(rawPoll) && rawPoll >= 150 ? Math.floor(rawPoll) : 3000;
       const reloadTimer = setInterval(() => {
         if (shuttingDown) return;
+        if (fs.existsSync(path.join(__dirname, "../..", UPDATE_MARKER_NAME))) return;
         if (monitor._keepaliveInFlight && monitor._keepaliveInFlight.size > 0) return;
         const nextSig = snapshotSidecarMtimes();
         if (nextSig !== bootMtimeSig && !nextSig.split("|").includes("0")) {
@@ -2716,10 +2827,22 @@ if (isDirectRun) {
       return html;
     });
 
-    registerSidecarRoutes(app);
+    registerSidecarRoutes(app, {
+      onUpdated: () => {
+        const restartTimer = setTimeout(() => void shutdownCleanly(0), 450);
+        restartTimer.unref?.();
+      }
+    });
 
     await app.run();
     console.log(`[agy-dart sidecar] registered and running`);
+
+    if (process.env.AGY_DART_DISABLE_AUTO_UPDATE_CHECK !== "1") {
+      const startupCheckTimer = setTimeout(() => {
+        void getDefaultVersionChecker()("auto").catch(() => {});
+      }, 1500);
+      startupCheckTimer.unref?.();
+    }
   } else {
     const port = resolveStandalonePort(process.env);
     const server = createStandaloneServer({
@@ -2735,7 +2858,7 @@ if (isDirectRun) {
   }
 }
 
-export function registerSidecarRoutes(app) {
+export function registerSidecarRoutes(app, { versionChecker = null, pluginUpdater = null, onUpdated = null } = {}) {
   const makeBadRequest = (msg) => {
     const err = new Error(msg);
     err.statusCode = 400;
@@ -2893,6 +3016,20 @@ export function registerSidecarRoutes(app) {
     if (!data) return makeBadRequest("Request body must be a JSON object");
     const res = handleStarPromptMutation(data);
     if (res.ok === false) return makeBadRequest(res.error);
+    return res;
+  }, "POST");
+  app.api(VERSION_ROUTE, async (rawData) => {
+    const data = normalizeSidecarBody(rawData);
+    if (!data) return makeBadRequest("Request body must be a JSON object");
+    const res = await handleVersionCheck(data, versionChecker || getDefaultVersionChecker());
+    if (res.ok === false && res.status === 400) return makeBadRequest(res.error);
+    return res;
+  }, "POST");
+  app.api(UPDATE_ROUTE, async (rawData) => {
+    const data = normalizeSidecarBody(rawData);
+    if (!data) return makeBadRequest("Request body must be a JSON object");
+    const res = await handlePluginUpdate(data, pluginUpdater || getDefaultPluginUpdater(), onUpdated);
+    if (res.ok === false && res.status === 400) return makeBadRequest(res.error);
     return res;
   }, "POST");
 }
