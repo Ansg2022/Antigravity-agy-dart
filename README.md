@@ -155,9 +155,9 @@ node scripts/install.mjs tool-loading eager         # All 12 tools eager-loaded
 ## Changelog
 
 ### v1.7.3
-- **User-selectable Auto-Keepalive interval tiers**: Added global and per-window trigger schedules (**Auto** existing adaptive TTL, **Fixed 4min / 9min / 15min**, or **Custom** 1–60min, resettable via **Global**) across Dashboard UI, SQLite persistence, `config.json` (`ttlKeepaliveIntervalSec`), and env (`AGY_DART_TTL_KEEPALIVE_INTERVAL_SEC`), decoupled from displayed TTL telemetry with staleness caps and cold-miss circuit breaker intact.
-- **Check-timeout false-positive fix & scoped failure isolation**: Pure command timeouts (`exit 124` / timeout markers) no longer trigger false edit-fail oscillation warnings; unrelated or narrowed single-case test passes (`-t`/`-k`/`--shard`/`::case`) never clear broader failing suites; background test failures remain visible across unrelated edits; truncated `run_checks` batch failures stay flagged until the original batch re-runs; session checkpoints retain unresolved failures and redact excerpts on unconfirmed scopes.
-- **Handoff Brief & cache-bust diagnostics upgrades**: Upgraded cache-friendly Handoff Brief with dual-track Sidecar copy, unified secret redaction, and `bustReadState` / `priorContextMatch` cache-bust attribution.
+- **Selectable Auto-Keepalive intervals**: Pick **Auto** (existing adaptive mode), **Fixed 4min / 9min / 15min**, or **Custom (1–60min)** globally or per chat, with one-click **Global** reset; existing safety guards (max count, minimum context threshold, cold-miss stop, subagent skip) still apply.
+- **No more false warnings on check timeouts or partial test passes**: Timed-out commands no longer trigger "repeated edit-fail" alerts; passing an unrelated test or single case won't clear an earlier suite failure; background test failures stay visible after editing other files; truncated failing check batches stay flagged until re-run.
+- **Cleaner Handoff Brief & cache-miss diagnostics**: One-click cache-friendly handoff briefs with automatic secret redaction, plus clearer cache-miss cause breakdowns.
 
 ### v1.7.2
 - **Agent Skills progressive disclosure & prefix-tax audit**: Restructured `skills/agy-dart/` with on-demand `examples/` (`ctx_trace_summary.py`, `filters.json`) and `references/error-playbook.md` synced cleanly across Antigravity, Claude Code, and Codex; added `node bin/agy-dart.mjs audit skills` to inspect Turn-0 frontmatter tax and progressive-disclosure hygiene, and separated on-demand skill assets in `prefix:budget`.
