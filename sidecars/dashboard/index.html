@@ -1326,6 +1326,130 @@
       user-select: text;
     }
 
+    /* Single-Sentence Contextual Panel Guidance & Inline Error Viewer */
+    .guidance-bar {
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+      padding: 10px 12px;
+      border-radius: var(--radius-md);
+      background: var(--bg-inset);
+      border: 1px solid var(--border);
+      color: var(--text-primary);
+    }
+
+    .guidance-bar.is-ok {
+      background: var(--ok-soft, rgba(16, 185, 129, 0.08));
+      border-color: var(--ok-border, rgba(16, 185, 129, 0.28));
+    }
+
+    .guidance-bar.is-warn {
+      background: var(--warn-soft);
+      border-color: var(--warn-border);
+    }
+
+    .guidance-bar.is-danger {
+      background: var(--danger-soft);
+      border-color: var(--danger-border);
+    }
+
+    .guidance-bar.is-neutral {
+      background: var(--bg-inset);
+      border-color: var(--border);
+      color: var(--text-secondary);
+    }
+
+    .guidance-main {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 10px;
+      flex-wrap: wrap;
+    }
+
+    .guidance-text {
+      font-size: 12.5px;
+      font-weight: 600;
+      line-height: 1.45;
+      color: var(--text-primary);
+      flex: 1 1 180px;
+      min-width: 0;
+    }
+
+    .guidance-bar.is-neutral .guidance-text {
+      font-weight: 500;
+      color: var(--text-secondary);
+    }
+
+    .guidance-bar.is-warn .guidance-text {
+      color: var(--warn-text);
+    }
+
+    .guidance-bar.is-danger .guidance-text {
+      color: var(--danger-text);
+    }
+
+    .guidance-actions {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      flex-wrap: wrap;
+      flex-shrink: 0;
+    }
+
+    .error-viewer {
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+      padding: 9px 10px;
+      border-radius: var(--radius-md);
+      background: var(--bg-panel);
+      border: 1px solid var(--border);
+    }
+
+    .error-viewer-head {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 8px;
+    }
+
+    .error-viewer-title-group {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      min-width: 0;
+      flex: 1;
+    }
+
+    .error-check-name {
+      font-size: 12px;
+      font-weight: 600;
+      color: var(--text-primary);
+    }
+
+    .error-viewer-meta {
+      font-size: 11.5px;
+      line-height: 1.4;
+    }
+
+    .error-viewer-pre {
+      margin: 0;
+      padding: 8px 10px;
+      border-radius: var(--radius-sm, 6px);
+      background: var(--bg-inset);
+      border: 1px solid var(--border-subtle, var(--border));
+      font-family: var(--font-mono);
+      font-size: 11.5px;
+      line-height: 1.45;
+      color: var(--text-primary);
+      white-space: pre-wrap;
+      word-break: break-word;
+      max-height: 180px;
+      overflow-y: auto;
+      user-select: text;
+    }
+
     /* Stall Watchdog Rescue Panel */
     .wd-rescue-box {
       padding: 10px 12px;
@@ -1867,6 +1991,89 @@
       padding: 0 6px;
     }
 
+    .keepalive-interval-select {
+      max-width: 108px;
+      padding: 2px 4px;
+      border: none;
+      border-left: 1px solid var(--border-strong);
+      background: transparent;
+      color: var(--text-secondary);
+      font-family: var(--font-sans);
+      font-size: 11px;
+      font-weight: 500;
+      line-height: 1.25;
+      cursor: pointer;
+    }
+
+    .keepalive-group.is-on .keepalive-interval-select {
+      border-left-color: rgba(37, 99, 235, 0.22);
+      color: #1e3a8a;
+      font-weight: 600;
+    }
+
+    .keepalive-group.is-on.is-exhausted .keepalive-interval-select {
+      border-left-color: rgba(217, 119, 6, 0.28);
+      color: var(--warn-text);
+    }
+
+    .keepalive-interval-select:focus {
+      outline: none;
+      background: rgba(255, 255, 255, 0.72);
+    }
+
+    .keepalive-interval-select:disabled {
+      opacity: 0.55;
+      cursor: default;
+    }
+
+    .keepalive-interval-custom-wrap {
+      display: inline-flex;
+      align-items: center;
+      gap: 1px;
+      padding: 0 6px 0 4px;
+      border-left: 1px solid var(--border-strong);
+      font-family: var(--font-mono);
+      font-size: 11px;
+      color: var(--text-muted);
+    }
+
+    .keepalive-group.is-on .keepalive-interval-custom-wrap {
+      border-left-color: rgba(37, 99, 235, 0.22);
+      color: #1e40af;
+    }
+
+    .keepalive-group.is-on.is-exhausted .keepalive-interval-custom-wrap {
+      border-left-color: rgba(217, 119, 6, 0.28);
+      color: var(--warn-text);
+    }
+
+    .keepalive-interval-custom-input {
+      width: 34px;
+      padding: 2px 1px;
+      border: none;
+      background: transparent;
+      color: var(--text-secondary);
+      font-family: var(--font-mono);
+      font-size: 11.5px;
+      font-weight: 600;
+      text-align: center;
+    }
+
+    .keepalive-group.is-on .keepalive-interval-custom-input {
+      color: #1e3a8a;
+      font-weight: 700;
+    }
+
+    .keepalive-group.is-on.is-exhausted .keepalive-interval-custom-input {
+      color: var(--warn-text);
+    }
+
+    .keepalive-interval-custom-input:focus {
+      outline: none;
+      background: rgba(255, 255, 255, 0.72);
+      border-radius: 3px;
+    }
+
     .ext-chip {
       display: inline-flex;
       align-items: center;
@@ -2041,10 +2248,21 @@
             <span id="active-text">Active</span>
           </button>
           <div id="kv-keepalive-group" class="keepalive-group">
-            <button id="kv-keepalive-btn" onclick="toggleTtlKeepalive()" class="toggle-chip" data-enabled="0" data-used="0" data-max="1" data-custom="0" data-cold="0" data-i18n-title="kvKeepaliveTip" title="Off by default. When enabled, sends a message requesting an OK reply about 60s before cache expiry. Each reply uses model input.">Auto-Keepalive: OFF</button>
+            <button id="kv-keepalive-btn" onclick="toggleTtlKeepalive()" class="toggle-chip" data-enabled="0" data-used="0" data-max="1" data-interval="0" data-custom="0" data-cold="0" data-i18n-title="kvKeepaliveTip" title="Off by default. When enabled, sends a message requesting an OK reply about 60s before cache expiry. Each reply uses model input.">Auto-Keepalive: OFF</button>
             <label class="keepalive-max-wrap" data-i18n-title="kvKeepaliveMaxTip" title="Max auto-keepalive count for this conversation window (1–20; clear input to follow global)">
               <span>&times;</span>
               <input id="kv-keepalive-max" type="number" min="1" max="20" step="1" value="1" class="keepalive-max-input" onchange="changeTtlKeepaliveMax(this.value)" onkeydown="if(event.key==='Enter'){const b=document.getElementById('kv-keepalive-btn');if(b&&b.dataset?.custom!=='1'&&String(this.value).trim()===String(b.dataset?.max||'')){changeTtlKeepaliveMax(this.value);}this.blur();}" />
+            </label>
+            <select id="kv-keepalive-interval" class="keepalive-interval-select" onchange="changeTtlKeepaliveInterval(this.value)" data-i18n-title="kvKeepaliveIntervalTip" title="Keepalive trigger schedule for this window: Auto (existing adaptive TTL scheme), fixed interval (4min / 9min / 15min), or custom minutes (1–60min)">
+              <option id="kv-keepalive-interval-opt-0" value="0" data-i18n="kvKeepaliveIntervalAuto">Auto</option>
+              <option id="kv-keepalive-interval-opt-240" value="240" data-i18n="kvKeepaliveInterval4m">Fixed 4min</option>
+              <option id="kv-keepalive-interval-opt-540" value="540" data-i18n="kvKeepaliveInterval9m">Fixed 9min</option>
+              <option id="kv-keepalive-interval-opt-900" value="900" data-i18n="kvKeepaliveInterval15m">Fixed 15min</option>
+              <option id="kv-keepalive-interval-opt-custom" value="custom" data-i18n="kvKeepaliveIntervalCustom">Custom</option>
+            </select>
+            <label id="kv-keepalive-interval-custom-wrap" class="keepalive-interval-custom-wrap hidden" data-i18n-title="kvKeepaliveIntervalCustomTip" title="Custom fixed keepalive interval in minutes (1–60; press Enter to apply)">
+              <input id="kv-keepalive-interval-custom" type="number" min="1" max="60" step="1" value="5" class="keepalive-interval-custom-input" onchange="changeTtlKeepaliveCustomMin(this.value)" onkeydown="if(event.key==='Enter'){changeTtlKeepaliveCustomMin(this.value);this.blur();}" />
+              <span>min</span>
             </label>
             <button id="kv-keepalive-follow-btn" onclick="resetTtlKeepaliveOverride()" class="keepalive-follow-btn hidden" data-i18n="kvKeepaliveFollowBtn" data-i18n-title="kvKeepaliveFollowTip" title="Clear this window's custom setting and follow global default (keeps used count)">Global</button>
             <button id="kv-keepalive-reset-btn" onclick="resetTtlKeepalive()" class="keepalive-reset-btn hidden" data-i18n-title="kvKeepaliveResetTip" title="Reset used keepalive count for this conversation back to 0">&#8634;</button>
@@ -2091,9 +2309,20 @@
           </div>
           <div class="band-actions">
             <div id="kv-global-keepalive-group" class="keepalive-group keepalive-global-group">
-              <button id="kv-global-keepalive-btn" onclick="toggleGlobalTtlKeepalive()" class="toggle-chip" data-max="0" data-fallback="1" data-i18n-title="kvGlobalKeepaliveTip" title="Global default cache keepalive count (0 = off by default for uncustomized windows; 1–20 = auto-warm count)">Global Warm: OFF</button>
+              <button id="kv-global-keepalive-btn" onclick="toggleGlobalTtlKeepalive()" class="toggle-chip" data-max="0" data-fallback="1" data-interval="0" data-i18n-title="kvGlobalKeepaliveTip" title="Global default cache keepalive count (0 = off by default for uncustomized windows; 1–20 = auto-warm count)">Global Warm: OFF</button>
               <label class="keepalive-max-wrap" data-i18n-title="kvGlobalKeepaliveMaxTip" title="Set global default keepalive count (0–20; 0 turns off default keepalive)">
                 <input id="kv-global-keepalive-max" type="number" min="0" max="20" step="1" value="0" class="keepalive-max-input" onchange="changeGlobalTtlKeepaliveMax(this.value)" onkeydown="if(event.key==='Enter'){this.blur();}" />
+              </label>
+              <select id="kv-global-keepalive-interval" class="keepalive-interval-select" onchange="changeGlobalTtlKeepaliveInterval(this.value)" data-i18n-title="kvGlobalKeepaliveIntervalTip" title="Global default keepalive schedule for uncustomized windows: Auto (adaptive TTL), fixed interval (4min / 9min / 15min), or custom minutes (1–60min)">
+                <option id="kv-global-keepalive-interval-opt-0" value="0" data-i18n="kvKeepaliveIntervalAuto">Auto</option>
+                <option id="kv-global-keepalive-interval-opt-240" value="240" data-i18n="kvKeepaliveInterval4m">Fixed 4min</option>
+                <option id="kv-global-keepalive-interval-opt-540" value="540" data-i18n="kvKeepaliveInterval9m">Fixed 9min</option>
+                <option id="kv-global-keepalive-interval-opt-900" value="900" data-i18n="kvKeepaliveInterval15m">Fixed 15min</option>
+                <option id="kv-global-keepalive-interval-opt-custom" value="custom" data-i18n="kvKeepaliveIntervalCustom">Custom</option>
+              </select>
+              <label id="kv-global-keepalive-interval-custom-wrap" class="keepalive-interval-custom-wrap hidden" data-i18n-title="kvKeepaliveIntervalCustomTip" title="Custom fixed keepalive interval in minutes (1–60; press Enter to apply)">
+                <input id="kv-global-keepalive-interval-custom" type="number" min="1" max="60" step="1" value="5" class="keepalive-interval-custom-input" onchange="changeGlobalTtlKeepaliveCustomMin(this.value)" onkeydown="if(event.key==='Enter'){changeGlobalTtlKeepaliveCustomMin(this.value);this.blur();}" />
+                <span>min</span>
               </label>
             </div>
             <button id="kv-ttl-notify-btn" onclick="toggleTtlNotify()" class="toggle-chip" data-enabled="0" data-i18n-title="kvTtlNotifyTip" title="Show desktop alerts for expiring high-context (&gt;=60k) caches and exhausted keepalives in windows with warming enabled. Turn off to mute both.">TTL Alert: OFF</button>
@@ -2129,6 +2358,27 @@
             <span id="kv-cost-savings" class="meta-tag is-ok hidden">Est. ~0% saved</span>
             <span id="kv-subagent-badge" class="meta-tag is-info hidden">Subagent</span>
             <span id="kv-loop-badge" class="meta-tag is-warn hidden">LOOP</span>
+          </div>
+        </div>
+
+        <div id="kv-guidance-bar" class="guidance-bar is-neutral" role="status" aria-live="polite">
+          <div class="guidance-main">
+            <span id="kv-guidance-text" class="guidance-text" data-i18n="guidanceNoCheck">No check result yet.</span>
+            <div id="kv-guidance-actions" class="guidance-actions hidden">
+              <button id="kv-guidance-error-btn" type="button" onclick="toggleErrorViewer()" class="btn btn-secondary btn-sm hidden" data-i18n="guidanceViewErrorBtn">View Error</button>
+              <button id="kv-guidance-handoff-btn" type="button" onclick="copyGuidanceHandoffBrief()" class="btn btn-primary btn-sm hidden" data-i18n="guidanceCopyHandoffBtn">Copy Handoff Brief</button>
+            </div>
+          </div>
+          <div id="kv-error-viewer" class="error-viewer hidden">
+            <div class="error-viewer-head">
+              <div class="error-viewer-title-group">
+                <span id="kv-error-badge" class="meta-tag is-danger">Latest error</span>
+                <span id="kv-error-check-name" class="error-check-name mono truncate">--</span>
+              </div>
+              <button id="kv-error-close-btn" type="button" onclick="toggleErrorViewer(false)" class="btn btn-ghost btn-sm" data-i18n-title="errorViewerCloseTip" title="Close error details">×</button>
+            </div>
+            <div id="kv-error-meta" class="error-viewer-meta muted-note hidden"></div>
+            <pre id="kv-error-excerpt" class="error-viewer-pre custom-scrollbar"></pre>
           </div>
         </div>
 
@@ -2718,6 +2968,32 @@
         convergenceWatch: 'Convergence watch ({status}): {parts}',
         loopStatusWarn: 'WARN',
         loopStatusCritical: 'CRITICAL',
+        guidancePass: 'The latest check passed — you can keep going.',
+        guidancePassNamed: '{name} passed — you can keep going.',
+        guidanceFailTwoRoundsFile: '{file} was edited twice and both checks failed. Inspect the latest error first.',
+        guidanceFailTwoRounds: 'This file was edited twice and both checks failed. Inspect the latest error first.',
+        guidanceFailManyRoundsFile: '{file} failed checks across {n} edit rounds. Inspect the latest error first.',
+        guidanceFailManyRounds: 'This file failed checks across {n} edit rounds. Inspect the latest error first.',
+        guidanceFailSingleCheck: 'Latest check ({name}) failed. Inspect the latest error first.',
+        guidanceFailUnresolvedCheck: 'Unresolved failing check ({name}). Inspect its error first.',
+        guidanceFailSingle: 'Latest check failed. Inspect the latest error first.',
+        guidanceFailMissingDetailsOne: '1 check failed, but error details are missing from the current log.',
+        guidanceFailMissingDetailsMany: '{n} checks failed, but error details are missing from the current log.',
+        guidanceFailPrevBatchMissingDetails: 'An earlier check batch failed with missing details. Re-run that batch to confirm.',
+        guidanceTimeout: 'Check timed out — outcome is still unknown. You can re-run this check.',
+        guidanceCritical: 'This conversation is nearly full. Copy the Handoff Brief to capture where you are before compacting.',
+        guidanceNoCheck: 'No check result yet.',
+        guidanceViewErrorBtn: 'View Error',
+        guidanceHideErrorBtn: 'Hide Error',
+        guidanceCopyHandoffBtn: 'Copy Handoff Brief',
+        errorBadgeLatest: 'Latest error',
+        errorBadgePrevious: 'Previous real failure',
+        errorViewerCloseTip: 'Close error details',
+        errorViewerMissingDetails: '(Current log is missing error details; check summary reported {n} failure(s))',
+        errorViewerNoExcerpt: '(No raw error output captured; check exited with code {code})',
+        errorViewerNoExcerptNoCode: '(No raw error output captured)',
+        errorMetaExit: 'exit {code}',
+        errorMetaFile: 'file: {file}',
         topGrowth: 'Top growth:',
         turnBarTip: 'Turn #{turn}: {pct}% hit | {ctx}k tok ({delta}){tool}{bust}',
         turnBustTag: ' | BUST: {cause}',
@@ -2776,9 +3052,18 @@
         kvKeepaliveColdTip: 'Cold-miss circuit breaker tripped (cache_read = 0); paused until your next message or ↺ reset',
         kvKeepaliveBelowMinTip: 'Current {cur}k < {min}k ({pct}%) threshold; custom window override bypasses this gate',
         kvKeepaliveTip: 'Off by default. When enabled, sends a message requesting an OK reply about 60s before cache expiry. Each reply uses model input.',
+        kvKeepaliveFixedTip: 'Fixed keepalive interval: sends a message requesting an OK reply after ~{min}min idle (stops at max count or cold-miss). Each reply uses model input.',
         kvKeepaliveSubagentState: 'Skipped',
         kvKeepaliveSubagentTip: 'Background subagent: auto-keepalive is automatically skipped so subagents never burn quota',
         kvKeepaliveMaxTip: 'Max auto-keepalive count for this conversation window (1–20; clear input to follow global)',
+        kvKeepaliveIntervalAuto: 'Auto',
+        kvKeepaliveInterval4m: 'Fixed 4min',
+        kvKeepaliveInterval9m: 'Fixed 9min',
+        kvKeepaliveInterval15m: 'Fixed 15min',
+        kvKeepaliveIntervalCustom: 'Custom',
+        kvKeepaliveIntervalTip: 'Keepalive trigger schedule for this window: Auto (existing adaptive TTL scheme), fixed interval (4min / 9min / 15min), or custom minutes (1–60min)',
+        kvGlobalKeepaliveIntervalTip: 'Global default keepalive schedule for uncustomized windows: Auto (adaptive TTL), fixed interval (4min / 9min / 15min), or custom minutes (1–60min)',
+        kvKeepaliveIntervalCustomTip: 'Custom fixed keepalive interval in minutes (1–60; press Enter to apply)',
         kvKeepaliveFollowBtn: 'Global',
         kvKeepaliveFollowTip: 'Clear this window\'s custom setting and follow global default (keeps used count)',
         kvKeepaliveResetTip: 'Reset used keepalive count & cold-miss breaker for this conversation back to 0',
@@ -3081,6 +3366,32 @@
         convergenceWatch: '收敛监控（{status}）：{parts}',
         loopStatusWarn: '预警',
         loopStatusCritical: '严重',
+        guidancePass: '刚才的检查通过了，可以接着做。',
+        guidancePassNamed: '{name} 通过了，可以接着做。',
+        guidanceFailTwoRoundsFile: '这个文件（{file}）改了两轮，检查都没过。先看最近一次报错。',
+        guidanceFailTwoRounds: '这个文件改了两轮，检查都没过。先看最近一次报错。',
+        guidanceFailManyRoundsFile: '这个文件（{file}）改了 {n} 轮，检查都没过。先看最近一次报错。',
+        guidanceFailManyRounds: '这个文件改了 {n} 轮，检查都没过。先看最近一次报错。',
+        guidanceFailSingleCheck: '最近一次检查（{name}）没过。先看最近一次报错。',
+        guidanceFailUnresolvedCheck: '还有检查未通过（{name}）。先看这项报错。',
+        guidanceFailSingle: '最近一次检查没过。先看最近一次报错。',
+        guidanceFailMissingDetailsOne: '有 1 项检查失败，当前日志缺少报错明细。',
+        guidanceFailMissingDetailsMany: '有 {n} 项检查失败，当前日志缺少报错明细。',
+        guidanceFailPrevBatchMissingDetails: '上批检查有失败，明细缺失。请重跑原检查批次确认。',
+        guidanceTimeout: '检查超时，结果还不知道。可以重跑这项检查。',
+        guidanceCritical: '这段对话快满了。先复制交接简报，记下做到哪儿，再压缩。',
+        guidanceNoCheck: '还没有检查结果。',
+        guidanceViewErrorBtn: '看报错',
+        guidanceHideErrorBtn: '收起报错',
+        guidanceCopyHandoffBtn: '复制交接简报',
+        errorBadgeLatest: '最近一次报错',
+        errorBadgePrevious: '上一次真实报错',
+        errorViewerCloseTip: '收起报错详情',
+        errorViewerMissingDetails: '（当前日志缺少报错明细；检查汇总显示有 {n} 项失败）',
+        errorViewerNoExcerpt: '（未捕获到原始报错输出；检查退出码 {code}）',
+        errorViewerNoExcerptNoCode: '（未捕获到原始报错输出）',
+        errorMetaExit: '退出码 {code}',
+        errorMetaFile: '文件：{file}',
         topGrowth: '增长 Top：',
         turnBarTip: '第 {turn} 轮：命中 {pct}% | 上下文 {ctx}k tok（{delta}）{tool}{bust}',
         turnBustTag: ' | 失效：{cause}',
@@ -3139,9 +3450,18 @@
         kvKeepaliveColdTip: '已触发冷未命中自动熔断（cache_read = 0），本轮空闲停止后续续温，真人发新消息或点 ↺ 自动恢复',
         kvKeepaliveBelowMinTip: '当前 {cur}k 未达 {min}k（{pct}%）默认门槛；单窗口手动设置续温可豁免',
         kvKeepaliveTip: '默认关闭。开启后，在预计缓存到期前约 60 秒发送一次要求回复 OK 的消息，每次回复都会产生模型输入用量。',
+        kvKeepaliveFixedTip: '固定间隔续温：空闲约 {min} 分钟后自动发送要求回复 OK 的消息（达到上限或触发冷断后停止）。每次回复都会产生模型输入用量。',
         kvKeepaliveSubagentState: '已跳过',
         kvKeepaliveSubagentTip: '当前为子智能体：已自动跳过续温，避免对一次性后台子任务无意义保活浪费额度',
         kvKeepaliveMaxTip: '当前对话允许自动续温的最大次数（1–20 次；清空输入框可恢复随全局）',
+        kvKeepaliveIntervalAuto: '动态(现方案)',
+        kvKeepaliveInterval4m: '固定 4min',
+        kvKeepaliveInterval9m: '固定 9min',
+        kvKeepaliveInterval15m: '固定 15min',
+        kvKeepaliveIntervalCustom: '自定义',
+        kvKeepaliveIntervalTip: '本窗口续温触发策略：动态（沿用现方案按实测 TTL 自适应）、固定间隔（4min / 9min / 15min）或自定义分钟（1–60min）',
+        kvGlobalKeepaliveIntervalTip: '全局默认续温触发策略：动态（现方案按实测 TTL 自适应）、固定间隔（4min / 9min / 15min）或自定义分钟（1–60min）',
+        kvKeepaliveIntervalCustomTip: '自定义固定续温间隔（1–60 分钟，按回车生效）',
         kvKeepaliveFollowBtn: '随全局',
         kvKeepaliveFollowTip: '清除本窗口独立覆盖，恢复跟随全局设置（保留当前已用次数）',
         kvKeepaliveResetTip: '手动将当前对话已续温次数重置为 0 并解除冷断',
@@ -3348,6 +3668,10 @@
     let lastHandoffMarkdown = '';
     let handoffCopyResetTimer = null;
     let handoffPromptCopyResetTimer = null;
+    let guidanceHandoffCopyResetTimer = null;
+    let errorViewerOpen = false;
+    let currentGuidanceErrorDetail = null;
+    let currentGuidanceErrorIsPrevious = false;
     let handoffFetchSeq = 0;
     let rescueCopySeq = 0;
     let lastObservedWatchdogIncidentKey = '';
@@ -3442,21 +3766,26 @@
         selectedConvOverride = '';
         inferredFallbackConvId = '';
         pendingCustomOverrideConvId = '';
+        windowCustomIntervalOpen = false;
         sawOutOfOrderWatchdogAction = false;
         lastObservedWatchdogIncidentKey = '';
         resetHandoffDrawerTargetMode();
         ++watchdogActionSeq;
         clearHandoffSnapshot({ resetPreview: true, reloadIfOpen });
+        resetPanelGuidanceState();
         updateWatchdogIncidentButtons();
         renderSessionSwitcher(cachedWatchdog);
         if (!prevNative && nativeId) {
           const gm = cachedGlobalKeepalive.globalMaxCount;
           const fm = cachedGlobalKeepalive.fallbackMaxCount;
+          const gi = cachedGlobalKeepalive.globalIntervalSec;
           unboundKeepaliveState = {
             enabled: gm >= 1,
             maxCount: gm >= 1 ? gm : fm,
             globalMaxCount: gm,
             fallbackMaxCount: fm,
+            intervalSec: gi,
+            globalIntervalSec: gi,
             isCustomOverride: false,
             usedCount: 0,
             lastError: ''
@@ -3886,6 +4215,7 @@
         renderKvCacheCard(cachedKv);
       } else {
         renderSynthesizedContextSummary();
+        renderPanelGuidance();
         if (kvTtlState) {
           renderLocalTtlCountdown();
         }
@@ -3905,7 +4235,11 @@
         updateFeaturePill('wd-enable-btn', t('wdEnableLabel'), wdEnableBtn?.dataset?.enabled !== '0');
         updateFeaturePill('wd-notify-btn', t('wdNotifyLabel'), wdNotifyBtn?.dataset?.enabled === '1');
         updateFeaturePill('kv-ttl-notify-btn', t('kvTtlNotifyLabel'), kvTtlNotifyBtn?.dataset?.enabled === '1');
-        renderGlobalKeepaliveControls(cachedGlobalKeepalive.globalMaxCount, cachedGlobalKeepalive.fallbackMaxCount);
+        renderGlobalKeepaliveControls(
+          cachedGlobalKeepalive.globalMaxCount,
+          cachedGlobalKeepalive.fallbackMaxCount,
+          cachedGlobalKeepalive.globalIntervalSec
+        );
         renderKeepaliveMinContextControls(cachedGlobalKeepalive.minContextPct);
         renderKeepaliveControls(null);
         const sevBadge = document.getElementById('wd-severity-badge');
@@ -4132,6 +4466,7 @@
       lastObservedWatchdogIncidentKey = '';
       resetHandoffDrawerTargetMode();
       clearHandoffSnapshot({ resetPreview: true, reloadIfOpen: handoffDrawerOpen });
+      resetPanelGuidanceState();
       updateWatchdogIncidentButtons();
       renderSessionSwitcher(cachedWatchdog);
 
@@ -4821,6 +5156,7 @@
             if (isStale()) return;
             cachedResume = r;
             renderRecentSourcesAndEvents(r);
+            renderPanelGuidance();
           }
         } catch {}
 
@@ -6737,6 +7073,448 @@
       }
     }
 
+    function resetPanelGuidanceState() {
+      cachedKv = null;
+      cachedResume = null;
+      errorViewerOpen = false;
+      currentGuidanceErrorDetail = null;
+      currentGuidanceErrorIsPrevious = false;
+      if (guidanceHandoffCopyResetTimer !== null) {
+        clearTimeout(guidanceHandoffCopyResetTimer);
+        guidanceHandoffCopyResetTimer = null;
+      }
+      renderPanelGuidance(null, null);
+    }
+
+    function formatPassedCheckDisplayName(rec) {
+      if (!rec || typeof rec !== 'object') return '';
+      if (Array.isArray(rec.batchNames) && rec.batchNames.length > 1) {
+        const cleanBatch = rec.batchNames
+          .map((n) => String(n || '').replace(/\s+/g, ' ').trim())
+          .filter((n) => n && !/^(?:check|checks|verify|run_checks)$/i.test(n));
+        if (cleanBatch.length > 0) {
+          const sep = currentLang === 'zh' ? '、' : ', ';
+          const shown = cleanBatch.slice(0, 3).join(sep);
+          const label = cleanBatch.length > 3 ? `${shown} +${cleanBatch.length - 3}` : shown;
+          return label.length > 64 ? `${label.slice(0, 61)}...` : label;
+        }
+      }
+      const raw = String(rec.name || rec.command || '').replace(/\s+/g, ' ').trim();
+      if (!raw || /^(?:check|checks|verify|run_checks)$/i.test(raw)) return '';
+      return raw.length > 64 ? `${raw.slice(0, 61)}...` : raw;
+    }
+
+    function buildCheckpointCheckFallback(resumeData) {
+      const cp = resumeData && typeof resumeData === 'object' ? resumeData.sessionCheckpoint : null;
+      if (!cp || typeof cp !== 'object') return null;
+      const items = [];
+      const preservedFailures = [];
+      const pushPreservedFailure = (fallbackKind, pf) => {
+        if (!pf || typeof pf !== 'object') return;
+        const pfKind = pf.kind || fallbackKind || 'test';
+        const pfTs = pf.at ? Date.parse(pf.at) : 0;
+        const pfSummary = String(pf.summary || '');
+        const pfExcerpt = String(pf.failureExcerpt || '');
+        const pfMissing = Boolean(pf.missingDetails);
+        preservedFailures.push({
+          outcome: 'fail',
+          kind: pfKind,
+          checkKey: pf.checkKey || '',
+          name: pfMissing && !pf.command ? (pfSummary || 'run_checks') : (pf.name || pf.command || (pfKind === 'build' ? 'build' : 'test')),
+          command: pf.command || '',
+          exitCode: pfMissing ? null : (pf.exitCode ?? 1),
+          firstErrorLine: pf.firstErrorLine || '',
+          errorExcerpt: pfExcerpt || (pfMissing ? '' : pfSummary),
+          missingDetails: pfMissing,
+          missingFailureCount: pfMissing ? Math.max(1, Number(pf.missingFailureCount || 1)) : 0,
+          summaryHeader: pfSummary,
+          files: [],
+          at: pf.at || null,
+          _ts: Number.isFinite(pfTs) ? pfTs : 0
+        });
+      };
+      const pushSlot = (kind, slot) => {
+        if (!slot || typeof slot !== 'object') return;
+        const ts = slot.at ? Date.parse(slot.at) : 0;
+        const summaryStr = String(slot.summary || '');
+        const excerptStr = String(slot.failureExcerpt || '');
+        const hasExplicitTimeout = slot.outcome === 'timeout' || slot.timedOut === true;
+        const hasLegacyTimeout =
+          !slot.ok &&
+          !slot.outcome &&
+          (/(?:Verify \[TIMEOUT\b|\(timed out\)|## \[TIMEOUT\b)/i.test(summaryStr) ||
+            (/^\s*(?:TIMED OUT|Command timed out\b)/i.test(excerptStr) &&
+              !/\b(?:AssertionError|TypeError|ReferenceError|SyntaxError|error\s+TS\d+|FAIL\b)/i.test(excerptStr)));
+        const isTimeout = Boolean(hasExplicitTimeout || hasLegacyTimeout);
+        const outcome = slot.ok ? 'pass' : isTimeout ? 'timeout' : 'fail';
+        let missingDetails = Boolean(slot.missingDetails);
+        let missingFailureCount = Math.max(0, Number(slot.missingFailureCount || 0));
+        if (outcome === 'fail' && !excerptStr && !missingDetails) {
+          const sumFailMatch = summaryStr.match(/^Checks:\s*\d+\/\d+\s+passed,\s*(\d+)\s+failed/i);
+          if (sumFailMatch && Number(sumFailMatch[1]) > 0) {
+            missingDetails = true;
+            missingFailureCount = Number(sumFailMatch[1]);
+          }
+        }
+        items.push({
+          outcome,
+          kind,
+          checkKey: slot.checkKey || '',
+          name: missingDetails && !slot.command ? (summaryStr || 'run_checks') : (slot.command || (kind === 'build' ? 'build' : 'test')),
+          command: slot.command || '',
+          ...(Array.isArray(slot.batchNames) && slot.batchNames.length > 0 ? { batchNames: slot.batchNames.slice(0, 4) } : {}),
+          exitCode: outcome === 'timeout' ? (slot.exitCode === 124 ? 124 : null) : (slot.exitCode ?? (slot.ok ? 0 : 1)),
+          firstErrorLine: outcome === 'fail' ? (slot.firstErrorLine || '') : '',
+          errorExcerpt: outcome === 'fail' ? (excerptStr || (missingDetails ? '' : summaryStr)) : '',
+          missingDetails: outcome === 'fail' ? missingDetails : false,
+          missingFailureCount: outcome === 'fail' && missingDetails ? Math.max(1, missingFailureCount || 1) : 0,
+          summaryHeader: summaryStr,
+          files: [],
+          at: slot.at || null,
+          _ts: Number.isFinite(ts) ? ts : 0
+        });
+        if (Array.isArray(slot.unresolvedFailures) && slot.unresolvedFailures.length > 0) {
+          for (const pf of slot.unresolvedFailures) {
+            pushPreservedFailure(kind, pf);
+          }
+        } else if (outcome === 'timeout' && slot.previousFailure && typeof slot.previousFailure === 'object') {
+          pushPreservedFailure(kind, slot.previousFailure);
+        }
+      };
+      pushSlot('test', cp.lastTest);
+      pushSlot('build', cp.lastBuild);
+      if (items.length === 0) return null;
+      items.sort((a, b) => b._ts - a._ts);
+      const rawFailures = [...preservedFailures, ...items.filter((item) => item.outcome === 'fail')].sort(
+        (a, b) => b._ts - a._ts
+      );
+      const seenFailKeys = new Set();
+      const unresolvedFailures = [];
+      for (const f of rawFailures) {
+        const dedup = f.checkKey || `${f.kind}:${f.command || f.name}:${f.missingDetails ? 'm' : 'r'}`;
+        if (seenFailKeys.has(dedup)) continue;
+        seenFailKeys.add(dedup);
+        unresolvedFailures.push(f);
+      }
+      return {
+        latestCheck: items[0],
+        latestRealFailure: unresolvedFailures[0] || null,
+        unresolvedFailures,
+        hasConfirmedResult: true
+      };
+    }
+
+    function resolvePanelGuidanceState(kvInput = cachedKv, resumeInput = cachedResume) {
+      const kv = kvInput && typeof kvInput === 'object' ? kvInput : null;
+      const hasTx = Boolean(kv && kv.transcriptFound && kv.turnsWithUsage);
+      const isConvScope = currentScope === 'conversation';
+      const isConfirmed = isCurrentConversationConfirmed();
+
+      let checkStatus =
+        isConvScope && kv?.checkStatus && typeof kv.checkStatus === 'object'
+          ? kv.checkStatus
+          : null;
+      const cpFallback = isConvScope && isConfirmed ? buildCheckpointCheckFallback(resumeInput) : null;
+      if ((!checkStatus || !checkStatus.hasConfirmedResult) && cpFallback) {
+        checkStatus = cpFallback;
+      }
+
+      const latestCheck = checkStatus?.latestCheck || null;
+      let unresolvedFailures = Array.isArray(checkStatus?.unresolvedFailures)
+        ? checkStatus.unresolvedFailures.filter(Boolean)
+        : [];
+      let latestRealFailure = checkStatus?.latestRealFailure || unresolvedFailures[0] || null;
+
+      if (latestRealFailure && !latestRealFailure.errorExcerpt && cpFallback?.latestRealFailure?.errorExcerpt) {
+        latestRealFailure = {
+          ...latestRealFailure,
+          errorExcerpt: cpFallback.latestRealFailure.errorExcerpt,
+          firstErrorLine: latestRealFailure.firstErrorLine || cpFallback.latestRealFailure.firstErrorLine || ''
+        };
+      }
+
+      const lw = kv?.loopWatch || null;
+      const oscCount = Number(lw?.editFailOscillations || 0);
+      const oscFile =
+        (Array.isArray(lw?.oscillatingFiles) && lw.oscillatingFiles[0]) ||
+        (Array.isArray(latestRealFailure?.files) && latestRealFailure.files[0]) ||
+        '';
+      const isCritical = Boolean(hasTx && kv.watermark === 'critical');
+
+      // Priority 1: Context critical watermark always wins
+      if (isCritical) {
+        const failDetail = latestRealFailure || (latestCheck?.outcome === 'fail' ? latestCheck : null);
+        return {
+          kind: 'critical',
+          tone: 'is-danger',
+          text: t('guidanceCritical'),
+          showHandoffBtn: true,
+          errorDetail: failDetail,
+          errorIsPrevious: Boolean(failDetail && latestCheck?.outcome === 'timeout')
+        };
+      }
+
+      // Priority 2: Latest check only timed out
+      if (latestCheck && latestCheck.outcome === 'timeout') {
+        return {
+          kind: 'timeout',
+          tone: 'is-warn',
+          text: t('guidanceTimeout'),
+          showHandoffBtn: false,
+          errorDetail: latestRealFailure,
+          errorIsPrevious: true
+        };
+      }
+
+      // Priority 3: Same file edited >= 2 rounds with real failures, or any unresolved real failure
+      const hasRealFailure = Boolean(
+        oscCount >= 2 ||
+          (latestCheck && latestCheck.outcome === 'fail') ||
+          unresolvedFailures.length > 0
+      );
+      if (hasRealFailure) {
+        const failDetail =
+          latestRealFailure ||
+          (latestCheck?.outcome === 'fail' ? latestCheck : null) || {
+            name: oscFile || 'check',
+            command: '',
+            exitCode: 1,
+            firstErrorLine: '',
+            errorExcerpt: '',
+            files: oscFile ? [oscFile] : []
+          };
+        const isMissingDetailsFailure = Boolean(
+          failDetail.missingDetails && !failDetail.errorExcerpt && !failDetail.firstErrorLine
+        );
+        let text = '';
+        if (isMissingDetailsFailure) {
+          const missCount = Math.max(1, Number(failDetail.missingFailureCount || unresolvedFailures.length || 1));
+          if (latestCheck && latestCheck.outcome === 'pass') {
+            text = t('guidanceFailPrevBatchMissingDetails');
+          } else {
+            text =
+              missCount === 1
+                ? t('guidanceFailMissingDetailsOne')
+                : t('guidanceFailMissingDetailsMany', { n: missCount });
+          }
+        } else if (oscCount >= 2) {
+          if (oscCount === 2) {
+            text = oscFile
+              ? t('guidanceFailTwoRoundsFile', { file: oscFile })
+              : t('guidanceFailTwoRounds');
+          } else {
+            text = oscFile
+              ? t('guidanceFailManyRoundsFile', { file: oscFile, n: oscCount })
+              : t('guidanceFailManyRounds', { n: oscCount });
+          }
+        } else {
+          const checkName = latestRealFailure?.name || latestCheck?.name || '';
+          if (latestCheck && latestCheck.outcome === 'pass' && checkName) {
+            text = t('guidanceFailUnresolvedCheck', { name: checkName });
+          } else {
+            text = checkName
+              ? t('guidanceFailSingleCheck', { name: checkName })
+              : t('guidanceFailSingle');
+          }
+        }
+        return {
+          kind: 'fail',
+          tone: 'is-danger',
+          text,
+          showHandoffBtn: false,
+          errorDetail: failDetail,
+          errorIsPrevious: false
+        };
+      }
+
+      // Priority 4: Latest related check passed (and no unresolved failures)
+      if (latestCheck && latestCheck.outcome === 'pass') {
+        const passedName = formatPassedCheckDisplayName(latestCheck);
+        return {
+          kind: 'pass',
+          tone: 'is-ok',
+          text: passedName ? t('guidancePassNamed', { name: passedName }) : t('guidancePass'),
+          showHandoffBtn: false,
+          errorDetail: null,
+          errorIsPrevious: false
+        };
+      }
+
+      // Priority 5: No confirmed check result in current session
+      return {
+        kind: 'none',
+        tone: 'is-neutral',
+        text: t('guidanceNoCheck'),
+        showHandoffBtn: false,
+        errorDetail: null,
+        errorIsPrevious: false
+      };
+    }
+
+    function renderErrorViewer() {
+      const viewerEl = document.getElementById('kv-error-viewer');
+      const badgeEl = document.getElementById('kv-error-badge');
+      const nameEl = document.getElementById('kv-error-check-name');
+      const metaEl = document.getElementById('kv-error-meta');
+      const preEl = document.getElementById('kv-error-excerpt');
+      const errBtn = document.getElementById('kv-guidance-error-btn');
+
+      const detail = currentGuidanceErrorDetail;
+      if (!detail) {
+        errorViewerOpen = false;
+        if (viewerEl) viewerEl.classList.add('hidden');
+        if (nameEl) { nameEl.textContent = '--'; nameEl.title = ''; }
+        if (metaEl) { metaEl.textContent = ''; metaEl.classList.add('hidden'); }
+        if (preEl) preEl.textContent = '';
+        if (errBtn) {
+          errBtn.classList.add('hidden');
+          errBtn.textContent = t('guidanceViewErrorBtn');
+        }
+        return;
+      }
+
+      if (errBtn) {
+        errBtn.classList.remove('hidden');
+        errBtn.textContent = errorViewerOpen ? t('guidanceHideErrorBtn') : t('guidanceViewErrorBtn');
+      }
+      if (!viewerEl) return;
+      if (!errorViewerOpen) {
+        viewerEl.classList.add('hidden');
+        return;
+      }
+
+      if (badgeEl) {
+        badgeEl.className = currentGuidanceErrorIsPrevious ? 'meta-tag is-warn' : 'meta-tag is-danger';
+        badgeEl.textContent = currentGuidanceErrorIsPrevious ? t('errorBadgePrevious') : t('errorBadgeLatest');
+      }
+      if (nameEl) {
+        nameEl.textContent = detail.name || detail.summaryHeader || detail.command || 'check';
+        nameEl.title = detail.command || detail.summaryHeader || detail.name || '';
+      }
+      if (metaEl) {
+        const metaParts = [];
+        if (typeof detail.exitCode === 'number' && Number.isFinite(detail.exitCode)) {
+          metaParts.push(t('errorMetaExit', { code: detail.exitCode }));
+        }
+        if (Array.isArray(detail.files) && detail.files.length > 0) {
+          metaParts.push(t('errorMetaFile', { file: detail.files.join(', ') }));
+        }
+        if (metaParts.length > 0) {
+          metaEl.textContent = metaParts.join(' · ');
+          metaEl.classList.remove('hidden');
+        } else {
+          metaEl.textContent = '';
+          metaEl.classList.add('hidden');
+        }
+      }
+      if (preEl) {
+        const excerpt =
+          (typeof detail.errorExcerpt === 'string' && detail.errorExcerpt.trim()) ||
+          (typeof detail.firstErrorLine === 'string' && detail.firstErrorLine.trim()) ||
+          '';
+        preEl.textContent =
+          excerpt ||
+          (detail.missingDetails
+            ? t('errorViewerMissingDetails', { n: Math.max(1, Number(detail.missingFailureCount || 1)) })
+            : typeof detail.exitCode === 'number' && Number.isFinite(detail.exitCode)
+              ? t('errorViewerNoExcerpt', { code: detail.exitCode })
+              : t('errorViewerNoExcerptNoCode'));
+      }
+      viewerEl.classList.remove('hidden');
+    }
+
+    function toggleErrorViewer(forceState) {
+      if (!currentGuidanceErrorDetail) {
+        errorViewerOpen = false;
+        renderErrorViewer();
+        return;
+      }
+      errorViewerOpen = typeof forceState === 'boolean' ? forceState : !errorViewerOpen;
+      renderErrorViewer();
+    }
+
+    function renderPanelGuidance(kvOverride = cachedKv, resumeOverride = cachedResume) {
+      const state = resolvePanelGuidanceState(kvOverride, resumeOverride);
+      const barEl = document.getElementById('kv-guidance-bar');
+      const textEl = document.getElementById('kv-guidance-text');
+      const actionsEl = document.getElementById('kv-guidance-actions');
+      const errBtn = document.getElementById('kv-guidance-error-btn');
+      const handoffBtn = document.getElementById('kv-guidance-handoff-btn');
+
+      currentGuidanceErrorDetail = state.errorDetail || null;
+      currentGuidanceErrorIsPrevious = Boolean(state.errorIsPrevious);
+      if (!currentGuidanceErrorDetail) {
+        errorViewerOpen = false;
+      }
+
+      if (barEl) {
+        barEl.className = `guidance-bar ${state.tone}`;
+        if (barEl.dataset) barEl.dataset.guidanceKind = state.kind;
+      }
+      if (textEl) {
+        textEl.textContent = state.text;
+      }
+      const hasErrBtn = Boolean(currentGuidanceErrorDetail);
+      const hasHandoffBtn = Boolean(state.showHandoffBtn);
+      if (actionsEl) {
+        if (hasErrBtn || hasHandoffBtn) actionsEl.classList.remove('hidden');
+        else actionsEl.classList.add('hidden');
+      }
+      if (errBtn) {
+        if (hasErrBtn) errBtn.classList.remove('hidden');
+        else errBtn.classList.add('hidden');
+      }
+      if (handoffBtn) {
+        if (hasHandoffBtn) {
+          handoffBtn.classList.remove('hidden');
+          if (guidanceHandoffCopyResetTimer === null) {
+            handoffBtn.textContent = t('guidanceCopyHandoffBtn');
+          }
+        } else {
+          handoffBtn.classList.add('hidden');
+        }
+      }
+      renderErrorViewer();
+      return state;
+    }
+
+    async function copyGuidanceHandoffBrief() {
+      syncNativeHostConversation({ reloadIfOpen: false });
+      const reqHostEpoch = hostSwitchEpoch;
+      const reqScope = currentScope;
+      const reqConfirmedConv = getConfirmedConversationId();
+      const btn = document.getElementById('kv-guidance-handoff-btn');
+
+      if (!isHandoffSnapshotCurrent(cachedHandoffSnapshot)) {
+        await loadHandoffBrief({ forceRefresh: false });
+      }
+      syncNativeHostConversation({ reloadIfOpen: false });
+      if (
+        hostSwitchEpoch !== reqHostEpoch ||
+        currentScope !== reqScope ||
+        getConfirmedConversationId() !== reqConfirmedConv ||
+        !isHandoffSnapshotCurrent(cachedHandoffSnapshot)
+      ) {
+        return { ok: false, markdown: '' };
+      }
+      const text = cachedHandoffSnapshot?.markdown || '';
+      if (!text) return { ok: false, markdown: '' };
+      const copied = await copyTextToClipboard(text);
+      if (btn) {
+        btn.textContent = copied ? t('copiedBtn') : t('copyFailedBtn');
+        if (guidanceHandoffCopyResetTimer !== null) clearTimeout(guidanceHandoffCopyResetTimer);
+        guidanceHandoffCopyResetTimer = setTimeout(() => {
+          btn.textContent = t('guidanceCopyHandoffBtn');
+          guidanceHandoffCopyResetTimer = null;
+        }, 2000);
+      }
+      return {
+        ok: copied,
+        markdown: text,
+        conversationId: cachedHandoffSnapshot?.conversationId || ''
+      };
+    }
+
     function renderKvCacheCard(kv) {
       if (!kv) return;
       cachedKv = kv;
@@ -6764,12 +7542,15 @@
         kv.globalTtlKeepaliveMaxCount !== undefined ||
         kv.ttlKeepalive?.globalMaxCount !== undefined ||
         kv.globalTtlKeepaliveMinContextPct !== undefined ||
-        kv.ttlKeepalive?.minContextPct !== undefined
+        kv.ttlKeepalive?.minContextPct !== undefined ||
+        kv.globalTtlKeepaliveIntervalSec !== undefined ||
+        kv.ttlKeepalive?.globalIntervalSec !== undefined
       ) {
         syncGlobalKeepaliveFromPayload(
           kv.globalTtlKeepaliveMaxCount ?? kv.ttlKeepalive?.globalMaxCount,
           kv.fallbackTtlKeepaliveMaxCount ?? kv.ttlKeepalive?.fallbackMaxCount,
-          kv.globalTtlKeepaliveMinContextPct ?? kv.ttlKeepalive?.minContextPct
+          kv.globalTtlKeepaliveMinContextPct ?? kv.ttlKeepalive?.minContextPct,
+          kv.globalTtlKeepaliveIntervalSec ?? kv.ttlKeepalive?.globalIntervalSec
         );
       }
       if (kv.ttlKeepalive) {
@@ -6819,6 +7600,7 @@
         );
         syncKvTtlState(null);
         updateHandoffButtonStyle('none');
+        renderPanelGuidance(kv);
         return;
       }
 
@@ -6965,6 +7747,13 @@
       );
 
       const lw = kv.loopWatch;
+      const guidanceState = renderPanelGuidance(kv);
+      const showRepeatLoopRow = Boolean(
+        lw &&
+          (lw.status === 'warn' || lw.status === 'critical') &&
+          (lw.reason === 'repeat_loop' || lw.reason === 'repeat_and_oscillation') &&
+          lw.maxRepeatCount >= 3
+      );
       if (lw && (lw.status === 'warn' || lw.status === 'critical')) {
         const isCrit = lw.status === 'critical';
         if (loopBadgeEl) {
@@ -6975,19 +7764,23 @@
           loopBadgeEl.classList.remove('hidden');
         }
         if (loopRowEl) {
-          const parts = [];
-          if (lw.editFailOscillations >= 2) {
-            const fTxt = Array.isArray(lw.oscillatingFiles) && lw.oscillatingFiles.length > 0 ? ` (${lw.oscillatingFiles.join(', ')})` : '';
-            parts.push(t('oscillationPart', { n: lw.editFailOscillations, files: fTxt }));
+          if (showRepeatLoopRow || guidanceState?.kind === 'none') {
+            const parts = [];
+            if (lw.editFailOscillations >= 2) {
+              const fTxt = Array.isArray(lw.oscillatingFiles) && lw.oscillatingFiles.length > 0 ? ` (${lw.oscillatingFiles.join(', ')})` : '';
+              parts.push(t('oscillationPart', { n: lw.editFailOscillations, files: fTxt }));
+            }
+            const showRepeat = lw.reason === 'repeat_loop' || lw.reason === 'repeat_and_oscillation';
+            if (showRepeat && lw.maxRepeatCount >= 3) {
+              parts.push(t('repeatPart', { pct: Math.round((lw.repeatRate || 0) * 100), tool: lw.topRepeatedCall || 'tool', n: lw.maxRepeatCount }));
+            }
+            const statusLabel = isCrit ? t('loopStatusCritical') : t('loopStatusWarn');
+            loopRowEl.className = isCrit ? 'alert-strip is-danger' : 'alert-strip is-warn';
+            loopRowEl.innerText = t('convergenceWatch', { status: statusLabel, parts: parts.join(' + ') });
+            loopRowEl.classList.remove('hidden');
+          } else {
+            loopRowEl.classList.add('hidden');
           }
-          const showRepeat = lw.reason === 'repeat_loop' || lw.reason === 'repeat_and_oscillation';
-          if (showRepeat && lw.maxRepeatCount >= 3) {
-            parts.push(t('repeatPart', { pct: Math.round((lw.repeatRate || 0) * 100), tool: lw.topRepeatedCall || 'tool', n: lw.maxRepeatCount }));
-          }
-          const statusLabel = isCrit ? t('loopStatusCritical') : t('loopStatusWarn');
-          loopRowEl.className = isCrit ? 'alert-strip is-danger' : 'alert-strip is-warn';
-          loopRowEl.innerText = t('convergenceWatch', { status: statusLabel, parts: parts.join(' + ') });
-          loopRowEl.classList.remove('hidden');
         }
       } else {
         if (loopBadgeEl) loopBadgeEl.classList.add('hidden');
@@ -7411,12 +8204,15 @@
         wd.globalTtlKeepaliveMaxCount !== undefined ||
         wd.ttlKeepalive?.globalMaxCount !== undefined ||
         wd.globalTtlKeepaliveMinContextPct !== undefined ||
-        wd.ttlKeepalive?.minContextPct !== undefined
+        wd.ttlKeepalive?.minContextPct !== undefined ||
+        wd.globalTtlKeepaliveIntervalSec !== undefined ||
+        wd.ttlKeepalive?.globalIntervalSec !== undefined
       ) {
         syncGlobalKeepaliveFromPayload(
           wd.globalTtlKeepaliveMaxCount ?? wd.ttlKeepalive?.globalMaxCount,
           wd.fallbackTtlKeepaliveMaxCount ?? wd.ttlKeepalive?.fallbackMaxCount,
-          wd.globalTtlKeepaliveMinContextPct ?? wd.ttlKeepalive?.minContextPct
+          wd.globalTtlKeepaliveMinContextPct ?? wd.ttlKeepalive?.minContextPct,
+          wd.globalTtlKeepaliveIntervalSec ?? wd.ttlKeepalive?.globalIntervalSec
         );
       }
       if (wd.ttlKeepalive) {
@@ -7789,6 +8585,7 @@
           lastObservedWatchdogIncidentKey = '';
           resetHandoffDrawerTargetMode();
           clearHandoffSnapshot({ resetPreview: true, reloadIfOpen: handoffDrawerOpen });
+          resetPanelGuidanceState();
           updateWatchdogIncidentButtons();
           renderSessionSwitcher(cachedWatchdog);
         }
@@ -7837,6 +8634,7 @@
           lastObservedWatchdogIncidentKey = '';
           resetHandoffDrawerTargetMode();
           clearHandoffSnapshot({ resetPreview: true, reloadIfOpen: handoffDrawerOpen });
+          resetPanelGuidanceState();
           updateWatchdogIncidentButtons();
           renderSessionSwitcher(cachedWatchdog);
         }
@@ -7916,6 +8714,7 @@
             lastObservedWatchdogIncidentKey = '';
             resetHandoffDrawerTargetMode();
             clearHandoffSnapshot({ resetPreview: true, reloadIfOpen: handoffDrawerOpen });
+            resetPanelGuidanceState();
             updateWatchdogIncidentButtons();
             renderSessionSwitcher(cachedWatchdog);
           }
@@ -8396,7 +9195,10 @@
       }
     }
 
-    let cachedGlobalKeepalive = { globalMaxCount: 0, fallbackMaxCount: 1, minContextPct: 15 };
+    const KEEPALIVE_INTERVAL_PRESETS = [0, 240, 540, 900];
+    let cachedGlobalKeepalive = { globalMaxCount: 0, fallbackMaxCount: 1, minContextPct: 15, globalIntervalSec: 0 };
+    let globalCustomIntervalOpen = false;
+    let windowCustomIntervalOpen = false;
     let minCtxActionSeq = 0;
     let inFlightMinCtxActionCount = 0;
     let unboundKeepaliveState = {
@@ -8404,11 +9206,36 @@
       maxCount: 1,
       globalMaxCount: 0,
       fallbackMaxCount: 1,
+      intervalSec: 0,
+      globalIntervalSec: 0,
       isCustomOverride: false,
       usedCount: 0,
       coldMissTripped: false,
       lastError: ''
     };
+
+    function normalizeKeepaliveIntervalSecClient(raw, fallback = 0) {
+      if (raw === null || raw === undefined || raw === '') return fallback;
+      const n = Number(raw);
+      if (!Number.isFinite(n)) return fallback;
+      const floored = Math.floor(n);
+      if (floored <= 0) return 0;
+      return Math.min(3600, Math.max(60, floored));
+    }
+
+    function syncKeepaliveIntervalOptionLabels(prefix) {
+      const mapping = [
+        ['0', 'kvKeepaliveIntervalAuto'],
+        ['240', 'kvKeepaliveInterval4m'],
+        ['540', 'kvKeepaliveInterval9m'],
+        ['900', 'kvKeepaliveInterval15m'],
+        ['custom', 'kvKeepaliveIntervalCustom']
+      ];
+      for (const [suffix, key] of mapping) {
+        const opt = document.getElementById(`${prefix}-opt-${suffix}`);
+        if (opt) opt.textContent = t(key);
+      }
+    }
 
     function resolveActiveWindowCapTokens(explicitWinTokens) {
       const candidates = [
@@ -8493,7 +9320,7 @@
       }
     }
 
-    function syncGlobalKeepaliveFromPayload(rawGlobalMax, rawFallbackMax, rawMinContextPct) {
+    function syncGlobalKeepaliveFromPayload(rawGlobalMax, rawFallbackMax, rawMinContextPct, rawGlobalIntervalSec) {
       const nextGlobal = Number.isFinite(Number(rawGlobalMax))
         ? Math.min(20, Math.max(0, Math.floor(Number(rawGlobalMax))))
         : cachedGlobalKeepalive.globalMaxCount;
@@ -8508,10 +9335,15 @@
           : Number.isFinite(Number(rawMinContextPct))
             ? Math.min(100, Math.max(0, Math.floor(Number(rawMinContextPct))))
             : cachedGlobalKeepalive.minContextPct;
+      const nextGlobalInterval =
+        rawGlobalIntervalSec !== undefined && rawGlobalIntervalSec !== null
+          ? normalizeKeepaliveIntervalSecClient(rawGlobalIntervalSec, cachedGlobalKeepalive.globalIntervalSec)
+          : cachedGlobalKeepalive.globalIntervalSec;
       cachedGlobalKeepalive = {
         globalMaxCount: nextGlobal,
         fallbackMaxCount: nextFallback,
-        minContextPct: nextMinPct
+        minContextPct: nextMinPct,
+        globalIntervalSec: nextGlobalInterval
       };
       if (!unboundKeepaliveState.isCustomOverride) {
         unboundKeepaliveState = {
@@ -8519,17 +9351,22 @@
           enabled: nextGlobal >= 1,
           maxCount: nextGlobal >= 1 ? nextGlobal : nextFallback,
           globalMaxCount: nextGlobal,
-          fallbackMaxCount: nextFallback
+          fallbackMaxCount: nextFallback,
+          intervalSec: nextGlobalInterval,
+          globalIntervalSec: nextGlobalInterval
         };
       }
-      renderGlobalKeepaliveControls(nextGlobal, nextFallback);
+      renderGlobalKeepaliveControls(nextGlobal, nextFallback, nextGlobalInterval);
       renderKeepaliveMinContextControls(nextMinPct);
     }
 
-    function renderGlobalKeepaliveControls(rawGlobalMax, rawFallbackMax) {
+    function renderGlobalKeepaliveControls(rawGlobalMax, rawFallbackMax, rawGlobalIntervalSec) {
       const btn = document.getElementById('kv-global-keepalive-btn');
       const grp = document.getElementById('kv-global-keepalive-group');
       const maxInput = document.getElementById('kv-global-keepalive-max');
+      const intervalSelect = document.getElementById('kv-global-keepalive-interval');
+      const customWrap = document.getElementById('kv-global-keepalive-interval-custom-wrap');
+      const customInput = document.getElementById('kv-global-keepalive-interval-custom');
       const globalMax = Number.isFinite(Number(rawGlobalMax))
         ? Math.min(20, Math.max(0, Math.floor(Number(rawGlobalMax))))
         : cachedGlobalKeepalive.globalMaxCount;
@@ -8538,11 +9375,16 @@
         : globalMax >= 1
           ? globalMax
           : cachedGlobalKeepalive.fallbackMaxCount;
+      const globalInterval =
+        rawGlobalIntervalSec !== undefined && rawGlobalIntervalSec !== null
+          ? normalizeKeepaliveIntervalSecClient(rawGlobalIntervalSec, cachedGlobalKeepalive.globalIntervalSec)
+          : cachedGlobalKeepalive.globalIntervalSec;
       const isOn = globalMax >= 1;
       if (btn) {
         if (btn.dataset) {
           btn.dataset.max = String(globalMax);
           btn.dataset.fallback = String(fallbackMax);
+          btn.dataset.interval = String(globalInterval);
         }
         btn.className = isOn ? 'toggle-chip is-on' : 'toggle-chip';
         const label = t('kvGlobalKeepaliveLabel');
@@ -8557,6 +9399,24 @@
       }
       if (maxInput && document.activeElement !== maxInput) {
         maxInput.value = String(globalMax);
+      }
+      syncKeepaliveIntervalOptionLabels('kv-global-keepalive-interval');
+      const isPreset = KEEPALIVE_INTERVAL_PRESETS.includes(globalInterval);
+      const showCustom = !isPreset || globalCustomIntervalOpen;
+      if (intervalSelect) {
+        intervalSelect.title = t('kvGlobalKeepaliveIntervalTip');
+        if (document.activeElement !== intervalSelect) {
+          intervalSelect.value = showCustom ? 'custom' : String(globalInterval);
+        }
+      }
+      if (customWrap) {
+        customWrap.title = t('kvKeepaliveIntervalCustomTip');
+        customWrap.className = showCustom
+          ? 'keepalive-interval-custom-wrap'
+          : 'keepalive-interval-custom-wrap hidden';
+      }
+      if (customInput && !isPreset && document.activeElement !== customInput) {
+        customInput.value = String(Math.max(1, Math.min(60, Math.round(globalInterval / 60))));
       }
     }
 
@@ -8624,10 +9484,106 @@
             fallbackMaxCount: prevFallbackMax
           };
           unboundKeepaliveState = prevUnbound;
-          renderGlobalKeepaliveControls(prevGlobalMax, prevFallbackMax);
+          renderGlobalKeepaliveControls(prevGlobalMax, prevFallbackMax, cachedGlobalKeepalive.globalIntervalSec);
           renderKeepaliveControls(prevWindowSnap);
         }
       }
+    }
+
+    async function commitGlobalTtlKeepaliveInterval(nextIntervalSec) {
+      const prevGlobalInterval = cachedGlobalKeepalive.globalIntervalSec;
+      const prevUnbound = { ...unboundKeepaliveState };
+      const prevWindowSnap = snapshotKeepaliveUiState();
+      const parsed = normalizeKeepaliveIntervalSecClient(nextIntervalSec, 0);
+      globalCustomIntervalOpen = false;
+      syncGlobalKeepaliveFromPayload(
+        cachedGlobalKeepalive.globalMaxCount,
+        cachedGlobalKeepalive.fallbackMaxCount,
+        undefined,
+        parsed
+      );
+      const curTargetId = resolveKeepaliveConversationId() || '__default__';
+      const hasInFlightWindowCustom =
+        Boolean(pendingCustomOverrideConvId) && pendingCustomOverrideConvId === curTargetId;
+      if (!prevWindowSnap.isSubagent && !prevWindowSnap.isCustomOverride && !hasInFlightWindowCustom) {
+        renderKeepaliveControls({
+          ...prevWindowSnap,
+          intervalSec: parsed,
+          globalIntervalSec: parsed
+        });
+      }
+      const expectedSeq = watchdogActionSeq + 1;
+      try {
+        const data = await sendWatchdogAction({
+          action: 'setGlobalTtlKeepaliveInterval',
+          intervalSec: parsed,
+          ...(window.sidecar ? { fromSidecarHost: true } : {})
+        });
+        const effInterval = data?.globalTtlKeepaliveIntervalSec ?? data?.status?.globalTtlKeepaliveIntervalSec;
+        if (watchdogActionSeq === expectedSeq && Number.isFinite(Number(effInterval))) {
+          const snapped = normalizeKeepaliveIntervalSecClient(effInterval, parsed);
+          syncGlobalKeepaliveFromPayload(
+            cachedGlobalKeepalive.globalMaxCount,
+            cachedGlobalKeepalive.fallbackMaxCount,
+            undefined,
+            snapped
+          );
+        }
+      } catch (e) {
+        console.error(e);
+        if (watchdogActionSeq === expectedSeq) {
+          cachedGlobalKeepalive = {
+            ...cachedGlobalKeepalive,
+            globalIntervalSec: prevGlobalInterval
+          };
+          unboundKeepaliveState = prevUnbound;
+          renderGlobalKeepaliveControls(
+            cachedGlobalKeepalive.globalMaxCount,
+            cachedGlobalKeepalive.fallbackMaxCount,
+            prevGlobalInterval
+          );
+          renderKeepaliveControls(prevWindowSnap);
+        }
+      }
+    }
+
+    async function changeGlobalTtlKeepaliveInterval(rawPreset) {
+      const str = String(rawPreset ?? '').trim();
+      if (str === 'custom') {
+        globalCustomIntervalOpen = true;
+        const customInput = document.getElementById('kv-global-keepalive-interval-custom');
+        const curSec = cachedGlobalKeepalive.globalIntervalSec;
+        if (customInput) {
+          customInput.value = String(curSec >= 60 ? Math.max(1, Math.min(60, Math.round(curSec / 60))) : 5);
+        }
+        renderGlobalKeepaliveControls(
+          cachedGlobalKeepalive.globalMaxCount,
+          cachedGlobalKeepalive.fallbackMaxCount,
+          curSec
+        );
+        if (customInput && typeof customInput.focus === 'function') customInput.focus();
+        if (customInput && typeof customInput.select === 'function') customInput.select();
+        return;
+      }
+      return commitGlobalTtlKeepaliveInterval(normalizeKeepaliveIntervalSecClient(str, 0));
+    }
+
+    async function changeGlobalTtlKeepaliveCustomMin(rawMin) {
+      const trimmed = rawMin === null || rawMin === undefined ? '' : String(rawMin).trim();
+      const num = Number(trimmed);
+      if (trimmed === '' || !Number.isFinite(num)) {
+        globalCustomIntervalOpen = false;
+        renderGlobalKeepaliveControls(
+          cachedGlobalKeepalive.globalMaxCount,
+          cachedGlobalKeepalive.fallbackMaxCount,
+          cachedGlobalKeepalive.globalIntervalSec
+        );
+        return;
+      }
+      const mins = Math.min(60, Math.max(1, Math.floor(num)));
+      const customInput = document.getElementById('kv-global-keepalive-interval-custom');
+      if (customInput) customInput.value = String(mins);
+      return commitGlobalTtlKeepaliveInterval(mins * 60);
     }
 
     function resolveKeepaliveConversationId() {
@@ -8667,12 +9623,16 @@
       const isSubagent = btn ? btn.dataset?.subagent === '1' : false;
       const isCustomOverride = !isSubagent && (btn ? btn.dataset?.custom === '1' : false);
       const coldMissTripped = !isSubagent && (btn ? btn.dataset?.cold === '1' : false);
+      const intervalSec = btn && btn.dataset?.interval !== undefined && btn.dataset?.interval !== ''
+        ? normalizeKeepaliveIntervalSecClient(btn.dataset.interval, cachedGlobalKeepalive.globalIntervalSec)
+        : cachedGlobalKeepalive.globalIntervalSec;
       return {
         isSubagent,
         isCustomOverride,
         coldMissTripped,
         enabled: !isSubagent && btn?.dataset?.enabled === '1',
         maxCount: Math.min(20, Math.max(1, parseInt(btn?.dataset?.max || maxInput?.value || '1', 10) || 1)),
+        intervalSec,
         usedCount: isSubagent ? 0 : Math.max(0, parseInt(btn?.dataset?.used || '0', 10) || 0)
       };
     }
@@ -8681,13 +9641,24 @@
       const btn = document.getElementById('kv-keepalive-btn');
       const grp = document.getElementById('kv-keepalive-group');
       const maxInput = document.getElementById('kv-keepalive-max');
+      const intervalSelect = document.getElementById('kv-keepalive-interval');
+      const customWrap = document.getElementById('kv-keepalive-interval-custom-wrap');
+      const customInput = document.getElementById('kv-keepalive-interval-custom');
       const followBtn = document.getElementById('kv-keepalive-follow-btn');
       const resetBtn = document.getElementById('kv-keepalive-reset-btn');
       if (
         ka &&
-        (ka.globalMaxCount !== undefined || ka.fallbackMaxCount !== undefined || ka.minContextPct !== undefined)
+        (ka.globalMaxCount !== undefined ||
+          ka.fallbackMaxCount !== undefined ||
+          ka.minContextPct !== undefined ||
+          ka.globalIntervalSec !== undefined)
       ) {
-        syncGlobalKeepaliveFromPayload(ka.globalMaxCount, ka.fallbackMaxCount, ka.minContextPct);
+        syncGlobalKeepaliveFromPayload(
+          ka.globalMaxCount,
+          ka.fallbackMaxCount,
+          ka.minContextPct,
+          ka.globalIntervalSec
+        );
       }
       if (!btn) return;
       const isSubagent = ka ? ka.isSubagent === true : (btn.dataset?.subagent === '1');
@@ -8696,6 +9667,12 @@
       const maxCount = ka && Number.isFinite(Number(ka.maxCount))
         ? Math.min(20, Math.max(1, Math.floor(Number(ka.maxCount))))
         : Math.min(20, Math.max(1, parseInt(btn.dataset?.max || maxInput?.value || '1', 10) || 1));
+      const intervalSec =
+        ka && ka.intervalSec !== undefined && ka.intervalSec !== null
+          ? normalizeKeepaliveIntervalSecClient(ka.intervalSec, cachedGlobalKeepalive.globalIntervalSec)
+          : btn.dataset?.interval !== undefined && btn.dataset?.interval !== ''
+            ? normalizeKeepaliveIntervalSecClient(btn.dataset.interval, cachedGlobalKeepalive.globalIntervalSec)
+            : cachedGlobalKeepalive.globalIntervalSec;
       const usedCount = isSubagent
         ? 0
         : ka && Number.isFinite(Number(ka.usedCount))
@@ -8711,6 +9688,7 @@
         btn.dataset.custom = isCustom ? '1' : '0';
         btn.dataset.enabled = enabled ? '1' : '0';
         btn.dataset.max = String(maxCount);
+        btn.dataset.interval = String(intervalSec);
         btn.dataset.used = String(usedCount);
         btn.dataset.cold = coldMissTripped ? '1' : '0';
       }
@@ -8736,7 +9714,10 @@
       if (isSubagent) {
         btn.title = t('kvKeepaliveSubagentTip');
       } else {
-        const baseTip = t('kvKeepaliveTip');
+        const baseTip =
+          intervalSec > 0
+            ? t('kvKeepaliveFixedTip', { min: Math.max(1, Math.round(intervalSec / 60)) })
+            : t('kvKeepaliveTip');
         const coldNote = coldMissTripped ? ` — ${t('kvKeepaliveColdTip')}` : '';
         let minGateNote = '';
         if (!coldMissTripped && enabled && !isCustom && cachedKv?.transcriptFound && Number(cachedKv.currentContextTokens) > 0) {
@@ -8758,6 +9739,28 @@
         maxInput.disabled = isSubagent;
         if (document.activeElement !== maxInput) {
           maxInput.value = String(maxCount);
+        }
+      }
+      syncKeepaliveIntervalOptionLabels('kv-keepalive-interval');
+      const isPreset = KEEPALIVE_INTERVAL_PRESETS.includes(intervalSec);
+      const showCustom = !isSubagent && (!isPreset || windowCustomIntervalOpen);
+      if (intervalSelect) {
+        intervalSelect.disabled = isSubagent;
+        intervalSelect.title = t('kvKeepaliveIntervalTip');
+        if (document.activeElement !== intervalSelect) {
+          intervalSelect.value = showCustom ? 'custom' : String(intervalSec);
+        }
+      }
+      if (customWrap) {
+        customWrap.title = t('kvKeepaliveIntervalCustomTip');
+        customWrap.className = showCustom
+          ? 'keepalive-interval-custom-wrap'
+          : 'keepalive-interval-custom-wrap hidden';
+      }
+      if (customInput) {
+        customInput.disabled = isSubagent;
+        if (!isPreset && document.activeElement !== customInput) {
+          customInput.value = String(Math.max(1, Math.min(60, Math.round(intervalSec / 60))));
         }
       }
       if (followBtn) {
@@ -8857,18 +9860,105 @@
       }
     }
 
+    async function commitTtlKeepaliveInterval(nextIntervalSec) {
+      const prevSnap = snapshotKeepaliveUiState();
+      if (prevSnap.isSubagent) return;
+      const parsed = normalizeKeepaliveIntervalSecClient(nextIntervalSec, 0);
+      windowCustomIntervalOpen = false;
+      const targetId = resolveKeepaliveConversationId();
+      pendingCustomOverrideConvId = targetId || '__default__';
+      const nextEnabled = parsed >= 60 ? true : prevSnap.enabled;
+      const optimistic = {
+        ...prevSnap,
+        isCustomOverride: true,
+        enabled: nextEnabled,
+        intervalSec: parsed
+      };
+      if (targetId === '__unbound__') {
+        unboundKeepaliveState = { ...unboundKeepaliveState, ...optimistic };
+      }
+      renderKeepaliveControls(optimistic);
+      const expectedSeq = watchdogActionSeq + 1;
+      try {
+        const data = await sendWatchdogAction({
+          action: 'setTtlKeepalive',
+          intervalSec: parsed,
+          ...(targetId ? { conversationId: targetId } : {}),
+          ...(window.sidecar ? { fromSidecarHost: true } : {})
+        });
+        const effInterval = data?.ttlKeepaliveIntervalSec ?? data?.status?.ttlKeepalive?.intervalSec;
+        if (
+          watchdogActionSeq === expectedSeq &&
+          resolveKeepaliveConversationId() === targetId &&
+          Number.isFinite(Number(effInterval))
+        ) {
+          const snapped = normalizeKeepaliveIntervalSecClient(effInterval, parsed);
+          renderKeepaliveControls({ ...optimistic, intervalSec: snapped });
+        }
+      } catch (e) {
+        console.error(e);
+        if (watchdogActionSeq === expectedSeq && resolveKeepaliveConversationId() === targetId) {
+          pendingCustomOverrideConvId = '';
+          if (targetId === '__unbound__') {
+            unboundKeepaliveState = { ...unboundKeepaliveState, ...prevSnap };
+          }
+          renderKeepaliveControls(prevSnap);
+        }
+      }
+    }
+
+    async function changeTtlKeepaliveInterval(rawPreset) {
+      const prevSnap = snapshotKeepaliveUiState();
+      if (prevSnap.isSubagent) return;
+      const str = String(rawPreset ?? '').trim();
+      if (str === 'custom') {
+        windowCustomIntervalOpen = true;
+        const customInput = document.getElementById('kv-keepalive-interval-custom');
+        if (customInput) {
+          customInput.value = String(
+            prevSnap.intervalSec >= 60 ? Math.max(1, Math.min(60, Math.round(prevSnap.intervalSec / 60))) : 5
+          );
+        }
+        renderKeepaliveControls(prevSnap);
+        if (customInput && typeof customInput.focus === 'function') customInput.focus();
+        if (customInput && typeof customInput.select === 'function') customInput.select();
+        return;
+      }
+      return commitTtlKeepaliveInterval(normalizeKeepaliveIntervalSecClient(str, 0));
+    }
+
+    async function changeTtlKeepaliveCustomMin(rawMin) {
+      const prevSnap = snapshotKeepaliveUiState();
+      if (prevSnap.isSubagent) return;
+      const trimmed = rawMin === null || rawMin === undefined ? '' : String(rawMin).trim();
+      const num = Number(trimmed);
+      if (trimmed === '' || !Number.isFinite(num)) {
+        windowCustomIntervalOpen = false;
+        renderKeepaliveControls(prevSnap);
+        return;
+      }
+      const mins = Math.min(60, Math.max(1, Math.floor(num)));
+      const customInput = document.getElementById('kv-keepalive-interval-custom');
+      if (customInput) customInput.value = String(mins);
+      return commitTtlKeepaliveInterval(mins * 60);
+    }
+
     async function resetTtlKeepaliveOverride() {
       const prevSnap = snapshotKeepaliveUiState();
       if (prevSnap.isSubagent) return;
       const targetId = resolveKeepaliveConversationId();
       pendingCustomOverrideConvId = '';
+      windowCustomIntervalOpen = false;
       const gm = cachedGlobalKeepalive.globalMaxCount;
       const fm = cachedGlobalKeepalive.fallbackMaxCount;
+      const gi = cachedGlobalKeepalive.globalIntervalSec;
       const optimistic = {
         ...prevSnap,
         isCustomOverride: false,
         enabled: gm >= 1,
-        maxCount: gm >= 1 ? gm : fm
+        maxCount: gm >= 1 ? gm : fm,
+        intervalSec: gi,
+        globalIntervalSec: gi
       };
       const maxInput = document.getElementById('kv-keepalive-max');
       if (maxInput) maxInput.value = String(optimistic.maxCount);

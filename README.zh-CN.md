@@ -77,13 +77,13 @@ AI 要搜好几个词时一次同时搜完，要改多个文件时一次改完�
 **Windows（PowerShell）：**
 
 ```powershell
-irm https://raw.githubusercontent.com/zou172866/Antigravity-agy-dart/v1.7.2/install.ps1 | iex
+irm https://raw.githubusercontent.com/zou172866/Antigravity-agy-dart/v1.7.3/install.ps1 | iex
 ```
 
 **macOS / Linux：**
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/zou172866/Antigravity-agy-dart/v1.7.2/install.sh | sh
+curl -fsSL https://raw.githubusercontent.com/zou172866/Antigravity-agy-dart/v1.7.3/install.sh | sh
 ```
 
 ### 方法二：直接发给 Antigravity 装
@@ -91,13 +91,13 @@ curl -fsSL https://raw.githubusercontent.com/zou172866/Antigravity-agy-dart/v1.7
 复制这句发给 Antigravity：
 
 ```text
-请将 https://github.com/zou172866/Antigravity-agy-dart.git 的 v1.7.2 标签克隆到临时目录，运行其中的 scripts/install.mjs install 完成全局安装并跑 doctor 自检（Windows 如未安装 rg 请同时传 --install-rg）。
+请将 https://github.com/zou172866/Antigravity-agy-dart.git 的 v1.7.3 标签克隆到临时目录，运行其中的 scripts/install.mjs install 完成全局安装并跑 doctor 自检（Windows 如未安装 rg 请同时传 --install-rg）。
 ```
 
 ### 方法三：克隆仓库自定义安装
 
 ```powershell
-git clone --branch v1.7.2 --depth 1 https://github.com/zou172866/Antigravity-agy-dart.git
+git clone --branch v1.7.3 --depth 1 https://github.com/zou172866/Antigravity-agy-dart.git
 cd Antigravity-agy-dart
 
 # Windows PowerShell（加 -InstallRg 可顺手自动安装快速搜索工具 rg）
@@ -126,7 +126,7 @@ node scripts/install.mjs uninstall                   # 卸载
 
 ## 设置调节
 
-自动加热默认关闭。需要时，在右侧 **agy-dart Context** 面板为当前窗口打开“自动续温”。“全局加热”控制所有跟随全局设置的窗口。关闭当前窗口的自动续温后，缓存即将过期和续温次数用尽都不会弹出桌面提醒。任务卡死弹窗也默认关闭，可在面板中单独开启。每次加热都会请求模型回复 `OK` 并产生输入用量，缓存未命中时可能重新处理整段历史。面板也可设置桌面提醒、暂停保护、清理旧记录和调整文件大小限制。
+自动加热默认关闭。需要时，在右侧 **agy-dart Context** 面板为当前窗口打开“自动续温”。“全局加热”控制所有跟随全局设置的窗口默认次数与触发策略（支持 **动态(现方案)**、**固定 4min / 9min / 15min** 或 **自定义 1–60min**，也可通过 `ttlKeepaliveIntervalSec` / `AGY_DART_TTL_KEEPALIVE_INTERVAL_SEC` 配置）。关闭当前窗口的自动续温后，缓存即将过期和续温次数用尽都不会弹出桌面提醒。任务卡死弹窗也默认关闭，可在面板中单独开启。每次加热都会请求模型回复 `OK` 并产生输入用量，缓存未命中时可能重新处理整段历史。面板也可设置桌面提醒、暂停保护、清理旧记录和调整文件大小限制。
 
 也可以用命令切拦截档位与工具加载方式：
 
@@ -145,6 +145,11 @@ node scripts/install.mjs tool-loading eager         # 12 个工具全部预载
 ---
 
 ## 更新日志
+
+### v1.7.3
+- **自动续温支持用户自选时间档位**：全局与单窗口均支持选择 **动态(现方案)**、**固定 4min / 9min / 15min** 或 **自定义(1–60min)**，支持单窗独立覆盖与点「随全局」一键恢复，同步支持 `ttlKeepaliveIntervalSec` 与 `AGY_DART_TTL_KEEPALIVE_INTERVAL_SEC` 配置；固定档位与面板实测 TTL 展示解耦，保留久置上限护栏与冷未命中熔断。
+- **修复检查超时误报与面板状态误判**：纯命令超时不再误计入“反复改错”告警；无关测试通过或窄范围单测通过（`-t`/`-k`/`--shard`/`::case`）不再清掉外层失败套件；后台检查失败在编辑无关文件后仍清晰保留；截断的 `run_checks` 失败批次在原批次重跑前持续提示“明细缺失”；会话检查点恢复完整保留未解决失败并在未确认会话范围脱敏报错摘录。
+- **交接简报与缓存失效诊断升级**：升级缓存友好交接简报（双轨侧边栏文案与统一密钥脱敏），新增缓存失效读状态拆解（`bustReadState`）与历史上下文匹配诊断（`priorContextMatch`）。
 
 ### v1.7.2
 - **Agent Skills 渐进披露结构与首轮前缀税审计**：为 `skills/agy-dart/` 拆分按需加载的 `examples/`（`ctx_trace_summary.py`、`filters.json`）与 `references/error-playbook.md` 并同步适配 Antigravity、Claude Code 与 Codex；新增 `node bin/agy-dart.mjs audit skills` 审计已装 Skills 的首轮 frontmatter 开销与渐进披露结构，并在 `prefix:budget` 中分离统计按需附件体积。
@@ -246,7 +251,7 @@ npm run cache:simulate
 Claude Code 和 Codex 的安装器会在 `~/.agy-dart/<host>-install.json` 中保存哈希及撤销插件改动所需的信息。重装会替换旧版的整份配置备份，卸载会移除该宿主的安装记录。
 
 ```sh
-git clone --branch v1.7.2 --depth 1 https://github.com/zou172866/Antigravity-agy-dart.git
+git clone --branch v1.7.3 --depth 1 https://github.com/zou172866/Antigravity-agy-dart.git
 cd Antigravity-agy-dart
 node bin/agy-dart.mjs install
 node bin/agy-dart.mjs doctor

@@ -636,35 +636,468 @@ function extractToolResponseText(payload = {}) {
   return "";
 }
 
-function extractRunChecksFailureSection(responseText) {
-  if (!responseText || typeof responseText !== "string") return "";
+const ZERO_MATCH_FILTER_STAGE_RE =
+  /^(?:&\s+)?(?:(?:[a-z]:)?[\\/][^\s]+?[\\/])?(?:select-string|sls|grep|egrep|fgrep|rg|ripgrep|findstr)(?:\.exe)?(?:\s|$)/i;
+
+const WIN_DRIVE_OR_UNC_PATH_BEFORE_TRAILING_BS_RE =
+  /^(?:[a-zA-Z]:(?:[\\/][^"'`<>|;&=()]*)?|(?:\\\\|\.\.?\\)[^"'`<>|;&=()]*)$/;
+const WIN_REL_PATH_BEFORE_TRAILING_BS_RE =
+  /^(?:[^"'`<>|;&=()\s][^"'`<>|;&=()]*\\[^"'`<>|;&=()]*|[^\s"'`<>|;&=()]+)$/;
+
+const PURE_SETUP_CLAUSE_RE =
+  /^(?:(?:cd|chdir|pushd|set-location|push-location|sl)(?:\s|$)|export\s+[a-z_][a-z0-9_]*=|set\s+(?:"[a-z_][a-z0-9_]*=|[a-z_][a-z0-9_]*=)|\$env:[a-z0-9_]+\s*=|[a-z_][a-z0-9_]*=(?:"[^"]*"|'[^']*'|\S+)(?:\s+[a-z_][a-z0-9_]*=(?:"[^"]*"|'[^']*'|\S+))*$)/i;
+
+const READ_ONLY_STAGE_HEAD_RE =
+  /^(?:git(?:\.exe)?\s+(?:(?:-C\s+(?:"[^"]*"|'[^']*'|\S+)|--no-pager|-c\s+(?:"[^"]*"|'[^']*'|\S+))\s+)*(?:diff|status|log|show|branch|rev-parse|ls-files|grep|blame|shortlog|describe|tag|reflog|ls-tree|cat-file|check-ignore|for-each-ref)|(?:cat|head|tail|less|more|ls|dir|echo|printf|pwd|which|where|type|rg|ripgrep|grep|egrep|fgrep|select-string|sls|findstr|get-content|get-childitem|get-location|get-item|gc|gci|gl|stat|wc|file|tree|find|write-output|write-host|format-table|select-object|measure-object|sort-object|test-path|resolve-path|true)(?:\.exe)?)(?:\s|$)/i;
+
+const SHELL_WRAPPER_CMD_RE =
+  /^(?:(?:powershell|pwsh)(?:\.exe)?\s+(?:(?:-(?:NoProfile|NonInteractive|NoLogo|nop|noni)|-ExecutionPolicy\s+\S+)\s+)*(?:-Command|-c)\s+|(?:bash|sh|zsh)(?:\.exe)?\s+(?:-[a-zA-Z]*c)\s+|cmd(?:\.exe)?\s+(?:\/[a-zA-Z]+\s+)*\/c\s+)(.+)$/i;
+
+function hasEvenRemainingDoubleQuotes(str, startIdx) {
+  let count = 0;
+  let inSingle = false;
+  let inDouble = false;
+  for (let j = startIdx; j < str.length; j++) {
+    const c = str[j];
+    if (inSingle) {
+      if (c === "'") inSingle = false;
+      continue;
+    }
+    if (!inDouble && c === "'") {
+      inSingle = true;
+      continue;
+    }
+    if (inDouble) {
+      if (c === "`" && j + 1 < str.length && (str[j + 1] === '"' || str[j + 1] === "`")) {
+        j++;
+        continue;
+      }
+      if (c === "\\" && j + 1 < str.length) {
+        if (str[j + 1] === "\\") {
+          j++;
+          continue;
+        }
+        if (str[j + 1] === '"') {
+          const after = str[j + 2];
+          if (after !== undefined && !/[\s;|&<>)]/.test(after)) {
+            j++;
+            continue;
+          }
+        }
+      }
+    }
+    if (c === '"') {
+      count += 1;
+      inDouble = !inDouble;
+    }
+  }
+  return count % 2 === 0;
+}
+
+function splitShellOutsideQuotesWithOps(str, isSepFn) {
+  const parts = [];
+  const ops = [];
+  let cur = "";
+  let quote = "";
+  let quoteStartIdx = -1;
+  for (let i = 0; i < str.length; i++) {
+    const ch = str[i];
+    if (quote) {
+      if (quote === '"') {
+        if (ch === "`" && i + 1 < str.length && (str[i + 1] === '"' || str[i + 1] === "`")) {
+          cur += ch + str[++i];
+          continue;
+        }
+        if (ch === "\\" && i + 1 < str.length) {
+          if (str[i + 1] === "\\") {
+            cur += ch + str[++i];
+            continue;
+          }
+          if (str[i + 1] === '"') {
+            const quoteContent = str.slice(quoteStartIdx + 1, i);
+            const nextAfter = str[i + 2];
+            const atTokenEnd = nextAfter === undefined || /[\s;|&<>)]/.test(nextAfter);
+            const isWinTrailingBs =
+              atTokenEnd &&
+              (WIN_DRIVE_OR_UNC_PATH_BEFORE_TRAILING_BS_RE.test(quoteContent) ||
+                (WIN_REL_PATH_BEFORE_TRAILING_BS_RE.test(quoteContent) &&
+                  hasEvenRemainingDoubleQuotes(str, i + 2)));
+            if (!isWinTrailingBs) {
+              cur += ch + str[++i];
+              continue;
+            }
+          }
+        }
+      }
+      cur += ch;
+      if (ch === quote) {
+        quote = "";
+        quoteStartIdx = -1;
+      }
+      continue;
+    }
+    if (ch === '"' || ch === "'") {
+      quote = ch;
+      quoteStartIdx = i;
+      cur += ch;
+      continue;
+    }
+    const sepLen = isSepFn(str, i);
+    if (sepLen > 0) {
+      if (cur.trim()) {
+        parts.push(cur.trim());
+        ops.push(str.slice(i, i + sepLen));
+      }
+      cur = "";
+      i += sepLen - 1;
+      continue;
+    }
+    cur += ch;
+  }
+  if (cur.trim()) {
+    parts.push(cur.trim());
+  } else if (ops.length > 0 && ops.length >= parts.length) {
+    ops.pop();
+  }
+  return { parts, ops };
+}
+
+function splitShellOutsideQuotes(str, isSepFn) {
+  return splitShellOutsideQuotesWithOps(str, isSepFn).parts;
+}
+
+function unwrapShellPayloadToken(payload) {
+  const s = String(payload || "")
+    .replace(/\s+2>&1\s*$/g, "")
+    .replace(/\s+2>(?:\/dev\/null|\$null|nul)\s*$/gi, "")
+    .trim();
+  if (!s) return "";
+  if (s.length >= 2 && (s[0] === '"' || s[0] === "'")) {
+    const q = s[0];
+    let closedAt = -1;
+    for (let i = 1; i < s.length; i++) {
+      const ch = s[i];
+      if (q === '"') {
+        if (ch === "`" && i + 1 < s.length && (s[i + 1] === '"' || s[i + 1] === "`")) {
+          i++;
+          continue;
+        }
+        if (ch === "\\" && i + 1 < s.length && (s[i + 1] === "\\" || s[i + 1] === '"')) {
+          if (s[i + 1] === "\\") {
+            i++;
+            continue;
+          }
+          const atEnd = i + 2 === s.length;
+          if (!atEnd || !WIN_DRIVE_OR_UNC_PATH_BEFORE_TRAILING_BS_RE.test(s.slice(1, i))) {
+            i++;
+            continue;
+          }
+        }
+      }
+      if (ch === q) {
+        closedAt = i;
+        break;
+      }
+    }
+    if (closedAt === s.length - 1) {
+      const inner = s.slice(1, -1);
+      if (q === "'") return inner.trim();
+      return inner.replace(/\\"/g, '"').replace(/`"/g, '"').trim();
+    }
+    return "";
+  }
+  return s;
+}
+
+function stripShellExecPathPrefix(stageStr) {
+  const quotedExec = stageStr.match(/^("([^"]+)"|'([^']+)')(?:\s+(.*))?$/);
+  if (quotedExec) {
+    const rawExec = quotedExec[2] ?? quotedExec[3] ?? "";
+    const rest = quotedExec[4] || "";
+    if (!/(?:^|[\\/])scripts[\\/]/i.test(rawExec) && /[\\/]/.test(rawExec)) {
+      const base = rawExec.replace(/^.*[\\/]/, "");
+      return rest ? `${base} ${rest}` : base;
+    }
+    return stageStr;
+  }
+  const unquotedExec = stageStr.match(/^([^\s"']+)(?:\s+(.*))?$/);
+  if (unquotedExec) {
+    const rawExec = unquotedExec[1];
+    const rest = unquotedExec[2] || "";
+    if (!/(?:^|[\\/])scripts[\\/]/i.test(rawExec) && /[\\/]/.test(rawExec)) {
+      const base = rawExec.replace(/^.*[\\/]/, "");
+      return rest ? `${base} ${rest}` : base;
+    }
+  }
+  return stageStr;
+}
+
+function normalizeShellStageHead(stage) {
+  let s = String(stage || "").trim();
+  if (!s) return "";
+  s = s.replace(/^&\s+/, "");
+  while (true) {
+    s = stripShellExecPathPrefix(s);
+    const envCmd = s.match(/^(?:env|cross-env)(?:\s+(?:-u\s+\S+|-i))*\s+(.*)$/i);
+    if (envCmd) {
+      s = envCmd[1].trim();
+      continue;
+    }
+    const assign = s.match(/^[a-z_][a-z0-9_]*=(?:"[^"]*"|'[^']*'|[^\s]+)\s+(.*)$/i);
+    if (assign) {
+      s = assign[1].trim();
+      continue;
+    }
+    break;
+  }
+  return stripShellExecPathPrefix(s);
+}
+
+function unwrapSingleShellWrapperClause(clause) {
+  const stages = splitShellOutsideQuotes(String(clause || "").trim(), (s, i) => (s[i] === "|" ? 1 : 0));
+  if (stages.length !== 1) return "";
+  const head = normalizeShellStageHead(stages[0]);
+  const m = head.match(SHELL_WRAPPER_CMD_RE);
+  if (!m || !m[1]) return "";
+  return unwrapShellPayloadToken(m[1]);
+}
+
+function splitShellClauses(commandText, depth = 0) {
+  const cleaned = String(commandText || "").trim();
+  if (!cleaned) return { clauses: [], operators: [] };
+  const { parts, ops } = splitShellOutsideQuotesWithOps(cleaned, (s, i) => {
+    if (s[i] === ";") return 1;
+    if ((s[i] === "&" && s[i + 1] === "&") || (s[i] === "|" && s[i + 1] === "|")) return 2;
+    return 0;
+  });
+  if (depth >= 2 || parts.length === 0) {
+    return { clauses: parts, operators: ops };
+  }
+  const expandedClauses = [];
+  const expandedOps = [];
+  for (let idx = 0; idx < parts.length; idx++) {
+    const unwrapped = unwrapSingleShellWrapperClause(parts[idx]);
+    if (unwrapped && unwrapped !== parts[idx]) {
+      const sub = splitShellClauses(unwrapped, depth + 1);
+      if (sub.clauses.length > 0) {
+        for (let j = 0; j < sub.clauses.length; j++) {
+          expandedClauses.push(sub.clauses[j]);
+          if (j < sub.operators.length) expandedOps.push(sub.operators[j]);
+        }
+        if (idx < ops.length) expandedOps.push(ops[idx]);
+        continue;
+      }
+    }
+    expandedClauses.push(parts[idx]);
+    if (idx < ops.length) expandedOps.push(ops[idx]);
+  }
+  return { clauses: expandedClauses, operators: expandedOps };
+}
+
+function isPureSetupShellClause(clause) {
+  const trimmed = String(clause || "").trim();
+  if (!trimmed) return false;
+  const stages = splitShellOutsideQuotes(trimmed, (s, i) => (s[i] === "|" ? 1 : 0));
+  if (stages.length !== 1) return false;
+  return PURE_SETUP_CLAUSE_RE.test(trimmed);
+}
+
+function shellClauseHasFilterStage(clause) {
+  const trimmed = String(clause || "").trim();
+  if (!trimmed) return false;
+  const stages = splitShellOutsideQuotes(trimmed, (s, i) => (s[i] === "|" ? 1 : 0));
+  for (const rawStage of stages) {
+    const cleanedStage = rawStage
+      .replace(/\b2>&1\b/g, "")
+      .replace(/\b2>(?:\/dev\/null|\$null|nul)\b/gi, "")
+      .trim();
+    const norm = normalizeShellStageHead(cleanedStage);
+    if (norm && ZERO_MATCH_FILTER_STAGE_RE.test(norm)) return true;
+  }
+  return false;
+}
+
+function isReadOnlyShellClause(clause) {
+  const trimmed = String(clause || "").trim();
+  if (!trimmed) return false;
+  const stages = splitShellOutsideQuotes(trimmed, (s, i) => (s[i] === "|" ? 1 : 0));
+  if (stages.length === 0) return false;
+  const head = normalizeShellStageHead(stages[0]);
+  return READ_ONLY_STAGE_HEAD_RE.test(head);
+}
+
+function isNonConvergingPassCommand(cmd) {
+  if (!cmd || typeof cmd !== "string" || !cmd.trim()) return false;
+  const { clauses, operators } = splitShellClauses(cmd);
+  if (clauses.length === 0) return false;
+  let lastSemi = -1;
+  for (let i = 0; i < operators.length; i++) {
+    if (operators[i] === ";") lastSemi = i;
+  }
+  const tailClauses = lastSemi >= 0 ? clauses.slice(lastSemi + 1) : clauses;
+  const tailOps = lastSemi >= 0 ? operators.slice(lastSemi + 1) : operators;
+  if (tailOps.includes("||")) return true;
+  const nonSetup = tailClauses.filter((c) => !isPureSetupShellClause(c));
+  if (nonSetup.length === 0) return true;
+  return nonSetup.every((c) => isReadOnlyShellClause(c) || shellClauseHasFilterStage(c));
+}
+
+function isZeroMatchFilterRunCheckBlock(tag, exitCode, cmd, bodyLines) {
+  if (tag !== "FAIL" || exitCode !== 1 || !cmd) return false;
+  const { clauses, operators } = splitShellClauses(cmd);
+  if (clauses.length === 0) return false;
+  if (operators.includes("||")) return false;
+  if (operators.includes("&&")) {
+    for (let idx = 0; idx < clauses.length - 1; idx++) {
+      if (!isPureSetupShellClause(clauses[idx])) return false;
+    }
+  }
+  const lastClause = clauses[clauses.length - 1];
+  const stages = splitShellOutsideQuotes(lastClause, (s, i) => (s[i] === "|" ? 1 : 0));
+  if (stages.length === 0) return false;
+  const finalStage = normalizeShellStageHead(
+    stages[stages.length - 1]
+      .replace(/\b2>&1\b/g, "")
+      .replace(/\b2>(?:\/dev\/null|\$null|nul)\b/gi, "")
+      .trim()
+  );
+  if (!ZERO_MATCH_FILTER_STAGE_RE.test(finalStage)) return false;
+  for (const rawLine of bodyLines) {
+    const line = rawLine.trim();
+    if (!line) continue;
+    if (/^(?:Command\s+)?exited with code\s+1\.?$/i.test(line)) continue;
+    if (/^(?:\(no output\)|No output from the command\.?)$/i.test(line)) continue;
+    return false;
+  }
+  return true;
+}
+
+const REAL_CODE_ERROR_CHECK_RE =
+  /(?:^|\n)\s*(?:AssertionError|TypeError|SyntaxError|ReferenceError|RangeError|ImportError|ModuleNotFoundError|ValueError|NameError|AttributeError|KeyError|IndexError|FileNotFoundError|RuntimeError|IndentationError|ZeroDivisionError|ZodError|Error:|FAIL\s+\S|✖\s+|not ok\s+\d+|E\s+assert\b|error(?:\[E\d+\]|\s+TS\d{4})?:|panic:|fatal error:|Traceback \(most recent call last\)|Cannot find module\b|Module not found\b)/m;
+
+function hasRealCodeErrorInBlock(text = "") {
+  if (!text || typeof text !== "string") return false;
+  const cleaned = text
+    .replace(/\x1b\[[0-9;]*m/g, "")
+    .replace(/\r\n/g, "\n")
+    .replace(/\r/g, "\n")
+    .split("\n")
+    .filter((line) => {
+      const t = line.trim();
+      if (!t) return false;
+      if (/^(?:TIMED OUT|Command timed out|Exited with code\s+\d+|Command exited with code\s+\d+|No output from the command)\b/i.test(t)) {
+        return false;
+      }
+      return true;
+    })
+    .join("\n")
+    .trim();
+  if (!cleaned) return false;
+  if (REAL_CODE_ERROR_CHECK_RE.test(cleaned)) return true;
+  if (/\b([1-9]\d*)\s+failed\b/i.test(cleaned)) return true;
+  return false;
+}
+
+function parseRunChecksBlocks(responseText) {
+  if (!responseText || typeof responseText !== "string") {
+    return {
+      failureSection: "",
+      realFailBlocks: 0,
+      timeoutBlocks: 0,
+      skippedBlocks: 0,
+      benignZeroMatchBlocks: 0,
+      passCmds: [],
+      passedEntries: [],
+      failedEntries: []
+    };
+  }
   const normalized = responseText.replace(/\r\n/g, "\n").replace(/\r/g, "\n");
   const lines = normalized.split("\n");
   const failingLines = [];
-  let inFailingBlock = false;
-  let justEnteredBlock = false;
+  const passCmds = [];
+  const passedEntries = [];
+  const failedEntries = [];
+  let realFailBlocks = 0;
+  let timeoutBlocks = 0;
+  let skippedBlocks = 0;
+  let benignZeroMatchBlocks = 0;
+  let current = null;
+
+  const flush = () => {
+    if (!current) return;
+    if (current.tag === "PASS") {
+      passCmds.push(current.cmd || "");
+      passedEntries.push({ name: current.name || "", command: current.cmd || "" });
+    } else if (current.tag === "TIMEOUT") {
+      const bodyStr = current.bodyLines.join("\n");
+      if (hasRealCodeErrorInBlock(bodyStr)) {
+        realFailBlocks += 1;
+        failedEntries.push({ name: current.name || "", command: current.cmd || "" });
+        for (const l of current.bodyLines) failingLines.push(l);
+      } else {
+        timeoutBlocks += 1;
+      }
+    } else if (current.tag === "SKIPPED") {
+      skippedBlocks += 1;
+    } else if (isZeroMatchFilterRunCheckBlock(current.tag, current.exitCode, current.cmd, current.bodyLines)) {
+      benignZeroMatchBlocks += 1;
+    } else {
+      realFailBlocks += 1;
+      failedEntries.push({ name: current.name || "", command: current.cmd || "" });
+      for (const l of current.bodyLines) failingLines.push(l);
+    }
+    current = null;
+  };
 
   for (const line of lines) {
-    if (/^## \[(FAIL|TIMEOUT|ERROR)\b/i.test(line)) {
-      inFailingBlock = true;
-      justEnteredBlock = true;
+    const compactPass = line.match(/^- \[PASS[^\]]*\]\s+(.+?)(?:\s+\(`(.+?)`\))?:\s*(.*)$/);
+    if (compactPass) {
+      flush();
+      const cName = (compactPass[1] || "").trim();
+      const cCmd = (compactPass[2] || "").trim();
+      passCmds.push(cCmd);
+      passedEntries.push({ name: cName, command: cCmd });
       continue;
     }
-    if (/^## \[/i.test(line) || /^- \[PASS\b/i.test(line)) {
-      inFailingBlock = false;
-      justEnteredBlock = false;
+    const heading = line.match(/^## \[(PASS|FAIL|TIMEOUT|ERROR|SKIPPED)([^\]]*)\]\s*(.*)$/i);
+    if (heading) {
+      flush();
+      const tag = heading[1].toUpperCase();
+      const exitMatch = (heading[2] || "").match(/exit\s+(\d+)/i);
+      current = {
+        tag,
+        name: (heading[3] || "").trim(),
+        exitCode: exitMatch ? Number(exitMatch[1]) : tag === "PASS" ? 0 : null,
+        cmd: "",
+        justEntered: true,
+        bodyLines: []
+      };
       continue;
     }
-    if (!inFailingBlock) continue;
-    // Skip echoed `$ <command>` line immediately under a failing check heading so command args never create false error anchors
-    if (justEnteredBlock && /^\$\s+/.test(line.trim())) {
-      justEnteredBlock = false;
+    if (!current) continue;
+    // Skip echoed `$ <command>` line immediately under a check heading so command args never create false error anchors
+    if (current.justEntered && /^\$\s+/.test(line.trim())) {
+      current.cmd = line.trim().replace(/^\$\s+/, "").trim();
+      current.justEntered = false;
       continue;
     }
-    justEnteredBlock = false;
-    failingLines.push(line);
+    current.justEntered = false;
+    if (current.tag !== "PASS") {
+      current.bodyLines.push(line);
+    }
   }
-  return failingLines.join("\n").trim();
+  flush();
+
+  return {
+    failureSection: failingLines.join("\n").trim(),
+    realFailBlocks,
+    timeoutBlocks,
+    skippedBlocks,
+    benignZeroMatchBlocks,
+    passCmds,
+    passedEntries,
+    failedEntries
+  };
 }
 
 export function extractVerificationSignal(toolName, args = {}, responseText = "") {
@@ -674,18 +1107,33 @@ export function extractVerificationSignal(toolName, args = {}, responseText = ""
   let verifyCmd = "";
   let isRunChecks = false;
   let runChecksCmd = "";
+  let runChecksBatchCommands = [];
+  const normalizeRunChecksCmds = (rawList) => {
+    const cmds = Array.isArray(rawList) ? rawList : [];
+    const batch = cmds
+      .map((c) =>
+        typeof c === "string"
+          ? { name: "", command: c.trim() }
+          : { name: String(c?.name || "").trim(), command: String(c?.command || "").trim() }
+      )
+      .filter((c) => c.name || c.command)
+      .slice(0, 12);
+    const label = cmds
+      .map((c) => (typeof c === "string" ? c : c?.name || c?.command || ""))
+      .filter(Boolean)
+      .slice(0, 3)
+      .join(", ");
+    return { batch, label };
+  };
   const bareTool = stripHostNamespace(toolName);
   if (bareTool === "apply_edits" || /(?:^|_)apply_edits$/.test(bareTool)) {
     verifyCmd = typeof args.verify === "string" ? args.verify : args.verify?.command || "";
   } else if (bareTool === "run_checks" || /(?:^|_)run_checks$/.test(bareTool)) {
     isRunChecks = true;
     const parsedCmds = Array.isArray(args.commands) ? args.commands : parseMaybeJson(args.commands);
-    const cmds = Array.isArray(parsedCmds) ? parsedCmds : [];
-    runChecksCmd = cmds
-      .map((c) => (typeof c === "string" ? c : c?.name || c?.command || ""))
-      .filter(Boolean)
-      .slice(0, 3)
-      .join(", ");
+    const norm = normalizeRunChecksCmds(parsedCmds);
+    runChecksBatchCommands = norm.batch;
+    runChecksCmd = norm.label;
   } else if (bareTool === "call_mcp_tool") {
     const mcpTool = stripHostNamespace(cleanPath(args.ToolName || args.toolName || ""));
     const mcpArgs = parseMaybeJson(args.Arguments ?? args.arguments) || {};
@@ -694,12 +1142,9 @@ export function extractVerificationSignal(toolName, args = {}, responseText = ""
     } else if (mcpTool === "run_checks" || /(?:^|_)run_checks$/.test(mcpTool)) {
       isRunChecks = true;
       const parsedCmds = Array.isArray(mcpArgs.commands) ? mcpArgs.commands : parseMaybeJson(mcpArgs.commands);
-      const cmds = Array.isArray(parsedCmds) ? parsedCmds : [];
-      runChecksCmd = cmds
-        .map((c) => (typeof c === "string" ? c : c?.name || c?.command || ""))
-        .filter(Boolean)
-        .slice(0, 3)
-        .join(", ");
+      const norm = normalizeRunChecksCmds(parsedCmds);
+      runChecksBatchCommands = norm.batch;
+      runChecksCmd = norm.label;
     }
   }
 
@@ -708,16 +1153,23 @@ export function extractVerificationSignal(toolName, args = {}, responseText = ""
     if (m) {
       const status = m[1].toUpperCase();
       const passed = status === "PASS";
+      if (passed && isNonConvergingPassCommand(verifyCmd)) {
+        return null;
+      }
       const isBuild = /\b(?:build|tsc|typecheck|lint|eslint|biome|webpack|vite|clippy)\b/i.test(verifyCmd);
-      const failureSection = !passed
+      const rawAfterBanner = !passed
         ? responseText.slice((m.index || 0) + m[0].length).trim()
         : "";
+      const isPureTimeout = status === "TIMEOUT" && !hasRealCodeErrorInBlock(rawAfterBanner);
+      const failureSection = passed || isPureTimeout ? "" : rawAfterBanner;
       return {
         kind: isBuild ? "build" : "test",
         command: verifyCmd,
         ruleId: "apply_edits_verify",
         exitCode: passed ? 0 : 1,
         passed,
+        outcome: passed ? "pass" : isPureTimeout ? "timeout" : "fail",
+        timedOut: isPureTimeout,
         summary: m[0].slice(0, 180),
         failureSection
       };
@@ -730,18 +1182,59 @@ export function extractVerificationSignal(toolName, args = {}, responseText = ""
       const passedCnt = Number(m[1]);
       const totalCnt = Number(m[2]);
       const failedCnt = m[3] ? Number(m[3]) : Math.max(0, totalCnt - passedCnt);
-      const passed = failedCnt === 0 && totalCnt > 0;
+      const parsed = parseRunChecksBlocks(responseText);
+      const allFailedBenignZeroMatch =
+        failedCnt > 0 &&
+        parsed.realFailBlocks === 0 &&
+        parsed.timeoutBlocks === 0 &&
+        parsed.benignZeroMatchBlocks > 0 &&
+        parsed.benignZeroMatchBlocks === failedCnt;
+      if (passedCnt === 0 && allFailedBenignZeroMatch) {
+        return null;
+      }
+      const onlyBenignZeroMatch = passedCnt > 0 && allFailedBenignZeroMatch;
+      const passed = (failedCnt === 0 && totalCnt > 0) || onlyBenignZeroMatch;
+      if (passed && parsed.passCmds.length > 0 && parsed.passCmds.every((c) => c && isNonConvergingPassCommand(c))) {
+        return null;
+      }
+      const isPureTimeout =
+        !passed &&
+        failedCnt > 0 &&
+        parsed.realFailBlocks === 0 &&
+        parsed.timeoutBlocks > 0 &&
+        parsed.timeoutBlocks + parsed.skippedBlocks + parsed.benignZeroMatchBlocks >= failedCnt;
+      const accountedFailed =
+        parsed.realFailBlocks + parsed.timeoutBlocks + parsed.skippedBlocks + parsed.benignZeroMatchBlocks;
+      const missingFailureCount =
+        !passed && !isPureTimeout && failedCnt > accountedFailed
+          ? failedCnt - accountedFailed
+          : 0;
+      const missingDetails = missingFailureCount > 0 && parsed.realFailBlocks === 0;
       const isBuild =
         /\b(?:build|tsc|typecheck|lint|eslint|biome|check)\b/i.test(runChecksCmd) &&
         !/\btest\b/i.test(runChecksCmd);
-      const failureSection = !passed ? extractRunChecksFailureSection(responseText) : "";
+      const failureSection = !passed && !isPureTimeout ? (parsed.failureSection || "") : "";
+      const summary = onlyBenignZeroMatch
+        ? `${m[0]} (${parsed.benignZeroMatchBlocks} benign 0-match filter)`
+        : isPureTimeout
+          ? `${m[0]} (timed out)`
+          : m[0];
       return {
         kind: isBuild ? "build" : "test",
         command: runChecksCmd || "run_checks",
         ruleId: "run_checks",
         exitCode: passed ? 0 : 1,
         passed,
-        summary: m[0],
+        outcome: passed ? "pass" : isPureTimeout ? "timeout" : "fail",
+        timedOut: isPureTimeout,
+        ...(missingDetails ? { missingDetails: true, missingFailureCount } : {}),
+        ...(runChecksBatchCommands.length > 0 ? { batchCommands: runChecksBatchCommands } : {}),
+        batchTotalCount: totalCnt,
+        ...(!passed && !isPureTimeout && parsed.failedEntries.length > 0
+          ? { failedCommands: parsed.failedEntries.slice(0, 8) }
+          : {}),
+        ...(parsed.passedEntries.length > 0 ? { passedCommands: parsed.passedEntries.slice(0, 12) } : {}),
+        summary,
         failureSection
       };
     }
@@ -909,6 +1402,13 @@ async function main() {
       if (verifySignal) {
         const safeCommand = redactSecrets(verifySignal.command || "").text;
         const safeSummary = redactSecrets(verifySignal.summary || "").text;
+        const redactCmdEntries = (list) =>
+          Array.isArray(list)
+            ? list.map((item) => ({
+                name: redactSecrets(String(item?.name || "")).text,
+                command: redactSecrets(String(item?.command || "")).text
+              }))
+            : undefined;
         const rawFailureSection = !verifySignal.passed ? verifySignal.failureSection || "" : "";
         const safeFailureExcerpt =
           rawFailureSection && typeof filterRulesMod?.extractFailureExcerpt === "function"
@@ -919,6 +1419,15 @@ async function main() {
           ...cleanVerifySignal,
           command: safeCommand,
           summary: safeSummary,
+          ...(Array.isArray(cleanVerifySignal.batchCommands)
+            ? { batchCommands: redactCmdEntries(cleanVerifySignal.batchCommands) }
+            : {}),
+          ...(Array.isArray(cleanVerifySignal.failedCommands)
+            ? { failedCommands: redactCmdEntries(cleanVerifySignal.failedCommands) }
+            : {}),
+          ...(Array.isArray(cleanVerifySignal.passedCommands)
+            ? { passedCommands: redactCmdEntries(cleanVerifySignal.passedCommands) }
+            : {}),
           failureExcerpt: safeFailureExcerpt,
           worktree: cwd
         });
