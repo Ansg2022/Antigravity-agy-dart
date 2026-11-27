@@ -45,7 +45,6 @@
       --scrollbar-thumb-hover: rgba(15, 23, 42, 0.28);
       --topbar-bg: rgba(255, 255, 255, 0.96);
       --topbar-shadow: 0 1px 4px rgba(15, 23, 42, 0.05);
-      --band-context-bg: #f4f7fb;
       --ctx-box-bg: linear-gradient(155deg, #e8f1ff 0%, #f0f6ff 55%, #eaf3ff 100%);
       --ctx-box-border: #93c5fd;
       --ctx-box-shadow: 0 2px 8px rgba(37, 99, 235, 0.08);
@@ -130,10 +129,11 @@
       --edge-exempt: rgba(217, 119, 6, 0.22);
       --tint-health: rgba(100, 116, 139, 0.04);
       --edge-health: rgba(100, 116, 139, 0.24);
+      --accent-search: #4f46e5;
       --accent-exempt: #d97706;
       --accent-health: #64748b;
-      --nav-menu-bg: #ffffff;
-      --nav-menu-shadow: 0 10px 24px rgba(15, 23, 42, 0.12);
+      --nav-tooltip-bg: #ffffff;
+      --nav-tooltip-shadow: 0 10px 24px rgba(15, 23, 42, 0.12);
       --nav-dot: var(--accent);
       --font-sans: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Microsoft YaHei", Roboto, "Helvetica Neue", Arial, sans-serif;
       --font-mono: ui-monospace, "Cascadia Code", "SFMono-Regular", Menlo, Monaco, Consolas, monospace;
@@ -182,7 +182,6 @@
       --scrollbar-thumb-hover: #313244;
       --topbar-bg: rgba(9, 9, 15, 0.94);
       --topbar-shadow: none;
-      --band-context-bg: transparent;
       --ctx-box-bg: linear-gradient(180deg, rgba(203, 166, 247, 0.06) 0%, #11111b 60px);
       --ctx-box-border: #1e1e2e;
       --ctx-box-shadow: none;
@@ -219,7 +218,7 @@
       --cue-tag-bg: rgba(249, 226, 175, 0.10);
       --input-bg: #0d0d15;
       --placeholder-color: #6c7086;
-      --dot-muted: #585b70;
+      --dot-muted: #6c7086;
       --safety-advice-warn-bg: #0d0d15;
       --safety-advice-critical-bg: #0d0d15;
       --keepalive-on-border: rgba(203, 166, 247, 0.22);
@@ -263,10 +262,11 @@
       --edge-exempt: rgba(250, 179, 135, 0.22);
       --tint-health: rgba(180, 190, 254, 0.045);
       --edge-health: rgba(180, 190, 254, 0.22);
+      --accent-search: #89b4fa;
       --accent-exempt: #fab387;
       --accent-health: #b4befe;
-      --nav-menu-bg: #181825;
-      --nav-menu-shadow: 0 12px 28px rgba(9, 9, 15, 0.65);
+      --nav-tooltip-bg: #181825;
+      --nav-tooltip-shadow: 0 12px 28px rgba(9, 9, 15, 0.65);
     }
 
     *, *::before, *::after {
@@ -401,7 +401,8 @@
     .band {
       margin: 12px 12px 0;
       padding: 14px 15px;
-      background: linear-gradient(180deg, var(--band-tint) 0%, var(--bg-panel) 56px);
+      background-color: var(--bg-panel);
+      background-image: linear-gradient(180deg, var(--band-tint) 0%, var(--bg-panel) 56px);
       border: 1px solid var(--border);
       border-top-color: var(--band-edge);
       border-radius: 10px;
@@ -613,7 +614,7 @@
       align-items: center;
       justify-content: space-between;
       gap: 6px 8px;
-      flex-wrap: nowrap;
+      flex-wrap: wrap;
       min-width: 0;
     }
 
@@ -622,7 +623,13 @@
       align-items: center;
       gap: 6px;
       min-width: 0;
-      flex-shrink: 1;
+      flex: 0 1 auto;
+      flex-wrap: wrap;
+    }
+
+    .brand-group .toggle-chip {
+      white-space: nowrap;
+      flex-shrink: 0;
     }
 
     .section-jump-strip {
@@ -631,6 +638,7 @@
       align-items: center;
       gap: 2px;
       height: 24px;
+      max-width: 100%;
       padding: 2px 3px;
       border-radius: 999px;
       background: var(--bg-inset);
@@ -661,6 +669,7 @@
       display: inline-flex;
       align-items: center;
       justify-content: center;
+      flex-shrink: 0;
       gap: 0;
       min-width: 18px;
       height: 18px;
@@ -725,9 +734,9 @@
       z-index: 50;
       padding: 4px 8px;
       border-radius: var(--radius-sm);
-      background: var(--nav-menu-bg);
+      background: var(--nav-tooltip-bg);
       border: 1px solid var(--border-strong);
-      box-shadow: var(--nav-menu-shadow);
+      box-shadow: var(--nav-tooltip-shadow);
       color: var(--ctx-hero-tokens-color);
       font-size: 11.5px;
       font-weight: 500;
@@ -739,8 +748,13 @@
       transition: opacity 90ms ease, transform 90ms ease;
     }
 
-    .section-jump-chip:hover::after,
-    .section-jump-chip:focus-visible::after {
+    .section-jump-chip:nth-of-type(-n+3)::after {
+      left: 0;
+      right: auto;
+    }
+
+    .section-jump-chip:not(.is-tooltip-dismissed):hover::after,
+    .section-jump-chip:not(.is-tooltip-dismissed):focus-visible::after {
       opacity: 1;
       transform: translateY(0);
     }
@@ -749,8 +763,9 @@
       display: inline-flex;
       align-items: center;
       gap: 6px;
-      flex-wrap: nowrap;
+      flex-wrap: wrap;
       min-width: 0;
+      max-width: 100%;
     }
 
     .header-actions {
@@ -759,110 +774,6 @@
       gap: 5px;
       flex-shrink: 0;
       margin-left: auto;
-    }
-
-    @media (max-width: 500px) {
-      .topbar-row {
-        flex-wrap: wrap;
-      }
-
-      .topbar-pills {
-        flex-wrap: wrap;
-      }
-
-      .star-link-tag [data-i18n="starHeaderLabel"] {
-        display: none;
-      }
-    }
-
-    @media (max-width: 390px) {
-      .topbar {
-        padding: 8px 10px;
-      }
-
-      .app-title {
-        font-size: 13px;
-      }
-
-      .version-check-btn {
-        padding: 2px 6px;
-        font-size: 11px;
-      }
-
-      .section-jump-strip {
-        height: 22px;
-        padding: 2px;
-        gap: 1px;
-      }
-
-      .section-jump-thumb {
-        height: 16px;
-      }
-
-      .section-jump-chip {
-        min-width: 16px;
-        height: 16px;
-        padding: 0 4px;
-        font-size: 10.5px;
-      }
-
-      .section-jump-strip[data-density="expanded"] .section-jump-chip,
-      .section-jump-chip.is-active {
-        padding: 0 6px;
-        gap: 3px;
-      }
-
-      .section-jump-strip[data-density="compact"] .section-jump-chip.is-active {
-        padding: 0 4px;
-        gap: 0;
-      }
-
-      .section-jump-chip .section-nav-dot {
-        width: 5px;
-        height: 5px;
-      }
-
-      .band {
-        margin: 10px 8px 0;
-        padding: 12px 12px;
-      }
-
-      .band.band-context-first {
-        margin: 10px 8px 0;
-        padding: 0;
-      }
-
-      .star-banner,
-      details.accordion-band {
-        margin: 10px 8px 0;
-      }
-
-      .ctx-overview-box {
-        padding: 12px 12px;
-      }
-
-      .keepalive-group .toggle-chip {
-        padding: 3px 7px 3px 8px;
-        font-size: 11.5px;
-      }
-
-      .keepalive-max-wrap {
-        padding: 0 4px;
-      }
-
-      .keepalive-max-input {
-        width: 30px;
-        font-size: 11.5px;
-      }
-
-      .keepalive-follow-btn {
-        padding: 2px 5px;
-        font-size: 10.5px;
-      }
-
-      .keepalive-reset-btn {
-        padding: 2px 6px 2px 5px;
-      }
     }
 
     .app-title {
@@ -1215,12 +1126,16 @@
       flex-shrink: 0;
     }
 
-    .accordion-body .band-title {
+    .accordion-body .band-title,
+    #kv-handoff-drawer .band-title,
+    #recent-sources-section .band-title {
       font-size: 12.5px;
       color: var(--text-primary);
     }
 
-    .accordion-body .band-title::before {
+    .accordion-body .band-title::before,
+    #kv-handoff-drawer .band-title::before,
+    #recent-sources-section .band-title::before {
       display: none;
     }
 
@@ -1236,7 +1151,7 @@
     #safety-audit-card.is-critical { --band-accent: var(--danger); --band-tint: var(--danger-soft); --band-edge: var(--danger-border); }
     #watchdog-card { --band-accent: var(--turn-bar-mid); --band-tint: var(--tint-watchdog); --band-edge: var(--edge-watchdog); }
     #savings-breakdown-card { --band-accent: var(--ok); --band-tint: var(--tint-savings); --band-edge: var(--edge-savings); }
-    #search-inspector-card { --band-accent: var(--seg-file-reads); --band-tint: var(--tint-search); --band-edge: var(--edge-search); }
+    #search-inspector-card { --band-accent: var(--accent-search); --band-tint: var(--tint-search); --band-edge: var(--edge-search); }
     #exempt-accordion { --band-accent: var(--accent-exempt); --band-tint: var(--tint-exempt); --band-edge: var(--edge-exempt); }
     #gates-health-accordion { --band-accent: var(--accent-health); --band-tint: var(--tint-health); --band-edge: var(--edge-health); }
 
@@ -2167,16 +2082,18 @@
       display: flex;
       flex-direction: column;
       gap: 7px;
-      transition: background 150ms ease, border-color 150ms ease;
+      transition: background 150ms ease, border-color 150ms ease, box-shadow 220ms ease;
     }
 
     .safety-strip.is-warn {
-      background: var(--warn-soft);
+      background-color: var(--bg-panel);
+      background-image: linear-gradient(180deg, var(--warn-soft) 0%, var(--warn-soft) 100%);
       border-color: var(--warn-border);
     }
 
     .safety-strip.is-critical {
-      background: var(--danger-soft);
+      background-color: var(--bg-panel);
+      background-image: linear-gradient(180deg, var(--danger-soft) 0%, var(--danger-soft) 100%);
       border-color: var(--danger-border);
     }
 
@@ -2594,6 +2511,7 @@
     .keepalive-group {
       display: inline-flex;
       align-items: center;
+      flex-wrap: wrap;
       max-width: 100%;
       border-radius: 999px;
       border: 1px solid var(--border-strong);
@@ -3016,7 +2934,127 @@
       flex-direction: column;
       gap: 11px;
     }
+
+    @media (max-width: 659px) {
+      .topbar-pills {
+        flex: 1 1 100%;
+      }
+    }
+
+    @media (max-width: 500px) {
+      .star-link-tag [data-i18n="starHeaderLabel"] {
+        display: none;
+      }
+
+      .keepalive-group {
+        border-radius: 13px;
+      }
+    }
+
+    @media (max-width: 390px) {
+      .topbar {
+        padding: 8px 10px;
+      }
+
+      .app-title {
+        font-size: 13px;
+      }
+
+      .version-check-btn {
+        padding: 2px 6px;
+        font-size: 11px;
+      }
+
+      .section-jump-strip {
+        height: 22px;
+        padding: 2px;
+        gap: 1px;
+      }
+
+      .section-jump-thumb {
+        height: 16px;
+      }
+
+      .section-jump-chip {
+        min-width: 16px;
+        height: 16px;
+        padding: 0 4px;
+        font-size: 10.5px;
+      }
+
+      .section-jump-strip[data-density="expanded"] .section-jump-chip,
+      .section-jump-chip.is-active {
+        padding: 0 6px;
+        gap: 3px;
+      }
+
+      .section-jump-strip[data-density="compact"] .section-jump-chip.is-active {
+        padding: 0 4px;
+        gap: 0;
+      }
+
+      .section-jump-chip .section-nav-dot {
+        width: 5px;
+        height: 5px;
+      }
+
+      .band {
+        margin: 10px 8px 0;
+        padding: 12px 12px;
+      }
+
+      .band.band-context-first {
+        margin: 10px 8px 0;
+        padding: 0;
+      }
+
+      .star-banner,
+      details.accordion-band {
+        margin: 10px 8px 0;
+      }
+
+      .ctx-overview-box {
+        padding: 12px 12px;
+      }
+
+      .keepalive-group .toggle-chip {
+        padding: 3px 7px 3px 8px;
+        font-size: 11.5px;
+      }
+
+      .keepalive-max-wrap {
+        padding: 0 4px;
+      }
+
+      .keepalive-max-input {
+        width: 30px;
+        font-size: 11.5px;
+      }
+
+      .keepalive-follow-btn {
+        padding: 2px 5px;
+        font-size: 10.5px;
+      }
+
+      .keepalive-reset-btn {
+        padding: 2px 6px 2px 5px;
+      }
+    }
   </style>
+  <script data-theme-init>
+    (function () {
+      try {
+        var saved = String((typeof localStorage !== 'undefined' && localStorage.getItem('agy-dart-ui-theme')) || '').trim().toLowerCase();
+        var mode = saved === 'light' || saved === 'mocha' || saved === 'auto' ? saved : 'auto';
+        var dark = mode === 'mocha' || (mode === 'auto' && typeof window !== 'undefined' && typeof window.matchMedia === 'function' && window.matchMedia('(prefers-color-scheme: dark)').matches);
+        var root = document.documentElement;
+        if (root) {
+          if (root.dataset) root.dataset.themeMode = mode;
+          root.setAttribute('data-theme', dark ? 'mocha' : 'light');
+        }
+      } catch {}
+    })();
+  </script>
 </head>
 <body class="custom-scrollbar">
   <div class="shell">
@@ -3036,13 +3074,13 @@
 
         <span class="section-jump-strip" data-section-jump-strip data-density="medium" role="navigation" aria-label="Jump to section">
           <span class="section-jump-thumb" data-section-jump-thumb aria-hidden="true"></span>
-          <button type="button" class="section-jump-chip is-active" style="--nav-dot: var(--accent);" data-nav-target="kv-cache-card" data-nav-full-key="navCtxOverview" data-tooltip="Context Overview" aria-label="Context Overview" onclick="jumpToSection('kv-cache-card')"><span class="section-nav-dot"></span><span class="section-jump-label" data-i18n="navCtxShort">Ctx</span></button>
-          <button type="button" class="section-jump-chip" style="--nav-dot: var(--seg-tool-calls);" data-nav-target="safety-audit-card" data-nav-full-key="navSafetyMonitor" data-tooltip="Safety Monitor" aria-label="Safety Monitor" onclick="jumpToSection('safety-audit-card')"><span class="section-nav-dot"></span><span class="section-jump-label" data-i18n="navSafetyShort">Safe</span></button>
-          <button type="button" class="section-jump-chip" style="--nav-dot: var(--turn-bar-mid);" data-nav-target="watchdog-card" data-nav-full-key="navWatchdog" data-tooltip="Stall Guard" aria-label="Stall Guard" onclick="jumpToSection('watchdog-card')"><span class="section-nav-dot"></span><span class="section-jump-label" data-i18n="navWatchdogShort">Stall</span></button>
-          <button type="button" class="section-jump-chip" style="--nav-dot: var(--ok);" data-nav-target="savings-breakdown-card" data-nav-full-key="navSavings" data-tooltip="Context Savings" aria-label="Context Savings" onclick="jumpToSection('savings-breakdown-card')"><span class="section-nav-dot"></span><span class="section-jump-label" data-i18n="navSavingsShort">Save</span></button>
-          <button type="button" class="section-jump-chip" style="--nav-dot: var(--seg-file-reads);" data-nav-target="search-inspector-card" data-nav-full-key="navSearch" data-tooltip="Local Search" aria-label="Local Search" onclick="jumpToSection('search-inspector-card')"><span class="section-nav-dot"></span><span class="section-jump-label" data-i18n="navSearchShort">Find</span></button>
-          <button type="button" class="section-jump-chip" style="--nav-dot: var(--accent-exempt);" data-nav-target="exempt-accordion" data-nav-full-key="navExempt" data-tooltip="Exempt File Types" aria-label="Exempt File Types" onclick="jumpToSection('exempt-accordion')"><span class="section-nav-dot"></span><span class="section-jump-label" data-i18n="navExemptShort">Exmt</span></button>
-          <button type="button" class="section-jump-chip" style="--nav-dot: var(--accent-health);" data-nav-target="gates-health-accordion" data-nav-full-key="navHealth" data-tooltip="Gates &amp; Health" aria-label="Gates &amp; Health" onclick="jumpToSection('gates-health-accordion')"><span class="section-nav-dot"></span><span class="section-jump-label" data-i18n="navHealthShort">Hlth</span></button>
+          <button type="button" class="section-jump-chip is-active" style="--nav-dot: var(--accent);" data-nav-target="kv-cache-card" data-nav-full-key="navCtxOverview" data-tooltip="Context Overview" aria-label="Context Overview" aria-current="true" onclick="jumpToSection('kv-cache-card', this)"><span class="section-nav-dot"></span><span class="section-jump-label" data-i18n="navCtxShort">Ctx</span></button>
+          <button type="button" class="section-jump-chip" style="--nav-dot: var(--seg-tool-calls);" data-nav-target="safety-audit-card" data-nav-full-key="navSafetyMonitor" data-tooltip="Safety Monitor" aria-label="Safety Monitor" onclick="jumpToSection('safety-audit-card', this)"><span class="section-nav-dot"></span><span class="section-jump-label" data-i18n="navSafetyShort">Safe</span></button>
+          <button type="button" class="section-jump-chip" style="--nav-dot: var(--turn-bar-mid);" data-nav-target="watchdog-card" data-nav-full-key="navWatchdog" data-tooltip="Stall Guard" aria-label="Stall Guard" onclick="jumpToSection('watchdog-card', this)"><span class="section-nav-dot"></span><span class="section-jump-label" data-i18n="navWatchdogShort">Stall</span></button>
+          <button type="button" class="section-jump-chip" style="--nav-dot: var(--ok);" data-nav-target="savings-breakdown-card" data-nav-full-key="navSavings" data-tooltip="Context Savings" aria-label="Context Savings" onclick="jumpToSection('savings-breakdown-card', this)"><span class="section-nav-dot"></span><span class="section-jump-label" data-i18n="navSavingsShort">Save</span></button>
+          <button type="button" class="section-jump-chip" style="--nav-dot: var(--accent-search);" data-nav-target="search-inspector-card" data-nav-full-key="navSearch" data-tooltip="Local Search" aria-label="Local Search" onclick="jumpToSection('search-inspector-card', this)"><span class="section-nav-dot"></span><span class="section-jump-label" data-i18n="navSearchShort">Find</span></button>
+          <button type="button" class="section-jump-chip" style="--nav-dot: var(--accent-exempt);" data-nav-target="exempt-accordion" data-nav-full-key="navExempt" data-tooltip="Exempt File Types" aria-label="Exempt File Types" onclick="jumpToSection('exempt-accordion', this)"><span class="section-nav-dot"></span><span class="section-jump-label" data-i18n="navExemptShort">Exmt</span></button>
+          <button type="button" class="section-jump-chip" style="--nav-dot: var(--accent-health);" data-nav-target="gates-health-accordion" data-nav-full-key="navHealth" data-tooltip="Gates &amp; Health" aria-label="Gates &amp; Health" onclick="jumpToSection('gates-health-accordion', this)"><span class="section-nav-dot"></span><span class="section-jump-label" data-i18n="navHealthShort">Hlth</span></button>
         </span>
       </div>
 
@@ -3083,7 +3121,7 @@
             <button id="lang-zh-btn" onclick="setLanguage('zh', true)" class="seg-btn" title="切换界面、桌面弹窗与聊天缓存提示为中文">中文</button>
             <button id="lang-en-btn" onclick="setLanguage('en', true)" class="seg-btn is-active" title="Switch UI, desktop alerts &amp; chat banners to English">EN</button>
           </div>
-          <button id="theme-toggle-btn" type="button" onclick="cycleThemeMode()" oncontextmenu="resetThemeAuto(event)" class="icon-btn" title="Theme: Auto (click to toggle)" aria-label="Theme: Auto">
+          <button id="theme-toggle-btn" type="button" onclick="cycleThemeMode(event)" onkeydown="handleThemeToggleKeydown(event)" oncontextmenu="resetThemeAuto(event)" class="icon-btn" title="Theme: Auto (click to toggle)" aria-label="Theme: Auto">
             <svg id="theme-icon-auto" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2" aria-hidden="true">
               <circle cx="12" cy="12" r="9" />
               <path d="M12 3a9 9 0 0 1 0 18z" fill="currentColor" stroke="none" />
@@ -3653,7 +3691,7 @@
         themeModeAuto: 'Auto (System)',
         themeModeLight: 'Light',
         themeModeMocha: 'Mocha Dark',
-        themeToggleTip: 'Theme: {mode} — click to switch Light/Dark (right-click for Auto)',
+        themeToggleTip: 'Theme: {mode} — click to switch Light/Dark (right-click or Shift+Enter for Auto)',
         sectionNavTip: 'Jump to section',
         navCtxShort: 'Ctx',
         navSafetyShort: 'Safe',
@@ -4214,7 +4252,7 @@
         themeModeAuto: '跟随系统',
         themeModeLight: '浅色',
         themeModeMocha: 'Mocha 暗黑',
-        themeToggleTip: '当前主题：{mode} — 点击瞬切浅色/暗黑（右键恢复跟随系统）',
+        themeToggleTip: '当前主题：{mode} — 点击瞬切浅色/暗黑（右键或 Shift+Enter 恢复跟随系统）',
         sectionNavTip: '快速跳转板块',
         navCtxShort: '总览',
         navSafetyShort: '安检',
@@ -12817,10 +12855,25 @@
       updateThemeButton();
     }
 
-    function cycleThemeMode() {
+    let themeMediaQuery = null;
+    let themeMediaQueryHandler = null;
+
+    function cycleThemeMode(ev) {
+      if (ev && (ev.altKey || ev.shiftKey)) {
+        applyThemeMode('auto', true);
+        return;
+      }
       const effective = resolveEffectiveTheme(currentThemeMode);
       const next = effective === 'mocha' ? 'light' : 'mocha';
       applyThemeMode(next, true);
+    }
+
+    function handleThemeToggleKeydown(ev) {
+      if (!ev) return;
+      if (ev.shiftKey && (ev.key === 'Enter' || ev.key === ' ')) {
+        if (typeof ev.preventDefault === 'function') ev.preventDefault();
+        applyThemeMode('auto', true);
+      }
     }
 
     function resetThemeAuto(ev) {
@@ -12838,6 +12891,8 @@
               applyThemeMode('auto', false);
             }
           };
+          themeMediaQuery = mq;
+          themeMediaQueryHandler = onSchemeChange;
           if (typeof mq.addEventListener === 'function') {
             mq.addEventListener('change', onSchemeChange);
           } else if (typeof mq.addListener === 'function') {
@@ -12853,8 +12908,36 @@
     let lastAppliedJumpSectionId = '';
     let lastJumpVisibilityKey = '';
     let sectionSpyLockUntil = 0;
+    let pinnedJumpSectionId = '';
     let sectionSpyRafPending = false;
     let sectionLayoutRafPending = false;
+    let cachedJumpWidths = null;
+    let sectionJumpResizeObserver = null;
+    let lastObservedRowWidth = -1;
+    let lastObservedBrandWidth = -1;
+
+    function invalidateSectionJumpWidthCache() {
+      cachedJumpWidths = null;
+    }
+
+    function clearPinnedJumpSection() {
+      pinnedJumpSectionId = '';
+    }
+
+    function handleSectionManualScrollKey(ev) {
+      if (!ev) return;
+      if (
+        ev.key === 'ArrowDown' ||
+        ev.key === 'ArrowUp' ||
+        ev.key === 'PageDown' ||
+        ev.key === 'PageUp' ||
+        ev.key === 'Home' ||
+        ev.key === 'End' ||
+        ev.key === ' '
+      ) {
+        pinnedJumpSectionId = '';
+      }
+    }
 
     function getSectionJumpChips() {
       if (typeof document === 'undefined' || typeof document.querySelectorAll !== 'function') return [];
@@ -12880,6 +12963,59 @@
       } catch {}
     }
 
+    function getBrandNaturalWidth(brand) {
+      if (!brand) return 0;
+      if (brand.children && brand.children.length > 0) {
+        let sum = 0;
+        let visibleCount = 0;
+        for (let i = 0; i < brand.children.length; i++) {
+          const child = brand.children[i];
+          if (!child || (child.classList && child.classList.contains('hidden'))) continue;
+          const w = Math.ceil(child.offsetWidth || child.scrollWidth || 0);
+          if (w > 0) {
+            sum += w;
+            visibleCount++;
+          }
+        }
+        if (visibleCount > 0) {
+          return sum + Math.max(0, visibleCount - 1) * 6;
+        }
+      }
+      return Math.ceil(brand.offsetWidth || brand.scrollWidth || 0);
+    }
+
+    function measureSectionJumpWidths(strip) {
+      const narrow = typeof window !== 'undefined' && typeof window.innerWidth === 'number' && window.innerWidth <= 390;
+      const baseKey = `${lastJumpVisibilityKey}|${currentLang}|${narrow ? '1' : '0'}`;
+      if (cachedJumpWidths && cachedJumpWidths.baseKey === baseKey && cachedJumpWidths.activeId === activeJumpSectionId) {
+        return cachedJumpWidths;
+      }
+      const prevDensity = typeof strip.getAttribute === 'function' ? (strip.getAttribute('data-density') || 'medium') : 'medium';
+      const prevMaxWidth = strip.style ? strip.style.maxWidth : '';
+      let expanded = cachedJumpWidths && cachedJumpWidths.baseKey === baseKey ? cachedJumpWidths.expanded : 0;
+      let compact = cachedJumpWidths && cachedJumpWidths.baseKey === baseKey ? cachedJumpWidths.compact : 0;
+      let medium = 0;
+      const readNaturalWidth = () => Math.ceil(Math.max(strip.offsetWidth || 0, strip.scrollWidth || 0));
+      try {
+        if (strip.style) strip.style.maxWidth = 'none';
+        if (!expanded) {
+          strip.setAttribute('data-density', 'expanded');
+          expanded = readNaturalWidth();
+        }
+        strip.setAttribute('data-density', 'medium');
+        medium = readNaturalWidth();
+        if (!compact) {
+          strip.setAttribute('data-density', 'compact');
+          compact = readNaturalWidth();
+        }
+      } finally {
+        if (strip.style) strip.style.maxWidth = prevMaxWidth;
+        strip.setAttribute('data-density', prevDensity);
+      }
+      cachedJumpWidths = { baseKey, activeId: activeJumpSectionId, expanded, medium, compact };
+      return cachedJumpWidths;
+    }
+
     function syncSectionJumpDensity(skipThumb) {
       if (typeof document === 'undefined' || typeof document.querySelector !== 'function') return;
       const strip = document.querySelector('[data-section-jump-strip]');
@@ -12887,16 +13023,17 @@
       const row = typeof strip.closest === 'function' ? strip.closest('.topbar-row') : null;
       const brand = row && typeof row.querySelector === 'function' ? row.querySelector('.brand-group') : null;
       const rowWidth = row ? Math.floor(row.clientWidth || 0) : 0;
-      const brandWidth = brand ? Math.ceil(brand.scrollWidth || brand.offsetWidth || 0) : 0;
+      const brandWidth = getBrandNaturalWidth(brand);
       if (rowWidth <= 0 || brandWidth <= 0) return;
 
-      const available = rowWidth - brandWidth - 10;
+      const sameLineAvailable = rowWidth - brandWidth - 10;
       const prevDensity = typeof strip.getAttribute === 'function' ? (strip.getAttribute('data-density') || 'medium') : 'medium';
+      const { expanded: expandedWidth, medium: mediumWidth, compact: compactWidth } = measureSectionJumpWidths(strip);
 
-      strip.setAttribute('data-density', 'expanded');
-      const expandedWidth = Math.ceil(strip.scrollWidth || strip.offsetWidth || 0);
-      strip.setAttribute('data-density', 'medium');
-      const mediumWidth = Math.ceil(strip.scrollWidth || strip.offsetWidth || 0);
+      // If even compact dots cannot fit beside brand-group on row 1, the flex row wraps the strip
+      // onto its own line where the full rowWidth is available instead of locking into dots-only.
+      const fitsSameLine = compactWidth > 0 ? sameLineAvailable >= compactWidth : sameLineAvailable >= 0;
+      const available = fitsSameLine ? sameLineAvailable : rowWidth;
 
       let nextDensity = 'medium';
       if (expandedWidth > 0 && available >= expandedWidth) {
@@ -12907,7 +13044,9 @@
         nextDensity = 'compact';
       }
 
-      strip.setAttribute('data-density', nextDensity);
+      if (nextDensity !== prevDensity) {
+        strip.setAttribute('data-density', nextDensity);
+      }
       if (!skipThumb && nextDensity !== prevDensity) {
         const activeChip = getSectionJumpChips().find((c) => c.classList && c.classList.contains('is-active')) || null;
         positionSectionJumpThumb(activeChip);
@@ -12952,8 +13091,10 @@
       });
       if (!visiblePairs.length) return;
       const visKey = visiblePairs.map((p) => p.id).join(',');
-      const needsLayout = Boolean(forceLayout) || visKey !== lastJumpVisibilityKey;
+      const visChanged = visKey !== lastJumpVisibilityKey;
+      const needsLayout = Boolean(forceLayout) || visChanged;
       lastJumpVisibilityKey = visKey;
+      if (visChanged) invalidateSectionJumpWidthCache();
       if (Date.now() < sectionSpyLockUntil) {
         setActiveSectionJump(activeJumpSectionId, needsLayout);
         return;
@@ -12963,13 +13104,27 @@
         ? Math.ceil(topbar.getBoundingClientRect().height) + 28
         : 100;
       const docEl = document.documentElement;
-      const nearBottom = typeof window !== 'undefined' && docEl && typeof docEl.scrollHeight === 'number' && typeof window.innerHeight === 'number'
-        ? ((window.scrollY || 0) + window.innerHeight >= docEl.scrollHeight - 24)
+      const scrollY = typeof window !== 'undefined' ? (window.scrollY || 0) : 0;
+      const winH = typeof window !== 'undefined' && typeof window.innerHeight === 'number' ? window.innerHeight : 0;
+      const nearBottom = scrollY > 2 && docEl && typeof docEl.scrollHeight === 'number' && winH > 0
+        ? (scrollY + winH >= docEl.scrollHeight - 24)
         : false;
       let pickedId = visiblePairs[0].id;
       if (nearBottom) {
-        pickedId = visiblePairs[visiblePairs.length - 1].id;
+        const pinnedPair = pinnedJumpSectionId ? visiblePairs.find((p) => p.id === pinnedJumpSectionId) : null;
+        if (pinnedPair && typeof pinnedPair.target.getBoundingClientRect === 'function') {
+          const pTop = pinnedPair.target.getBoundingClientRect().top;
+          if (pTop >= 0 && pTop < winH * 0.75) {
+            pickedId = pinnedPair.id;
+          } else {
+            pinnedJumpSectionId = '';
+            pickedId = visiblePairs[visiblePairs.length - 1].id;
+          }
+        } else {
+          pickedId = visiblePairs[visiblePairs.length - 1].id;
+        }
       } else {
+        pinnedJumpSectionId = '';
         for (const pair of visiblePairs) {
           if (typeof pair.target.getBoundingClientRect === 'function') {
             const top = pair.target.getBoundingClientRect().top;
@@ -13010,6 +13165,12 @@
 
     function updateSectionJumpTooltips() {
       if (typeof document === 'undefined' || typeof document.querySelectorAll !== 'function') return;
+      if (typeof document.querySelector === 'function') {
+        const strip = document.querySelector('[data-section-jump-strip]');
+        if (strip && typeof strip.setAttribute === 'function') {
+          strip.setAttribute('aria-label', t('sectionNavTip'));
+        }
+      }
       document.querySelectorAll('[data-nav-full-key]').forEach((chip) => {
         const key = chip.getAttribute ? chip.getAttribute('data-nav-full-key') : '';
         if (!key) return;
@@ -13022,13 +13183,18 @@
           chip.setAttribute('aria-label', fullLabel);
         }
       });
+      invalidateSectionJumpWidthCache();
       scheduleSectionJumpLayout();
     }
 
-    function jumpToSection(sectionId) {
+    function jumpToSection(sectionId, triggerEl) {
       const target = document.getElementById(sectionId);
       if (!target) return;
-      sectionSpyLockUntil = Date.now() + 650;
+      if (triggerEl && triggerEl.classList) {
+        triggerEl.classList.add('is-tooltip-dismissed');
+      }
+      pinnedJumpSectionId = sectionId;
+      sectionSpyLockUntil = Date.now() + 700;
       setActiveSectionJump(sectionId, true);
       if (String(target.tagName || '').toUpperCase() === 'DETAILS') {
         target.open = true;
@@ -13064,18 +13230,40 @@
     }
 
     function initSectionJumpSpy() {
+      getSectionJumpChips().forEach((chip) => {
+        if (typeof chip.addEventListener === 'function') {
+          const clearDismiss = () => {
+            if (chip.classList) chip.classList.remove('is-tooltip-dismissed');
+          };
+          chip.addEventListener('mouseleave', clearDismiss);
+          chip.addEventListener('blur', clearDismiss);
+        }
+      });
       if (typeof window !== 'undefined' && typeof window.addEventListener === 'function') {
         window.addEventListener('scroll', scheduleSectionSpy, { passive: true });
         window.addEventListener('resize', scheduleSectionJumpLayout);
+        window.addEventListener('wheel', clearPinnedJumpSection, { passive: true });
+        window.addEventListener('touchstart', clearPinnedJumpSection, { passive: true });
+        window.addEventListener('keydown', handleSectionManualScrollKey);
       }
       if (typeof ResizeObserver === 'function' && typeof document !== 'undefined' && typeof document.querySelector === 'function') {
         const strip = document.querySelector('[data-section-jump-strip]');
         const row = strip && typeof strip.closest === 'function' ? strip.closest('.topbar-row') : null;
         const brand = row && typeof row.querySelector === 'function' ? row.querySelector('.brand-group') : null;
         if (row) {
-          const ro = new ResizeObserver(() => scheduleSectionJumpLayout());
-          ro.observe(row);
-          if (brand) ro.observe(brand);
+          lastObservedRowWidth = Math.floor(row.clientWidth || 0);
+          lastObservedBrandWidth = getBrandNaturalWidth(brand);
+          sectionJumpResizeObserver = new ResizeObserver(() => {
+            const nextRowW = Math.floor(row.clientWidth || 0);
+            const nextBrandW = getBrandNaturalWidth(brand);
+            if (nextRowW === lastObservedRowWidth && nextBrandW === lastObservedBrandWidth) return;
+            lastObservedRowWidth = nextRowW;
+            lastObservedBrandWidth = nextBrandW;
+            invalidateSectionJumpWidthCache();
+            scheduleSectionJumpLayout();
+          });
+          sectionJumpResizeObserver.observe(row);
+          if (brand) sectionJumpResizeObserver.observe(brand);
         }
       }
       scheduleSectionJumpLayout();
@@ -13152,6 +13340,30 @@
       if (starCopyHideTimer !== null) {
         clearTimeout(starCopyHideTimer);
         starCopyHideTimer = null;
+      }
+      if (sectionNavFlashTimer !== null) {
+        clearTimeout(sectionNavFlashTimer);
+        sectionNavFlashTimer = null;
+      }
+      if (sectionJumpResizeObserver && typeof sectionJumpResizeObserver.disconnect === 'function') {
+        sectionJumpResizeObserver.disconnect();
+        sectionJumpResizeObserver = null;
+      }
+      if (typeof window !== 'undefined' && typeof window.removeEventListener === 'function') {
+        window.removeEventListener('scroll', scheduleSectionSpy);
+        window.removeEventListener('resize', scheduleSectionJumpLayout);
+        window.removeEventListener('wheel', clearPinnedJumpSection);
+        window.removeEventListener('touchstart', clearPinnedJumpSection);
+        window.removeEventListener('keydown', handleSectionManualScrollKey);
+      }
+      if (themeMediaQuery && themeMediaQueryHandler) {
+        if (typeof themeMediaQuery.removeEventListener === 'function') {
+          themeMediaQuery.removeEventListener('change', themeMediaQueryHandler);
+        } else if (typeof themeMediaQuery.removeListener === 'function') {
+          themeMediaQuery.removeListener(themeMediaQueryHandler);
+        }
+        themeMediaQuery = null;
+        themeMediaQueryHandler = null;
       }
     });
   </script>

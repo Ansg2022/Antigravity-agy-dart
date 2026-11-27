@@ -44,7 +44,52 @@ const MOCHA_ALLOWED_HEX = new Set([
   ...MOCHA_OFFICIAL_HEX
 ]);
 
-test("1. Catppuccin Mocha CSS block uses official Mocha palette + deep-canvas extension and valid token references", () => {
+function makeEl(id, initialClasses = []) {
+  const classes = new Set(initialClasses);
+  const attrs = new Map();
+  return {
+    id,
+    textContent: "",
+    innerText: "",
+    innerHTML: "",
+    title: "",
+    value: "",
+    options: [],
+    dataset: {},
+    style: {},
+    classList: {
+      add(...cs) {
+        for (const c of cs) classes.add(c);
+      },
+      remove(...cs) {
+        for (const c of cs) classes.delete(c);
+      },
+      contains(c) {
+        return classes.has(c);
+      }
+    },
+    setAttribute(k, v) {
+      attrs.set(k, String(v));
+    },
+    getAttribute(k) {
+      return attrs.get(k) || "";
+    },
+    removeAttribute(k) {
+      attrs.delete(k);
+    },
+    addEventListener() {},
+    removeEventListener() {},
+    querySelector() {
+      return null;
+    },
+    querySelectorAll() {
+      return [];
+    },
+    appendChild() {}
+  };
+}
+
+test("1. Catppuccin Mocha CSS block uses official Mocha palette, valid/used tokens, and proper responsive cascade order", () => {
   const html = fs.readFileSync(HTML_PATH, "utf8");
   const styleMatch = html.match(/<style>([\s\S]*?)<\/style>/i);
   assert.ok(styleMatch, "Dashboard must contain an inline <style> block");
@@ -71,7 +116,7 @@ test("1. Catppuccin Mocha CSS block uses official Mocha palette + deep-canvas ex
     );
   }
 
-  // Ensure every custom property referenced via var(--...) in CSS is defined in :root
+  // Ensure every custom property referenced via var(--...) in CSS is defined in :root, and none in :root go unused
   const rootMatch = css.match(/:root\s*\{([\s\S]*?)\}/);
   assert.ok(rootMatch, "CSS must define :root tokens");
   const definedVars = new Set([...rootMatch[1].matchAll(/(--[a-zA-Z0-9_-]+)\s*:/g)].map((m) => m[1]));
@@ -79,9 +124,31 @@ test("1. Catppuccin Mocha CSS block uses official Mocha palette + deep-canvas ex
   for (const v of referencedVars) {
     assert.ok(definedVars.has(v), `CSS variable ${v} is referenced but not defined in :root`);
   }
+  const allReferencedInHtml = new Set([...html.matchAll(/var\(\s*(--[a-zA-Z0-9_-]+)/g)].map((m) => m[1]));
+  for (const v of definedVars) {
+    assert.ok(allReferencedInHtml.has(v), `CSS variable ${v} in :root is unused`);
+  }
+  const mochaDefinedVars = [...mochaBlock.matchAll(/(--[a-zA-Z0-9_-]+)\s*:/g)].map((m) => m[1]);
+  for (const v of mochaDefinedVars) {
+    assert.ok(definedVars.has(v), `Mocha CSS variable ${v} is not defined in :root`);
+  }
+
+  // Verify narrow-screen @media (max-width: 390px) comes AFTER base .star-banner / details.accordion-band rules
+  const starBaseIdx = css.indexOf(".star-banner {");
+  const accBaseIdx = css.indexOf("details.accordion-band {");
+  const media390Idx = css.indexOf("@media (max-width: 390px)");
+  assert.ok(starBaseIdx > 0 && accBaseIdx > 0 && media390Idx > Math.max(starBaseIdx, accBaseIdx),
+    "@media (max-width: 390px) must appear after base .star-banner and details.accordion-band rules");
+
+  // Ensure anti-FOUC head script uses an attribute so bare <script> extractors still match only the main script
+  const bareScriptMatch = html.match(/<script>([\s\S]*?)<\/script>/);
+  assert.ok(bareScriptMatch && bareScriptMatch[1].includes("function cycleThemeMode"),
+    "Bare <script> regex must still match the main dashboard script");
+  assert.match(html, /<script\s+data-theme-init>[\s\S]*?<\/script>\s*<\/head>/i,
+    "Head must include an attributed <script data-theme-init> block before </head>");
 });
 
-test("2. Theme switcher supports auto/mocha/light cycling, system-preference tracking, and i18n tooltips", () => {
+test("2. Theme switcher supports instant Light/Mocha flip, Auto reset (contextmenu & keyboard), i18n, and responsive jump density", () => {
   const html = fs.readFileSync(HTML_PATH, "utf8");
   const scriptMatches = [...html.matchAll(/<script(?:\s[^>]*)?>([\s\S]*?)<\/script>/gi)];
   const mainScript = scriptMatches.map((m) => m[1]).find((s) => s.includes("function cycleThemeMode"));
@@ -90,45 +157,6 @@ test("2. Theme switcher supports auto/mocha/light cycling, system-preference tra
   const storage = new Map();
   let prefersDark = false;
   let schemeListener = null;
-
-  function makeEl(id, initialClasses = []) {
-    const classes = new Set(initialClasses);
-    const attrs = new Map();
-    return {
-      id,
-      textContent: "",
-      innerText: "",
-      innerHTML: "",
-      title: "",
-      value: "",
-      dataset: {},
-      style: {},
-      classList: {
-        add(...cs) {
-          for (const c of cs) classes.add(c);
-        },
-        remove(...cs) {
-          for (const c of cs) classes.delete(c);
-        },
-        contains(c) {
-          return classes.has(c);
-        }
-      },
-      setAttribute(k, v) {
-        attrs.set(k, String(v));
-      },
-      getAttribute(k) {
-        return attrs.get(k) || "";
-      },
-      removeAttribute(k) {
-        attrs.delete(k);
-      },
-      addEventListener() {},
-      querySelectorAll() {
-        return [];
-      }
-    };
-  }
 
   const docElAttrs = new Map();
   const docEl = {
@@ -152,11 +180,37 @@ test("2. Theme switcher supports auto/mocha/light cycling, system-preference tra
     ["theme-icon-mocha", makeEl("theme-icon-mocha", ["hidden"])],
     ["lang-zh-btn", makeEl("lang-zh-btn")],
     ["lang-en-btn", makeEl("lang-en-btn", ["is-active"])],
-    ["section-nav-btn", makeEl("section-nav-btn")],
+    ["cutoff-select", makeEl("cutoff-select")],
     ["exempt-accordion", Object.assign(makeEl("exempt-accordion"), { tagName: "DETAILS", open: false })],
     ["gates-health-accordion", Object.assign(makeEl("gates-health-accordion"), { tagName: "DETAILS", open: false })]
   ]);
-  const navMenuEl = makeEl("section-nav-menu", ["hidden"]);
+
+  const brandEl = { scrollWidth: 350, offsetWidth: 350 };
+  const rowEl = {
+    clientWidth: 790,
+    querySelector: (sel) => (sel === ".brand-group" ? brandEl : null)
+  };
+  const stripAttrs = new Map([["data-density", "medium"]]);
+  const stripEl = {
+    style: {},
+    closest: (sel) => (sel === ".topbar-row" ? rowEl : null),
+    setAttribute: (k, v) => stripAttrs.set(k, String(v)),
+    getAttribute: (k) => stripAttrs.get(k) || "",
+    get scrollWidth() {
+      const d = stripAttrs.get("data-density");
+      const raw = d === "expanded" ? 340 : d === "medium" ? 180 : 140;
+      return this.style.maxWidth === "none" ? raw : Math.min(raw, rowEl.clientWidth);
+    },
+    get offsetWidth() {
+      return this.scrollWidth;
+    }
+  };
+  const thumbEl = { style: {} };
+  const activeChip = Object.assign(makeEl("chip-active", ["is-active"]), {
+    offsetWidth: 52,
+    offsetLeft: 3,
+    style: { getPropertyValue: () => "var(--accent)" }
+  });
 
   const sandbox = {
     console,
@@ -180,7 +234,7 @@ test("2. Theme switcher supports auto/mocha/light cycling, system-preference tra
     clearTimeout: () => {},
     setInterval: () => 1,
     clearInterval: () => {},
-    fetch: async () => ({ ok: true, json: async () => ({}) }),
+    fetch: () => new Promise(() => {}),
     localStorage: {
       getItem: (k) => (storage.has(k) ? storage.get(k) : null),
       setItem: (k, v) => storage.set(k, String(v)),
@@ -192,11 +246,18 @@ test("2. Theme switcher supports auto/mocha/light cycling, system-preference tra
       title: "",
       documentElement: docEl,
       getElementById: (id) => els.get(id) || null,
-      querySelector: (sel) => (sel === "[data-section-nav-menu]" ? navMenuEl : null),
-      querySelectorAll: () => [],
+      querySelector: (sel) => {
+        if (sel === "[data-section-jump-strip]") return stripEl;
+        if (sel === "[data-section-jump-thumb]") return thumbEl;
+        return null;
+      },
+      querySelectorAll: (sel) =>
+        sel === "[data-section-jump-strip] [data-nav-target]" ? [activeChip] : [],
       addEventListener: () => {}
     },
     window: {
+      innerWidth: 820,
+      innerHeight: 900,
       scrollY: 0,
       scrollTo: () => {},
       location: { origin: "http://127.0.0.1:18765", pathname: "/", search: "" },
@@ -204,9 +265,11 @@ test("2. Theme switcher supports auto/mocha/light cycling, system-preference tra
         matches: query.includes("dark") ? prefersDark : false,
         addEventListener: (ev, fn) => {
           if (ev === "change") schemeListener = fn;
-        }
+        },
+        removeEventListener: () => {}
       }),
-      addEventListener: () => {}
+      addEventListener: () => {},
+      removeEventListener: () => {}
     }
   };
   sandbox.globalThis = sandbox;
@@ -243,11 +306,26 @@ test("2. Theme switcher supports auto/mocha/light cycling, system-preference tra
   assert.equal(docEl.dataset.themeMode, "auto");
   assert.equal(storage.get("agy-dart-ui-theme"), "auto");
 
-  // Switching UI language updates theme button tooltip
+  // Keyboard Shift+Enter and Shift+Click also restore auto mode for accessibility
+  sandbox.cycleThemeMode();
+  assert.equal(docEl.dataset.themeMode, "light");
+  let prevented = false;
+  sandbox.handleThemeToggleKeydown({ shiftKey: true, key: "Enter", preventDefault: () => { prevented = true; } });
+  assert.equal(prevented, true);
+  assert.equal(docEl.dataset.themeMode, "auto");
+
+  sandbox.cycleThemeMode();
+  assert.equal(docEl.dataset.themeMode, "light");
+  sandbox.cycleThemeMode({ shiftKey: true });
+  assert.equal(docEl.dataset.themeMode, "auto");
+
+  // Switching UI language updates theme button tooltip & nav strip aria-label
   sandbox.setLanguage("zh", false);
   assert.ok(els.get("theme-toggle-btn").title.includes("当前主题"), "Chinese tooltip should update on language switch");
+  assert.equal(stripAttrs.get("aria-label"), "快速跳转板块", "Chinese nav aria-label should sync from sectionNavTip");
   sandbox.setLanguage("en", false);
   assert.ok(els.get("theme-toggle-btn").title.includes("Theme:"), "English tooltip should update on language switch");
+  assert.equal(stripAttrs.get("aria-label"), "Jump to section", "English nav aria-label should sync from sectionNavTip");
 
   // Inline section jump chips expand target <details> and clear previous flash on rapid clicks
   sandbox.jumpToSection("exempt-accordion");
@@ -256,44 +334,6 @@ test("2. Theme switcher supports auto/mocha/light cycling, system-preference tra
   sandbox.jumpToSection("gates-health-accordion");
   assert.equal(els.get("exempt-accordion").classList.contains("is-nav-flash"), false, "Previous flashed card must clear on rapid click");
   assert.equal(els.get("gates-health-accordion").classList.contains("is-nav-flash"), true, "New target card should flash on rapid click");
-
-  // Section jump strip adapts density across expanded/medium/compact based on row-1 remaining space
-  const brandEl = { scrollWidth: 350, offsetWidth: 350 };
-  const rowEl = {
-    clientWidth: 790,
-    querySelector: (sel) => (sel === ".brand-group" ? brandEl : null)
-  };
-  const stripAttrs = new Map([["data-density", "medium"]]);
-  const stripEl = {
-    closest: (sel) => (sel === ".topbar-row" ? rowEl : null),
-    setAttribute: (k, v) => stripAttrs.set(k, String(v)),
-    getAttribute: (k) => stripAttrs.get(k) || "",
-    get scrollWidth() {
-      const d = stripAttrs.get("data-density");
-      if (d === "expanded") return 340;
-      if (d === "medium") return 180;
-      return 140;
-    },
-    get offsetWidth() {
-      return this.scrollWidth;
-    }
-  };
-  const thumbEl = { style: {} };
-  const activeChip = {
-    offsetWidth: 52,
-    offsetLeft: 3,
-    style: { getPropertyValue: () => "var(--accent)" },
-    classList: { contains: (c) => c === "is-active" }
-  };
-  const origQuerySelector = sandbox.document.querySelector;
-  const origQuerySelectorAll = sandbox.document.querySelectorAll;
-  sandbox.document.querySelector = (sel) => {
-    if (sel === "[data-section-jump-strip]") return stripEl;
-    if (sel === "[data-section-jump-thumb]") return thumbEl;
-    return origQuerySelector(sel);
-  };
-  sandbox.document.querySelectorAll = (sel) =>
-    sel === "[data-section-jump-strip] [data-nav-target]" ? [activeChip] : origQuerySelectorAll(sel);
 
   // Wide row (790 - 350 - 10 = 430 >= 340) -> expanded (all short labels)
   rowEl.clientWidth = 790;
@@ -305,8 +345,140 @@ test("2. Theme switcher supports auto/mocha/light cycling, system-preference tra
   sandbox.syncSectionJumpDensity();
   assert.equal(stripAttrs.get("data-density"), "medium");
 
-  // Tight row (500 - 350 - 10 = 140 < 180) -> compact (dots only)
+  // Tight same-line row (500 - 350 - 10 = 140, fits compact 140 but not medium 180) -> compact
   rowEl.clientWidth = 500;
   sandbox.syncSectionJumpDensity();
   assert.equal(stripAttrs.get("data-density"), "compact");
+
+  // Wrapped row (390 - 350 - 10 = 30 < compact 140 -> strip wraps onto full 390px line >= expanded 340) -> expanded
+  rowEl.clientWidth = 390;
+  sandbox.syncSectionJumpDensity();
+  assert.equal(stripAttrs.get("data-density"), "expanded");
+
+  // Narrow wrapped row (300px full line fits medium 180 but not expanded 340) -> medium
+  rowEl.clientWidth = 300;
+  sandbox.syncSectionJumpDensity();
+  assert.equal(stripAttrs.get("data-density"), "medium");
+});
+
+test("3. Anti-FOUC head script and scroll-spy nearBottom guards prevent white flash and false bottom highlight", () => {
+  const html = fs.readFileSync(HTML_PATH, "utf8");
+  const headInitMatch = html.match(/<script\s+data-theme-init>([\s\S]*?)<\/script>/i);
+  assert.ok(headInitMatch, "Anti-FOUC <script data-theme-init> must exist");
+
+  // Execute head script across saved/system combinations before <body> renders
+  function runHeadInit(savedVal, prefersDark) {
+    const attrs = new Map();
+    const root = {
+      dataset: {},
+      setAttribute: (k, v) => attrs.set(k, String(v))
+    };
+    const ctx = {
+      localStorage: { getItem: () => savedVal },
+      window: { matchMedia: () => ({ matches: prefersDark }) },
+      document: { documentElement: root }
+    };
+    vm.createContext(ctx);
+    vm.runInContext(headInitMatch[1], ctx);
+    return { mode: root.dataset.themeMode, theme: attrs.get("data-theme") };
+  }
+  assert.deepEqual(runHeadInit(null, true), { mode: "auto", theme: "mocha" });
+  assert.deepEqual(runHeadInit(null, false), { mode: "auto", theme: "light" });
+  assert.deepEqual(runHeadInit("mocha", false), { mode: "mocha", theme: "mocha" });
+  assert.deepEqual(runHeadInit("light", true), { mode: "light", theme: "light" });
+
+  // Scroll-spy nearBottom behavior: must not hijack scrollY===0 or explicit jump to exempt-accordion
+  const mainScript = html.match(/<script>([\s\S]*?)<\/script>/)[1];
+  const docEl = { lang: "en", dataset: {}, scrollHeight: 1341, setAttribute() {}, getAttribute: () => "light" };
+  const makeSection = (id, top) => Object.assign(makeEl(id), {
+    tagName: id.endsWith("accordion") ? "DETAILS" : "SECTION",
+    open: false,
+    getBoundingClientRect: () => ({ top })
+  });
+  const sections = new Map([
+    ["kv-cache-card", makeSection("kv-cache-card", 90)],
+    ["exempt-accordion", makeSection("exempt-accordion", 220)],
+    ["gates-health-accordion", makeSection("gates-health-accordion", 520)]
+  ]);
+  const makeChip = (targetId) => {
+    const c = makeEl(`chip-${targetId}`);
+    c.setAttribute("data-nav-target", targetId);
+    c.offsetWidth = 44;
+    c.offsetLeft = 4;
+    return c;
+  };
+  const chips = [makeChip("kv-cache-card"), makeChip("exempt-accordion"), makeChip("gates-health-accordion")];
+  const topbarEl = { getBoundingClientRect: () => ({ height: 64 }) };
+  let nowMs = 10000;
+  class MockDate extends Date {
+    static now() { return nowMs; }
+  }
+
+  const sandbox = {
+    console,
+    Date: MockDate,
+    Math,
+    JSON,
+    Number,
+    String,
+    Boolean,
+    Array,
+    Object,
+    Map,
+    Set,
+    RegExp,
+    Error,
+    URL,
+    URLSearchParams,
+    Headers,
+    Promise,
+    setTimeout: () => 1,
+    clearTimeout: () => {},
+    setInterval: () => 1,
+    clearInterval: () => {},
+    fetch: () => new Promise(() => {}),
+    localStorage: { getItem: () => null, setItem() {}, removeItem() {} },
+    navigator: { language: "en-US", clipboard: { writeText: async () => {} } },
+    document: {
+      hidden: false,
+      title: "",
+      documentElement: docEl,
+      getElementById: (id) => sections.get(id) || (id === "cutoff-select" ? makeEl("cutoff-select") : null),
+      querySelector: (sel) => (sel === ".topbar" ? topbarEl : null),
+      querySelectorAll: (sel) => (sel === "[data-section-jump-strip] [data-nav-target]" ? chips : []),
+      addEventListener: () => {}
+    },
+    window: {
+      innerWidth: 820,
+      innerHeight: 1400,
+      scrollY: 0,
+      scrollTo: () => {},
+      location: { origin: "http://127.0.0.1:18765", pathname: "/", search: "" },
+      matchMedia: () => ({ matches: false, addEventListener() {}, removeEventListener() {} }),
+      addEventListener: () => {},
+      removeEventListener: () => {}
+    }
+  };
+  sandbox.globalThis = sandbox;
+  vm.createContext(sandbox);
+  vm.runInContext(mainScript, sandbox);
+
+  // Case A: Tall viewport (scrollY === 0, innerHeight 1400 >= scrollHeight 1341) must stay on first section, not last
+  sandbox.syncSectionJumpVisibilityAndSpy(true);
+  assert.equal(chips[0].classList.contains("is-active"), true, "scrollY===0 must highlight first section even when whole page fits");
+  assert.equal(chips[2].classList.contains("is-active"), false, "scrollY===0 must not jump to last section");
+
+  // Case B: Click jump to exempt-accordion near bottom -> must stay pinned after lock expires while visible in viewport
+  sandbox.window.innerHeight = 900;
+  sandbox.window.scrollY = 441; // 441 + 900 === 1341 (exact bottom)
+  sandbox.jumpToSection("exempt-accordion");
+  nowMs += 1000; // past 700ms lock
+  sandbox.syncSectionJumpVisibilityAndSpy(false);
+  assert.equal(chips[1].classList.contains("is-active"), true, "Pinned jump to exempt-accordion must survive lock expiry at bottom");
+  assert.equal(chips[2].classList.contains("is-active"), false, "nearBottom must not hijack explicit jump to exempt-accordion");
+
+  // Case C: After manual scroll clears pin at bottom, nearBottom highlights last section normally
+  sandbox.clearPinnedJumpSection();
+  sandbox.syncSectionJumpVisibilityAndSpy(false);
+  assert.equal(chips[2].classList.contains("is-active"), true, "Manual scroll at bottom should highlight last section");
 });
