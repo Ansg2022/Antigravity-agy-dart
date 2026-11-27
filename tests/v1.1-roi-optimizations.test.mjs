@@ -509,12 +509,13 @@ test("Opt 3: Doom-loop / edit<->fail oscillation watch in cache-analyzer, PreInv
     assert.equal(aOk.length, 0);
     store.close();
 
-    // Live hook run emits systemMessage: "" + metadata.user_markdown
+    // Live hook run (with opt-in inline alerts) emits systemMessage: "" + metadata.user_markdown
     fs.writeFileSync(transcriptPath, oscCritDiag ? oscSteps.map((s) => JSON.stringify(s)).join("\n") + "\n" : "", "utf8");
     const hookOut = runHook(
       "hooks/pre-invocation.mjs",
       { conversationId: "loop-hook-live", transcriptPath },
-      tmpDb
+      tmpDb,
+      { AGY_DART_CACHE_WATCH_INLINE_ALERTS: "1" }
     );
     assert.equal(hookOut.injectSteps?.length, 1);
     assert.equal(hookOut.injectSteps[0].systemMessage.systemMessage, "");
@@ -585,7 +586,7 @@ test("Opt 4: Model-aware dynamic watermarks, idle TTL, cost discount, and env ov
       "hooks/pre-invocation.mjs",
       { conversationId: "env-override-s1", transcriptPath },
       tmpDb,
-      { AGY_DART_WARN_TOKENS: "50000", AGY_DART_CRITICAL_TOKENS: "70000" }
+      { AGY_DART_WARN_TOKENS: "50000", AGY_DART_CRITICAL_TOKENS: "70000", AGY_DART_CACHE_WATCH_INLINE_ALERTS: "1" }
     );
     assert.equal(hookRes.injectSteps?.length, 1);
     assert.equal(hookRes.injectSteps[0].systemMessage.systemMessage, "");

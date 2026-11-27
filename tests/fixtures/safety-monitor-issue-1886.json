@@ -1,0 +1,97 @@
+{
+  "schema_version": "1.0.0",
+  "issue_ref": "google-antigravity/antigravity-cli#1886",
+  "note": "Self-contained scrubbed golden fixtures from real Antigravity Desktop v2.35.2 language_server.log and CLI cli-*.log runs, plus synthetic upstream 429 avalanche and false-positive guard cases.",
+  "desktop_allowed_tool_skip_chain": [
+    "ERROR: logging before google.Init: I1126 23:54:52.313839   42315 runner.go:957] Monitor agy_tool_safety FINISHED: triggered=false, reason=\"allowed_tool\", duration=19µs",
+    "ERROR: logging before google.Init: I1126 23:54:52.313839   42315 runner.go:505] Monitor sir_flash_lite SKIPPED",
+    "ERROR: logging before google.Init: I1126 23:54:52.313839   42315 runner.go:505] Monitor severe_internal_risks_agy SKIPPED"
+  ],
+  "desktop_normal_sir_flash_lite_pass": [
+    "ERROR: logging before google.Init: I1126 23:54:50.904003   42224 runner.go:957] Monitor agy_tool_safety FINISHED: triggered=true, reason=\"unsupported_tool: mcp_agy-dart_fast_batch_search\", duration=28µs",
+    "ERROR: logging before google.Init: I1126 23:54:50.904003   42272 llm_monitor.go:349] LLM Monitor sir_flash_lite: Starting evaluation",
+    "ERROR: logging before google.Init: I1126 23:54:50.904003   42272 llm_monitor.go:636] LLM Monitor sir_flash_lite: Trajectory formatted, length: 297",
+    "ERROR: logging before google.Init: I1126 23:54:50.904003   42272 llm_monitor.go:712] LLM Monitor sir_flash_lite: Calling LLM (model: MODEL_TIER_FLASH_LITE)",
+    "ERROR: logging before google.Init: I1126 23:54:51.983400   42272 http_helpers.go:748] URL: https://daily-cloudcode-pa.googleapis.com/v1internal:streamGenerateContent?alt=sse Trace: 0x<REDACTED_TRACE> ResponseID: <REDACTED_RESPONSE_ID>",
+    "ERROR: logging before google.Init: I1126 23:54:52.192842   42272 llm_monitor.go:731] LLM Monitor sir_flash_lite: LLM response received, length: 244",
+    "ERROR: logging before google.Init: I1126 23:54:52.192842   42272 llm_monitor.go:769] LLM Monitor sir_flash_lite: LLM response parsed successfully",
+    "ERROR: logging before google.Init: I1126 23:54:52.192842   42272 llm_monitor.go:785] LLM Monitor sir_flash_lite: Evaluation complete. Triggered: false, Severity: 0, Confidence: 10",
+    "ERROR: logging before google.Init: I1126 23:54:52.192842   42253 runner.go:957] Monitor sir_flash_lite FINISHED: triggered=false, reason=\"Routine local search query.\", duration=1.2889699s",
+    "ERROR: logging before google.Init: I1126 23:54:52.192842   42253 runner.go:505] Monitor severe_internal_risks_agy SKIPPED"
+  ],
+  "desktop_zero_429_escalation_shell": [
+    "ERROR: logging before google.Init: I1126 23:54:52.379534   42362 runner.go:957] Monitor agy_tool_safety FINISHED: triggered=true, reason=\"unquoted_shell_operators\", duration=51.4µs",
+    "ERROR: logging before google.Init: I1126 23:54:52.379534   42368 llm_monitor.go:349] LLM Monitor sir_flash_lite: Starting evaluation",
+    "ERROR: logging before google.Init: I1126 23:54:52.380054   42368 llm_monitor.go:636] LLM Monitor sir_flash_lite: Trajectory formatted, length: 12663",
+    "ERROR: logging before google.Init: I1126 23:54:52.380617   42368 llm_monitor.go:712] LLM Monitor sir_flash_lite: Calling LLM (model: MODEL_TIER_FLASH_LITE)",
+    "ERROR: logging before google.Init: I1126 23:54:53.158254   42368 http_helpers.go:748] URL: https://daily-cloudcode-pa.googleapis.com/v1internal:streamGenerateContent?alt=sse Trace: 0x<REDACTED_TRACE> ResponseID: <REDACTED_RESPONSE_ID>",
+    "ERROR: logging before google.Init: I1126 23:54:53.524822   42368 llm_monitor.go:731] LLM Monitor sir_flash_lite: LLM response received, length: 563",
+    "ERROR: logging before google.Init: I1126 23:54:53.524822   42368 llm_monitor.go:769] LLM Monitor sir_flash_lite: LLM response parsed successfully",
+    "ERROR: logging before google.Init: I1126 23:54:53.524822   42368 llm_monitor.go:785] LLM Monitor sir_flash_lite: Evaluation complete. Triggered: true, Severity: 3, Confidence: 9",
+    "ERROR: logging before google.Init: I1126 23:54:53.524822   42288 runner.go:957] Monitor sir_flash_lite FINISHED: triggered=true, reason=\"External data ingestion via PowerShell.\", duration=1.1451761s",
+    "ERROR: logging before google.Init: I1126 23:54:53.524822   42422 llm_monitor.go:349] LLM Monitor severe_internal_risks_agy: Starting evaluation",
+    "ERROR: logging before google.Init: I1126 23:54:53.525342   42422 llm_monitor.go:636] LLM Monitor severe_internal_risks_agy: Trajectory formatted, length: 53796",
+    "ERROR: logging before google.Init: I1126 23:54:53.525342   42422 llm_monitor.go:712] LLM Monitor severe_internal_risks_agy: Calling LLM (model: gemini-4-hydrogen-sonar)",
+    "ERROR: logging before google.Init: I1126 23:54:56.257989   42422 http_helpers.go:748] URL: https://daily-cloudcode-pa.googleapis.com/v1internal:streamGenerateContent?alt=sse Trace: 0x<REDACTED_TRACE> ResponseID: <REDACTED_RESPONSE_ID>",
+    "ERROR: logging before google.Init: I1126 23:54:56.419983   42422 llm_monitor.go:731] LLM Monitor severe_internal_risks_agy: LLM response received, length: 41",
+    "ERROR: logging before google.Init: I1126 23:54:56.419983   42422 llm_monitor.go:769] LLM Monitor severe_internal_risks_agy: LLM response parsed successfully",
+    "ERROR: logging before google.Init: I1126 23:54:56.419983   42422 llm_monitor.go:785] LLM Monitor severe_internal_risks_agy: Evaluation complete. Triggered: false, Severity: 0, Confidence: 0",
+    "ERROR: logging before google.Init: I1126 23:54:56.419983   42420 runner.go:957] Monitor severe_internal_risks_agy FINISHED: triggered=false, reason=\"\", duration=2.8950897s"
+  ],
+  "desktop_zero_429_escalation_300k_mcp": [
+    "ERROR: logging before google.Init: I1127 01:18:20.606558  939014 runner.go:957] Monitor agy_tool_safety FINISHED: triggered=true, reason=\"unsupported_tool: mcp_agy-dart_fast_read_slices\", duration=15.4µs",
+    "ERROR: logging before google.Init: I1127 01:18:20.606558  939020 llm_monitor.go:349] LLM Monitor sir_flash_lite: Starting evaluation",
+    "ERROR: logging before google.Init: I1127 01:18:20.607558  939020 llm_monitor.go:636] LLM Monitor sir_flash_lite: Trajectory formatted, length: 24234",
+    "ERROR: logging before google.Init: I1127 01:18:20.607558  939020 llm_monitor.go:712] LLM Monitor sir_flash_lite: Calling LLM (model: MODEL_TIER_FLASH_LITE)",
+    "ERROR: logging before google.Init: I1127 01:18:21.469470  939020 http_helpers.go:748] URL: https://daily-cloudcode-pa.googleapis.com/v1internal:streamGenerateContent?alt=sse Trace: 0x<REDACTED_TRACE> ResponseID: <REDACTED_RESPONSE_ID>",
+    "ERROR: logging before google.Init: I1127 01:18:21.763119  939020 llm_monitor.go:731] LLM Monitor sir_flash_lite: LLM response received, length: 394",
+    "ERROR: logging before google.Init: I1127 01:18:21.763119  939020 llm_monitor.go:769] LLM Monitor sir_flash_lite: LLM response parsed successfully",
+    "ERROR: logging before google.Init: I1127 01:18:21.763119  939020 llm_monitor.go:785] LLM Monitor sir_flash_lite: Evaluation complete. Triggered: true, Severity: 7, Confidence: 10",
+    "ERROR: logging before google.Init: I1127 01:18:21.763119  938881 runner.go:957] Monitor sir_flash_lite FINISHED: triggered=true, reason=\"Outside workspace directory read.\", duration=1.1561087s",
+    "ERROR: logging before google.Init: I1127 01:18:21.763119  939093 llm_monitor.go:349] LLM Monitor severe_internal_risks_agy: Starting evaluation",
+    "ERROR: logging before google.Init: I1127 01:18:21.764713  939093 llm_monitor.go:636] LLM Monitor severe_internal_risks_agy: Trajectory formatted, length: 299876",
+    "ERROR: logging before google.Init: I1127 01:18:21.764713  939093 llm_monitor.go:712] LLM Monitor severe_internal_risks_agy: Calling LLM (model: gemini-4-hydrogen-sonar)",
+    "ERROR: logging before google.Init: I1127 01:18:27.136309  939093 http_helpers.go:748] URL: https://daily-cloudcode-pa.googleapis.com/v1internal:streamGenerateContent?alt=sse Trace: 0x<REDACTED_TRACE> ResponseID: <REDACTED_RESPONSE_ID>",
+    "ERROR: logging before google.Init: I1127 01:18:27.323800  939093 llm_monitor.go:731] LLM Monitor severe_internal_risks_agy: LLM response received, length: 41",
+    "ERROR: logging before google.Init: I1127 01:18:27.323800  939093 llm_monitor.go:769] LLM Monitor severe_internal_risks_agy: LLM response parsed successfully",
+    "ERROR: logging before google.Init: I1127 01:18:27.323800  939093 llm_monitor.go:785] LLM Monitor severe_internal_risks_agy: Evaluation complete. Triggered: false, Severity: 0, Confidence: 0",
+    "ERROR: logging before google.Init: I1127 01:18:27.323800  939091 runner.go:957] Monitor severe_internal_risks_agy FINISHED: triggered=false, reason=\"\", duration=5.5605827s"
+  ],
+  "desktop_trigger_reasons_catalog": [
+    "ERROR: logging before google.Init: I1126 23:54:52.379534   42362 runner.go:957] Monitor agy_tool_safety FINISHED: triggered=true, reason=\"unquoted_shell_operators\", duration=51.4µs",
+    "ERROR: logging before google.Init: I1127 01:17:34.102683  929814 runner.go:957] Monitor agy_tool_safety FINISHED: triggered=true, reason=\"unknown_command\", duration=77.4µs",
+    "ERROR: logging before google.Init: I1126 23:58:49.452276   76039 runner.go:957] Monitor agy_tool_safety FINISHED: triggered=true, reason=\"unsupported_tool: write_file\", duration=21.6µs",
+    "ERROR: logging before google.Init: I1127 00:04:29.546006  124782 runner.go:957] Monitor agy_tool_safety FINISHED: triggered=true, reason=\"unsupported_tool: edit_file\", duration=22.4µs",
+    "ERROR: logging before google.Init: I1126 23:57:50.953150   69737 runner.go:957] Monitor agy_tool_safety FINISHED: triggered=true, reason=\"unsupported_tool: call_mcp_tool\", duration=27.9µs",
+    "ERROR: logging before google.Init: I1127 01:18:03.217240  935835 runner.go:957] Monitor agy_tool_safety FINISHED: triggered=true, reason=\"unsupported_tool: invoke_subagent\", duration=15.2µs",
+    "ERROR: logging before google.Init: I1127 01:21:14.008875  961808 runner.go:957] Monitor agy_tool_safety FINISHED: triggered=true, reason=\"unsupported_tool: send_message\", duration=18.8µs",
+    "ERROR: logging before google.Init: I1126 23:54:50.904003   42224 runner.go:957] Monitor agy_tool_safety FINISHED: triggered=true, reason=\"unsupported_tool: mcp_agy-dart_fast_batch_search\", duration=28µs",
+    "ERROR: logging before google.Init: I1126 23:55:12.601898   46974 runner.go:957] Monitor agy_tool_safety FINISHED: triggered=true, reason=\"unsupported_tool: mcp_agy-dart_fast_read_slices\", duration=18µs",
+    "ERROR: logging before google.Init: I1127 00:07:51.786360  148340 runner.go:957] Monitor agy_tool_safety FINISHED: triggered=true, reason=\"unsupported_tool: mcp_agy-dart_fast_apply_edits\", duration=25.8µs",
+    "ERROR: logging before google.Init: I1127 01:14:27.437059  875588 runner.go:957] Monitor agy_tool_safety FINISHED: triggered=true, reason=\"unsupported_tool: mcp_agy-dart_fast_run_checks\", duration=21.5µs"
+  ],
+  "desktop_sonar_and_main_stream": [
+    "ERROR: logging before google.Init: I1126 23:52:04.468464    2140 monitoring.go:411] [Sonar] Resolved active tags: [jetski_mode_turbo policy_guardian sonar_skip_tags] (detected surface: \"\")",
+    "ERROR: logging before google.Init: I1126 23:52:23.235646    2140 http_helpers.go:748] URL: https://daily-cloudcode-pa.googleapis.com/v1internal:streamGenerateContent?alt=sse Trace: 0x<REDACTED_TRACE> ResponseID: <REDACTED_RESPONSE_ID>"
+  ],
+  "desktop_noise_and_429_false_positives": [
+    "ERROR: logging before google.Init: E1126 23:52:04.429429    1590 errorreport.go:282] [Summaries] failed to generate summary for 12344290-abcd-4290-8888-000000004290 while reconciling: conversation not found",
+    "ERROR: logging before google.Init: I1126 23:52:04.567974    2933 csrf_interceptor.go:513] [LS Auth Telemetry] Scoped token RPC called: principal=\"sidecar\" procedure=\"/exa.language_server_pb.LanguageServerService/RetrieveUserQuotaSummary\" status=429",
+    "ERROR: logging before google.Init: E1126 23:52:06.240251    2933 cascade_manager.go:2111] LoadTrajectory failed on localhost:2429 for 42999999",
+    "ERROR: logging before google.Init: I1126 23:55:00.100000    4290 runner.go:957] Monitor sir_flash_lite FINISHED: triggered=false, reason=\"Checking HTTP 429 RESOURCE_EXHAUSTED rate limits documentation in local markdown.\", duration=1.05s"
+  ],
+  "cli_normal_and_interleaved": [
+    "I1123 04:00:38.794798    2801 monitoring.go:412] [Sonar] Resolved active tags: [jetski_mode_default policy_guardian sonar_skip_tags] (detected surface: \"\")",
+    "I1123 04:00:42.884552    2801 http_helpers.go:760] URL: https://daily-cloudcode-pa.googleapis.com/v1internal:streamGenerateContent?alt=sse Trace: 0x<REDACTED_TRACE> ResponseID: <REDACTED_RESPONSE_ID>",
+    "I1123 04:00:44.695946    4982 runner.go:957] Monitor agy_tool_safety FINISHED: triggered=true, reason=\"unsupported_tool: mcp_agy-dart_fast_batch_search\", duration=12.9µs",
+    "I1123 04:00:44.695946    4991 llm_monitor.go:343] LLM Monitor sir_flash_lite: Starting evaluation",
+    "I1123 04:00:44.696460    4991 llm_monitor.go:630] LLM Monitor sir_flash_lite: Trajectory formatted, length: 283",
+    "I1123 04:00:44.696460    4991 llm_monitor.go:706] LLM Monitor sir_flash_lite: Calling LLM (model: MODEL_TIER_FLASH_LITE)",
+    "I1123 04:00:46.232939    4991 http_helpers.go:760] URL: https://daily-cloudcode-pa.googleapis.com/v1internal:streamGenerateContent?alt=sse Trace: 0x<REDACTED_TRACE> ResponseID: <REDACTED_RESPONSE_ID>",
+    "I1123 04:00:46.527432    4991 llm_monitor.go:779] LLM Monitor sir_flash_lite: Evaluation complete. Triggered: false, Severity: 0, Confidence: 10",
+    "I1123 04:00:46.527432    4988 runner.go:957] Monitor sir_flash_lite FINISHED: triggered=false, reason=\"Routine search.\", duration=1.8322645s",
+    "I1123 04:00:46.527432    4988 runner.go:505] Monitor severe_internal_risks_agy SKIPPED",
+    "I1123 04:30:12.579083    4403 runner.go:957] Monitor agy_tooI1123 04:30:13.823380    3756 http_helpers.go:760] URL: https://daily-cloudcode-pa.googleapis.com/v1internal:streamGenerateContent?alt=sse Trace: 0x<REDACTED_TRACE> ResponseID: <REDACTED_RESPONSE_ID>",
+    "I1123 04:30:15.936308    4346 runner.go:957] Monitor sir_flash_lite FINISHED: triggered=false, reasonI1123 04:30:37.159919    2667 http_helpers.go:760] URL: https://daily-cloudcode-pa.googleapis.com/v1internal:streamGenerateContent?alt=sse Trace: 0x<REDACTED_TRACE> ResponseID: <REDACTED_RESPONSE_ID>"
+  ]
+}

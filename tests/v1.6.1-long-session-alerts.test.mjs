@@ -796,7 +796,8 @@ test("v1.6.1-4: Suppress false-idle TTL alerts during stopped_bg_pending, active
     const hookEnv = {
       ...process.env,
       AGY_DART_DB_PATH: dbPath,
-      AGY_DART_CONFIG_PATH: cfgPath
+      AGY_DART_CONFIG_PATH: cfgPath,
+      AGY_DART_CACHE_WATCH_INLINE_ALERTS: "1"
     };
 
     // Seed `usedCount: 2` + post-compact `file_reads` on `conv-bg-wake`, and test stale `lastUserInput: "/compact"` on background wakeup!

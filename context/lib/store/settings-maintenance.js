@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 import { getConfigSnapshot, getEffectiveConfig, parseUiLang } from "../config.js";
 import { readConversationParentId } from "../watchdog-lease.js";
 import {
@@ -327,6 +328,114 @@ function sanitizeLeaseLinkId(raw) {
     return "";
   }
   return trimmed;
+}
+
+export const SESSION_WORKSPACE_PREFIX = "session_workspace:";
+const SESSION_WORKSPACE_MAX_ENTRIES = 32;
+const SESSION_WORKSPACE_MAX_AGE_MS = 24 * 60 * 60 * 1000;
+const DEFAULT_ACTIVE_WORKSPACE_MAX_AGE_MS = 10 * 60 * 1000;
+const SESSION_WORKSPACE_RESERVED_IDS = new Set([
+  "default",
+  "all",
+  "lifetime",
+  "app",
+  "__unbound__",
+  "unknown",
+  "none",
+  "null",
+  "undefined"
+]);
+const STORE_INSTALLED_PLUGIN_PATH_RE =
+  /\/(?:\.gemini\/(?:config|antigravity)\/plugins|\.agents\/plugins|\.t3\/userdata\/providers\/antigravity\/[^/]+\/(?:\.gemini\/config\/)?plugins)\/agy-dart(?:\/|$)/i;
+const STORE_SELF_PLUGIN_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "..", "..");
+const STORE_IS_INSTALLED_PLUGIN_COPY = !fs.existsSync(path.join(STORE_SELF_PLUGIN_ROOT, ".git"));
+
+function normalizeStoreCompareDir(dirPath) {
+  let resolved = path.resolve(String(dirPath || ""));
+  try {
+    resolved = fs.realpathSync(resolved);
+  } catch {}
+  return process.platform === "win32" ? resolved.toLowerCase() : resolved;
+}
+
+const STORE_SELF_PLUGIN_ROOT_NORM = normalizeStoreCompareDir(STORE_SELF_PLUGIN_ROOT);
+
+function isStoreSameOrSubDir(candidateNorm, parentNorm) {
+  if (!candidateNorm || !parentNorm) return false;
+  const rel = path.relative(parentNorm, candidateNorm);
+  return (
+    rel === "" ||
+    (rel !== ".." && !rel.startsWith(`..${path.sep}`) && !rel.startsWith("../") && !path.isAbsolute(rel))
+  );
+}
+
+function isStoreInsideInstalledPluginDir(candidateDir, pluginRootNorm = null) {
+  if (typeof candidateDir !== "string" || !candidateDir.trim()) return false;
+  const candNorm = normalizeStoreCompareDir(candidateDir);
+  const candPosix = candNorm.replace(/\\/g, "/");
+  if (STORE_INSTALLED_PLUGIN_PATH_RE.test(candPosix)) return true;
+  for (const envVar of [process.env.PLUGIN_ROOT, process.env.AGY_PLUGIN_ROOT]) {
+    if (typeof envVar === "string" && envVar.trim()) {
+      if (isStoreSameOrSubDir(candNorm, normalizeStoreCompareDir(envVar.trim()))) return true;
+    }
+  }
+  if (pluginRootNorm && isStoreSameOrSubDir(candNorm, pluginRootNorm)) return true;
+  if (STORE_IS_INSTALLED_PLUGIN_COPY && isStoreSameOrSubDir(candNorm, STORE_SELF_PLUGIN_ROOT_NORM)) {
+    return true;
+  }
+  return false;
+}
+
+function sanitizeSessionWorkspaceConvId(raw) {
+  if (typeof raw !== "string") return "";
+  const trimmed = raw.trim();
+  if (!trimmed || trimmed.length > 128) return "";
+  if (/[\x00-\x1f\x7f\\/]/.test(trimmed)) return "";
+  if (SESSION_WORKSPACE_RESERVED_IDS.has(trimmed.toLowerCase()) || /^workspace:/i.test(trimmed)) return "";
+  return trimmed;
+}
+
+function normalizeSafeSessionWorkspaceDir(rawDir, { pluginRootNorm = null } = {}) {
+  if (typeof rawDir !== "string") return null;
+  let s = rawDir.trim();
+  if (!s || /[\x00-\x1f\x7f]/.test(s)) return null;
+  if (/^file:\/\//i.test(s)) {
+    try {
+      s = fileURLToPath(s);
+    } catch {
+      return null;
+    }
+  }
+  if (s === "~") {
+    s = os.homedir();
+  } else if (s.startsWith("~/") || s.startsWith("~\\")) {
+    s = path.join(os.homedir(), s.slice(2));
+  }
+  if (/^[\\/]{2}/.test(s)) return null;
+  let abs;
+  try {
+    abs = path.resolve(s);
+    if (!fs.statSync(abs).isDirectory()) return null;
+  } catch {
+    return null;
+  }
+  let real = abs;
+  try {
+    real = fs.realpathSync(abs);
+  } catch {}
+  if (/^[\\/]{2}/.test(real)) return null;
+  if (path.parse(real).root === real) return null;
+  const norm = process.platform === "win32" ? real.toLowerCase() : real;
+  try {
+    const homeNorm = normalizeStoreCompareDir(os.homedir());
+    if (homeNorm && norm === homeNorm) return null;
+  } catch {}
+  try {
+    const tmpNorm = normalizeStoreCompareDir(os.tmpdir());
+    if (tmpNorm && norm === tmpNorm) return null;
+  } catch {}
+  if (isStoreInsideInstalledPluginDir(real, pluginRootNorm)) return null;
+  return { dir: abs, canonicalKey: norm };
 }
 
 export class SettingsMaintenanceMethods {
@@ -954,6 +1063,283 @@ export class SettingsMaintenanceMethods {
   clearSessionOverrides() {
     this.open();
     this.db.prepare("DELETE FROM meta WHERE key LIKE '%:session:app' OR key LIKE '%:session:default'").run();
+  }
+
+  /** Record or refresh the workspace directory associated with a conversation */
+  recordSessionWorkspace(
+    conversationId,
+    workspaceDir,
+    { rootSessionId = "", active = true, source = "", nowMs = Date.now(), pluginRootNorm = null } = {}
+  ) {
+    const cid = sanitizeSessionWorkspaceConvId(conversationId);
+    if (!cid) return null;
+    const valid = normalizeSafeSessionWorkspaceDir(workspaceDir, { pluginRootNorm });
+    if (!valid) return null;
+    const ts = Number.isFinite(nowMs) ? Math.floor(nowMs) : Date.now();
+    const key = `${SESSION_WORKSPACE_PREFIX}${cid}`;
+    const cleanRoot = sanitizeSessionWorkspaceConvId(rootSessionId);
+    let existing = null;
+    try {
+      const raw = this.getMeta(key, null);
+      if (raw && raw.startsWith("{")) {
+        const parsed = JSON.parse(raw);
+        if (parsed && typeof parsed === "object") existing = parsed;
+      }
+    } catch {}
+    const entry = {
+      v: 1,
+      conversationId: cid,
+      rootSessionId: cleanRoot || existing?.rootSessionId || cid,
+      cwd: valid.dir,
+      active: Boolean(active),
+      updatedTs: ts,
+      source: typeof source === "string" ? source.trim().slice(0, 32) : ""
+    };
+    this.setMeta(key, JSON.stringify(entry));
+    try {
+      const rows = this.listMetaByPrefix(SESSION_WORKSPACE_PREFIX);
+      if (rows.length > SESSION_WORKSPACE_MAX_ENTRIES) {
+        const parsedRows = rows.map((row) => {
+          let rowTs = 0;
+          let rowActive = false;
+          try {
+            const p = JSON.parse(row.value);
+            if (p && typeof p === "object") {
+              rowTs = Number.isFinite(p.updatedTs) ? p.updatedTs : 0;
+              rowActive = Boolean(p.active);
+            }
+          } catch {}
+          return { key: row.key, updatedTs: rowTs, active: rowActive };
+        });
+        const cutoff = ts - SESSION_WORKSPACE_MAX_AGE_MS;
+        const toDelete = [];
+        const survivors = [];
+        for (const r of parsedRows) {
+          if (r.key !== key && (r.updatedTs <= 0 || r.updatedTs < cutoff)) {
+            toDelete.push(r.key);
+          } else {
+            survivors.push(r);
+          }
+        }
+        if (survivors.length > SESSION_WORKSPACE_MAX_ENTRIES) {
+          survivors.sort((a, b) => {
+            if (a.key === key) return 1;
+            if (b.key === key) return -1;
+            if (a.active !== b.active) return a.active ? 1 : -1;
+            return a.updatedTs - b.updatedTs;
+          });
+          const excess = survivors.length - SESSION_WORKSPACE_MAX_ENTRIES;
+          for (let i = 0; i < excess; i++) {
+            if (survivors[i].key !== key) toDelete.push(survivors[i].key);
+          }
+        }
+        for (const dk of toDelete) {
+          this.deleteMeta(dk);
+        }
+      }
+    } catch {}
+    return entry;
+  }
+
+  /** Mark a conversation's session_workspace entry idle while retaining its cwd for named lookup */
+  markSessionWorkspaceIdle(conversationId, { nowMs = Date.now(), source = "Stop" } = {}) {
+    const cid = sanitizeSessionWorkspaceConvId(conversationId);
+    if (!cid) return false;
+    const key = `${SESSION_WORKSPACE_PREFIX}${cid}`;
+    let existing = null;
+    try {
+      const raw = this.getMeta(key, null);
+      if (!raw || !raw.startsWith("{")) return false;
+      const parsed = JSON.parse(raw);
+      if (!parsed || typeof parsed !== "object") return false;
+      existing = parsed;
+    } catch {
+      return false;
+    }
+    if (existing.active === false) return false;
+    const ts = Number.isFinite(nowMs) ? Math.floor(nowMs) : Date.now();
+    const updated = {
+      ...existing,
+      active: false,
+      updatedTs: Math.max(ts, Number.isFinite(existing.updatedTs) ? existing.updatedTs : 0),
+      source: typeof source === "string" ? source.trim().slice(0, 32) : "Stop"
+    };
+    this.setMeta(key, JSON.stringify(updated));
+    return true;
+  }
+
+  /** Resolve a validated workspace directory for one or more explicit conversation/session IDs */
+  resolveSessionWorkspace(sessionIds = [], { pluginRootNorm = null } = {}) {
+    const list = Array.isArray(sessionIds) ? sessionIds : [sessionIds];
+    const candidates = [];
+    const seen = new Set();
+    const pushId = (raw) => {
+      const cid = sanitizeSessionWorkspaceConvId(raw);
+      if (cid && !seen.has(cid)) {
+        seen.add(cid);
+        candidates.push(cid);
+      }
+    };
+    for (const id of list) {
+      pushId(id);
+      const cid = sanitizeSessionWorkspaceConvId(id);
+      if (cid && typeof this.resolveRootSessionId === "function") {
+        try {
+          pushId(this.resolveRootSessionId(cid));
+        } catch {}
+      }
+    }
+    if (candidates.length === 0) return "";
+    for (const cid of candidates) {
+      try {
+        const raw = this.getMeta(`${SESSION_WORKSPACE_PREFIX}${cid}`, null);
+        if (raw && raw.startsWith("{")) {
+          const parsed = JSON.parse(raw);
+          const valid = normalizeSafeSessionWorkspaceDir(parsed?.cwd, { pluginRootNorm });
+          if (valid) return valid.dir;
+        }
+      } catch {}
+    }
+    for (const cid of candidates) {
+      try {
+        const raw = this.getMeta(`watchdog_lease:${cid}`, null);
+        if (raw && raw.startsWith("{")) {
+          const parsed = JSON.parse(raw);
+          const valid = normalizeSafeSessionWorkspaceDir(parsed?.cwd, { pluginRootNorm });
+          if (valid) return valid.dir;
+        }
+      } catch {}
+    }
+    for (const cid of candidates) {
+      try {
+        this.open();
+        const row = this.db
+          .prepare("SELECT worktree FROM session_checkpoints WHERE session_id = ? AND worktree != '' LIMIT 1")
+          .get(cid);
+        const valid = normalizeSafeSessionWorkspaceDir(row?.worktree, { pluginRootNorm });
+        if (valid) return valid.dir;
+      } catch {}
+    }
+    return "";
+  }
+
+  /**
+   * Resolve a workspace directory ONLY when currently active (non-IDLE, fresh)
+   * conversations unanimously point to a single unique workspace.
+   * Returns { status: "unique" | "ambiguous" | "none", dir, dirs }.
+   */
+  resolveUniqueActiveWorkspace({
+    maxAgeMs = DEFAULT_ACTIVE_WORKSPACE_MAX_AGE_MS,
+    nowMs = Date.now(),
+    pluginRootNorm = null
+  } = {}) {
+    const now = Number.isFinite(nowMs) ? Math.floor(nowMs) : Date.now();
+    const ttl = Number.isFinite(maxAgeMs) && maxAgeMs > 0 ? Math.floor(maxAgeMs) : DEFAULT_ACTIVE_WORKSPACE_MAX_AGE_MS;
+    const perConv = new Map();
+
+    try {
+      const swRows = this.listMetaByPrefix(SESSION_WORKSPACE_PREFIX);
+      for (const row of swRows) {
+        const cid = sanitizeSessionWorkspaceConvId(row.key.slice(SESSION_WORKSPACE_PREFIX.length));
+        if (!cid || typeof row.value !== "string" || !row.value.startsWith("{")) continue;
+        try {
+          const parsed = JSON.parse(row.value);
+          if (!parsed || typeof parsed !== "object") continue;
+          const updatedTs = Number.isFinite(parsed.updatedTs) ? parsed.updatedTs : 0;
+          perConv.set(cid, {
+            swActive: Boolean(parsed.active),
+            swTs: updatedTs,
+            swCwd: typeof parsed.cwd === "string" ? parsed.cwd : "",
+            wlActive: null,
+            wlTs: 0,
+            wlCwd: ""
+          });
+        } catch {}
+      }
+    } catch {}
+
+    try {
+      const wlRows = this.listMetaByPrefix("watchdog_lease:");
+      for (const row of wlRows) {
+        const cid = sanitizeSessionWorkspaceConvId(row.key.slice("watchdog_lease:".length));
+        if (!cid || typeof row.value !== "string" || !row.value.startsWith("{")) continue;
+        try {
+          const parsed = JSON.parse(row.value);
+          if (!parsed || typeof parsed !== "object") continue;
+          if (parsed.isKeepaliveTurn === true || parsed.subphase === "ttl_keepalive") continue;
+          const phase = typeof parsed.phase === "string" ? parsed.phase.toUpperCase() : "IDLE";
+          const wlTs = Math.max(
+            Number.isFinite(parsed.updatedTs) ? parsed.updatedTs : 0,
+            Number.isFinite(parsed.lastHeartbeatTs) ? parsed.lastHeartbeatTs : 0
+          );
+          const wlActive = phase !== "IDLE";
+          const wlCwd = typeof parsed.cwd === "string" ? parsed.cwd : "";
+          const existing = perConv.get(cid);
+          if (existing) {
+            existing.wlActive = wlActive;
+            existing.wlTs = wlTs;
+            existing.wlCwd = wlCwd;
+          } else {
+            perConv.set(cid, {
+              swActive: null,
+              swTs: 0,
+              swCwd: "",
+              wlActive,
+              wlTs,
+              wlCwd
+            });
+          }
+        } catch {}
+      }
+    } catch {}
+
+    const activeDirs = new Map();
+    for (const rec of perConv.values()) {
+      let effectiveActive = false;
+      let effectiveTs = 0;
+      let effectiveCwd = "";
+
+      if (rec.swActive !== null && rec.wlActive !== null) {
+        if (rec.swTs > rec.wlTs) {
+          effectiveActive = rec.swActive;
+          effectiveTs = rec.swTs;
+          effectiveCwd = rec.swCwd || rec.wlCwd;
+        } else if (rec.wlTs > rec.swTs) {
+          effectiveActive = rec.wlActive;
+          effectiveTs = rec.wlTs;
+          effectiveCwd = rec.wlCwd || rec.swCwd;
+        } else {
+          // On exact timestamp tie, IDLE / inactive wins so Stop cannot be shadowed.
+          effectiveActive = rec.swActive && rec.wlActive;
+          effectiveTs = rec.swTs;
+          effectiveCwd = rec.swCwd || rec.wlCwd;
+        }
+      } else if (rec.swActive !== null) {
+        effectiveActive = rec.swActive;
+        effectiveTs = rec.swTs;
+        effectiveCwd = rec.swCwd;
+      } else if (rec.wlActive !== null) {
+        effectiveActive = rec.wlActive;
+        effectiveTs = rec.wlTs;
+        effectiveCwd = rec.wlCwd;
+      }
+
+      if (!effectiveActive || effectiveTs <= 0) continue;
+      if (now - effectiveTs > ttl || effectiveTs - now > 60_000) continue;
+      const valid = normalizeSafeSessionWorkspaceDir(effectiveCwd, { pluginRootNorm });
+      if (valid && !activeDirs.has(valid.canonicalKey)) {
+        activeDirs.set(valid.canonicalKey, valid.dir);
+      }
+    }
+
+    const dirs = [...activeDirs.values()];
+    if (dirs.length === 1) {
+      return { status: "unique", dir: dirs[0], dirs };
+    }
+    if (dirs.length > 1) {
+      return { status: "ambiguous", dir: "", dirs };
+    }
+    return { status: "none", dir: "", dirs: [] };
   }
 
   /** Check if a session or conversation has an explicit cutoff override */
@@ -2828,7 +3214,7 @@ export class SettingsMaintenanceMethods {
         const leaseCutoffTs = Math.min(cutoffTs, now - 24 * 3600 * 1000);
         const metaRows = this.db
           .prepare(
-            "SELECT key, value FROM meta WHERE key LIKE 'cache_alert:%' OR key LIKE 'compact_invalidated:%' OR key LIKE 'sensitive_read_confirm:%' OR key LIKE 'large_read_confirm:%' OR key LIKE 'conv_turn_seq:%' OR key LIKE 'watchdog_lease:%' OR key LIKE 'ttl_calibration:%' OR key LIKE 'cache:ttl_keepalive_state:%'"
+            "SELECT key, value FROM meta WHERE key LIKE 'cache_alert:%' OR key LIKE 'compact_invalidated:%' OR key LIKE 'sensitive_read_confirm:%' OR key LIKE 'large_read_confirm:%' OR key LIKE 'conv_turn_seq:%' OR key LIKE 'watchdog_lease:%' OR key LIKE 'session_workspace:%' OR key LIKE 'ttl_calibration:%' OR key LIKE 'cache:ttl_keepalive_state:%'"
           )
           .all();
         const delMetaStmt = this.db.prepare("DELETE FROM meta WHERE key = ?");
@@ -2913,7 +3299,7 @@ export class SettingsMaintenanceMethods {
                 })
               );
             }
-          } else if (row.key.startsWith("watchdog_lease:")) {
+          } else if (row.key.startsWith("watchdog_lease:") || row.key.startsWith("session_workspace:")) {
             if (entryTs <= 0 || entryTs < (days === 0 ? cutoffTs : leaseCutoffTs)) {
               delMetaStmt.run(row.key);
             }

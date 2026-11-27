@@ -26,6 +26,7 @@ import { CheckpointMethods } from "./store/checkpoints.js";
 import { ReadMethods } from "./store/reads.js";
 import {
   CACHE_AUDIT_PASSED_META_KEY,
+  SESSION_WORKSPACE_PREFIX,
   STAR_PROMPT_META_KEY,
   STAR_PROMPT_MIN_SAVED_BYTES,
   STAR_PROMPT_MIN_SESSIONS,
@@ -48,6 +49,7 @@ export {
   MAX_SNAPSHOTS_PER_SESSION,
   MAX_SNAPSHOT_BYTES,
   RRF_K,
+  SESSION_WORKSPACE_PREFIX,
   SNIPPET_MAX_BYTES,
   STAR_PROMPT_META_KEY,
   STAR_PROMPT_MIN_SAVED_BYTES,

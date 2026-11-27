@@ -427,7 +427,7 @@ test("v1.5-3: Live PreInvocation + Sidecar /api/cache-diag cross-session calibra
       "hooks/pre-invocation.mjs",
       { conversationId: convB, transcriptPath: txPathB },
       dbPath,
-      { USERPROFILE: fakeHome, HOME: fakeHome, AGY_DART_CACHE_TTL_SEC: "360" }
+      { USERPROFILE: fakeHome, HOME: fakeHome, AGY_DART_CACHE_TTL_SEC: "360", AGY_DART_CACHE_WATCH_INLINE_ALERTS: "1" }
     );
     assert.equal(explicitHook.status, 0);
     const parsedExplicitOut = JSON.parse(explicitHook.stdout);
@@ -1107,12 +1107,12 @@ test("v1.5-7: Chinese (uiLang='zh') localization across desktop popups, PreInvoc
     resetConfigCache();
     assert.equal(store.getUiLang(), "zh");
 
-    // 2. Live PreInvocation hook emits localized Chinese banners with strictly empty systemMessage: "" (0 model tokens)
+    // 2. Live PreInvocation hook (with opt-in inline alerts) emits localized Chinese banners with strictly empty systemMessage: "" (0 model tokens)
     const hookZh = runHookRaw(
       "hooks/pre-invocation.mjs",
       { conversationId: convId, transcriptPath: txPath },
       dbPath,
-      { USERPROFILE: fakeHome, HOME: fakeHome }
+      { USERPROFILE: fakeHome, HOME: fakeHome, AGY_DART_CACHE_WATCH_INLINE_ALERTS: "1" }
     );
     assert.equal(hookZh.status, 0);
     assert.equal(Buffer.byteLength(hookZh.stderr || "", "utf8"), 0);

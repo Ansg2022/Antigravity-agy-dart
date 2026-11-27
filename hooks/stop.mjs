@@ -240,6 +240,12 @@ export async function handleStopPayload(payload = {}, options = {}) {
       !watermarkNotifyActive &&
       !hasManualOrPendingKeepalive
     ) {
+      if (typeof store.markSessionWorkspaceIdle === "function") {
+        try {
+          const stopTs = Number.isFinite(safeOptions.nowMs) ? Math.floor(safeOptions.nowMs) : Date.now();
+          store.markSessionWorkspaceIdle(directConvId, { nowMs: stopTs, source: "Stop" });
+        } catch {}
+      }
       if (!existing || existing.phase === WATCHDOG_PHASES.IDLE) {
         return { updated: false, reason: "disabled" };
       }
@@ -460,6 +466,11 @@ export async function handleStopPayload(payload = {}, options = {}) {
         : commitStopLease();
     if (leaseCommit.skipped) {
       return { updated: false, reason: leaseCommit.reason || "superseded_by_newer_turn", lease: leaseCommit.lease };
+    }
+    if (typeof store.markSessionWorkspaceIdle === "function") {
+      try {
+        store.markSessionWorkspaceIdle(directConvId, { nowMs: nowStopMs, source: "Stop" });
+      } catch {}
     }
     return { updated: Boolean(leaseCommit.lease), lease: leaseCommit.lease };
   } catch {

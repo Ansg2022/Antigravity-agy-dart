@@ -279,11 +279,12 @@ test("P0 PreInvocation hook + benchmark cache CLI: emits UI-only zero-prefix-pol
     const tailSteps = readTranscriptTail(transcriptPath, 32768);
     assert.ok(tailSteps.some((s) => s.type === "PLANNER_RESPONSE" && s.step_index === 10));
 
-    // First invocation emits UI-only metadata.user_markdown with EMPTY systemMessage (0 model tokens!)
+    // First invocation (with opt-in inline alerts) emits UI-only metadata.user_markdown with EMPTY systemMessage (0 model tokens!)
     const r1 = runHook(
       "hooks/pre-invocation.mjs",
       { conversationId: "inv-sess-1", transcriptPath, invocationNum: 11 },
-      tmpDb
+      tmpDb,
+      { AGY_DART_CACHE_WATCH_INLINE_ALERTS: "1" }
     );
     assert.equal(r1.injectSteps?.length, 1);
     assert.equal(r1.injectSteps[0].systemMessage.systemMessage, "");
@@ -296,7 +297,8 @@ test("P0 PreInvocation hook + benchmark cache CLI: emits UI-only zero-prefix-pol
     const r2 = runHook(
       "hooks/pre-invocation.mjs",
       { conversationId: "inv-sess-1", transcriptPath, invocationNum: 12 },
-      tmpDb
+      tmpDb,
+      { AGY_DART_CACHE_WATCH_INLINE_ALERTS: "1" }
     );
     assert.equal(r2.injectSteps, undefined);
 

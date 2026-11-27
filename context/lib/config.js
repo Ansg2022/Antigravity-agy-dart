@@ -11,6 +11,7 @@ import path from "node:path";
 
 export const CONFIG_DEFAULTS = Object.freeze({
   dbPath: null,
+  defaultCwd: null,
   compileCache: true,
   compileCacheDir: null,
   stablePrefixOnly: false,
@@ -40,6 +41,8 @@ export const CONFIG_DEFAULTS = Object.freeze({
   outlineDb: true,
   searchCacheTtlMs: 15000,
   cacheWatch: true,
+  // Opt-in only until Antigravity fixes upstream ScrubInternalFields map<string, string> panic (#1394 / #1845)
+  cacheWatchInlineAlerts: false,
   cacheTtlSec: null,
   windowTokens: null,
   warnTokens: null,
@@ -74,6 +77,15 @@ export const CONFIG_DEFAULTS = Object.freeze({
   toolLoading: "fast-eager",
   autoUpdateCheck: true,
   autoUpdateInstall: false,
+  safetyAudit: true,
+  safetyLogPaths: Object.freeze([]),
+  safetyStatePath: null,
+  safetyWindowHours: 5,
+  safetyPrecheckWarnCount: 3500,
+  safetyPrecheckLimit: 4400,
+  safetyHeavyBurstCount: 3,
+  safetyHeavyBurstWindowMin: 5,
+  safetyStickyCharThreshold: 150000,
   uiLang: "en"
 });
 
@@ -237,6 +249,35 @@ function parseExemptPaths(raw) {
   return out;
 }
 
+function parseSafetyLogPaths(raw) {
+  if (raw === undefined || raw === null) return undefined;
+  let items;
+  if (Array.isArray(raw)) {
+    items = raw;
+  } else if (typeof raw === "string") {
+    const trimmed = raw.trim();
+    if (!trimmed) return undefined;
+    // On Windows use `;` or newline (preserve drive colons like D:\...); on POSIX also allow `:`
+    const sepRe = process.platform === "win32" ? /[;\r\n]+/ : /[:;\r\n]+/;
+    items = trimmed.split(sepRe);
+  } else {
+    return undefined;
+  }
+  const out = [];
+  const seen = new Set();
+  for (const item of items) {
+    if (typeof item !== "string") continue;
+    const clean = item.trim();
+    if (!clean || clean.length > 512 || /[\x00-\x1f\x7f]/.test(clean)) continue;
+    if (!seen.has(clean)) {
+      seen.add(clean);
+      out.push(clean);
+      if (out.length >= 16) break;
+    }
+  }
+  return out;
+}
+
 export function loadConfigFile(configPath = getConfigPath()) {
   const resolved = path.resolve(configPath);
   try {
@@ -289,7 +330,8 @@ export function getConfigSnapshot(options = {}) {
   const values = {
     ...CONFIG_DEFAULTS,
     exemptExtensions: [],
-    exemptPaths: []
+    exemptPaths: [],
+    safetyLogPaths: []
   };
   const sources = {};
   for (const k of Object.keys(CONFIG_DEFAULTS)) {
@@ -315,6 +357,7 @@ export function getConfigSnapshot(options = {}) {
 
   // 1. Storage & compile cache
   pick("dbPath", envStr("AGY_DART_DB_PATH") ?? envStr("CONTEXT_MODE_DB_PATH"), cfgStr("dbPath"));
+  pick("defaultCwd", envStr("AGY_DART_WORKSPACE") ?? envStr("AGY_DART_DEFAULT_CWD"), cfgStr("defaultCwd"));
   pick(
     "compileCache",
     parseDisableEnvFlag(env?.AGY_DART_DISABLE_COMPILE_CACHE),
@@ -426,6 +469,15 @@ export function getConfigSnapshot(options = {}) {
 
   // 5. PreInvocation KV-cache watch & thresholds
   pick("cacheWatch", parseDisableEnvFlag(env?.AGY_DART_DISABLE_CACHE_WATCH), cfgBool("cacheWatch"));
+  let cacheWatchInlineAlertsEnv;
+  if (parseEnvBool(env?.AGY_DART_DISABLE_CACHE_WATCH_INLINE_ALERTS) === true) {
+    cacheWatchInlineAlertsEnv = false;
+  } else {
+    cacheWatchInlineAlertsEnv =
+      parseEnvBool(env?.AGY_DART_CACHE_WATCH_INLINE_ALERTS) ??
+      parseDisableEnvFlag(env?.AGY_DART_DISABLE_CACHE_WATCH_INLINE_ALERTS);
+  }
+  pick("cacheWatchInlineAlerts", cacheWatchInlineAlertsEnv, cfgBool("cacheWatchInlineAlerts"));
   pick("cacheTtlSec", parsePositiveNumber(env?.AGY_DART_CACHE_TTL_SEC), parsePositiveNumber(cfg.cacheTtlSec));
   pick("windowTokens", parsePositiveNumber(env?.AGY_DART_WINDOW_TOKENS), parsePositiveNumber(cfg.windowTokens));
   pick("warnTokens", parsePositiveNumber(env?.AGY_DART_WARN_TOKENS), parsePositiveNumber(cfg.warnTokens));
@@ -612,6 +664,51 @@ export function getConfigSnapshot(options = {}) {
       parseDisableEnvFlag(env?.AGY_DART_DISABLE_AUTO_UPDATE_INSTALL);
   }
   pick("autoUpdateInstall", autoUpdateInstallEnv, cfgBool("autoUpdateInstall"));
+  let safetyAuditEnv;
+  if (parseEnvBool(env?.AGY_DART_DISABLE_SAFETY_AUDIT) === true) {
+    safetyAuditEnv = false;
+  } else {
+    safetyAuditEnv =
+      parseEnvBool(env?.AGY_DART_SAFETY_AUDIT) ??
+      parseDisableEnvFlag(env?.AGY_DART_DISABLE_SAFETY_AUDIT);
+  }
+  pick("safetyAudit", safetyAuditEnv, cfgBool("safetyAudit"));
+  pick(
+    "safetyLogPaths",
+    parseSafetyLogPaths(env?.AGY_DART_SAFETY_LOG_PATHS),
+    parseSafetyLogPaths(cfg.safetyLogPaths)
+  );
+  pick("safetyStatePath", envStr("AGY_DART_SAFETY_STATE_PATH"), cfgStr("safetyStatePath"));
+  pick(
+    "safetyWindowHours",
+    clampInt(parsePositiveInt(env?.AGY_DART_SAFETY_WINDOW_HOURS), 1, 24),
+    clampInt(parsePositiveInt(cfg.safetyWindowHours), 1, 24)
+  );
+  pick(
+    "safetyPrecheckWarnCount",
+    clampInt(parsePositiveInt(env?.AGY_DART_SAFETY_PRECHECK_WARN), 100, 50000),
+    clampInt(parsePositiveInt(cfg.safetyPrecheckWarnCount), 100, 50000)
+  );
+  pick(
+    "safetyPrecheckLimit",
+    clampInt(parsePositiveInt(env?.AGY_DART_SAFETY_PRECHECK_LIMIT), 100, 100000),
+    clampInt(parsePositiveInt(cfg.safetyPrecheckLimit), 100, 100000)
+  );
+  pick(
+    "safetyHeavyBurstCount",
+    clampInt(parsePositiveInt(env?.AGY_DART_SAFETY_HEAVY_BURST_COUNT), 2, 100),
+    clampInt(parsePositiveInt(cfg.safetyHeavyBurstCount), 2, 100)
+  );
+  pick(
+    "safetyHeavyBurstWindowMin",
+    clampInt(parsePositiveInt(env?.AGY_DART_SAFETY_HEAVY_BURST_WINDOW_MIN), 1, 60),
+    clampInt(parsePositiveInt(cfg.safetyHeavyBurstWindowMin), 1, 60)
+  );
+  pick(
+    "safetyStickyCharThreshold",
+    clampInt(parsePositiveInt(env?.AGY_DART_SAFETY_STICKY_CHARS), 10000, 1000000),
+    clampInt(parsePositiveInt(cfg.safetyStickyCharThreshold), 10000, 1000000)
+  );
   pick("uiLang", parseUiLang(env?.AGY_DART_LANG), parseUiLang(cfg.uiLang));
 
   return {
@@ -643,6 +740,7 @@ export function formatEffectiveConfigLines(snapshot = getConfigSnapshot(), extra
     "diffRead",
     "cliFilter",
     "cacheWatch",
+    "cacheWatchInlineAlerts",
     "stallWatchdog",
     "stablePrefixOnly",
     "outlineDb",

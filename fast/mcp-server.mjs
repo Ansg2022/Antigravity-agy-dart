@@ -65,11 +65,31 @@ function resolveDirectoryCandidateFast(raw) {
       return null;
     }
   }
+  if (candidate === "~") {
+    candidate = os.homedir();
+  } else if (candidate.startsWith("~/") || candidate.startsWith("~\\")) {
+    candidate = pathNodeTop.join(os.homedir(), candidate.slice(2));
+  }
   try {
     const abs = pathNodeTop.resolve(candidate);
     if (fsSyncNode.statSync(abs).isDirectory()) return abs;
   } catch {}
   return null;
+}
+function resolveConfiguredWorkspaceFast() {
+  try {
+    const cfgDir = resolveDirectoryCandidateFast(getEffectiveConfig().defaultCwd);
+    if (cfgDir && !isInsideInstalledPluginDir(cfgDir)) return cfgDir;
+  } catch {}
+  return null;
+}
+function resolveRootsTimeoutFast(defaultMs) {
+  const raw = process.env.AGY_DART_ROOTS_TIMEOUT_MS;
+  if (typeof raw === "string" && raw.trim()) {
+    const n = Number(raw.trim());
+    if (Number.isFinite(n) && n >= 50 && n <= 15e3) return Math.floor(n);
+  }
+  return defaultMs;
 }
 let isSafeRegex = (pattern) => typeof pattern === "string" && pattern.length <= 512;
 let filterRulesMod;
@@ -156,10 +176,14 @@ var McpStdioServer = class {
   stdinEnded = false;
   onDrainExit;
   initWorkspaceRoot = null;
+  vscodeCwdHint = null;
   initSessionId = null;
   clientSupportsRoots = false;
   cachedRootsDir = null;
   rootsQueried = false;
+  rootsUnsupported = false;
+  rootsTimeoutCount = 0;
+  rootsRetryAfterMs = 0;
   rootsEpoch = 0;
   inFlightRootsPromise = null;
   pendingClientRequests = /* @__PURE__ */ new Map();
@@ -169,11 +193,13 @@ var McpStdioServer = class {
   constructor(options) {
     this.serverName = options.name;
     this.serverVersion = options.version;
-    const envWs =
-      resolveDirectoryCandidateFast(process.env.ANTIGRAVITY_WORKSPACE_ROOT) ||
-      resolveDirectoryCandidateFast(process.env.VSCODE_CWD);
-    if (envWs && !isInsideInstalledPluginDir(envWs)) {
-      this.initWorkspaceRoot = envWs;
+    const envAntigravityWs = resolveDirectoryCandidateFast(process.env.ANTIGRAVITY_WORKSPACE_ROOT);
+    if (envAntigravityWs && !isInsideInstalledPluginDir(envAntigravityWs)) {
+      this.initWorkspaceRoot = envAntigravityWs;
+    }
+    const envVscodeWs = resolveDirectoryCandidateFast(process.env.VSCODE_CWD);
+    if (envVscodeWs && !isInsideInstalledPluginDir(envVscodeWs)) {
+      this.vscodeCwdHint = envVscodeWs;
     }
   }
   registerTool(definition, handler) {
@@ -182,13 +208,13 @@ var McpStdioServer = class {
   cancelPendingClientRequests() {
     for (const [, pending] of this.pendingClientRequests) {
       clearTimeout(pending.timer);
-      pending.resolve(null);
+      pending.resolve({ status: "error", dir: null });
     }
     this.pendingClientRequests.clear();
   }
   requestRootsList(timeoutMs = 1e3) {
     if (this.stdinEnded || !this.writeClientRequest) {
-      return Promise.resolve(null);
+      return Promise.resolve({ status: "error", dir: null });
     }
     if (this.inFlightRootsPromise) {
       return this.inFlightRootsPromise;
@@ -197,24 +223,32 @@ var McpStdioServer = class {
       const reqId = `agy-fast-roots-${this.nextClientReqSeq++}`;
       const timer = setTimeout(() => {
         this.pendingClientRequests.delete(reqId);
-        resolve(null);
+        resolve({ status: "timeout", dir: null });
       }, timeoutMs);
       timer.unref();
       this.pendingClientRequests.set(reqId, {
         timer,
         resolve: (respMsg) => {
           clearTimeout(timer);
+          if (respMsg && typeof respMsg === "object" && Object.prototype.hasOwnProperty.call(respMsg, "status")) {
+            resolve(respMsg);
+            return;
+          }
+          if (respMsg && typeof respMsg === "object" && Object.prototype.hasOwnProperty.call(respMsg, "error")) {
+            resolve({ status: "error", dir: null });
+            return;
+          }
           const roots = respMsg?.result?.roots;
           if (Array.isArray(roots)) {
             for (const item of roots) {
               const candidate = resolveDirectoryCandidateFast(item?.uri || item?.path);
               if (candidate && !isInsideInstalledPluginDir(candidate)) {
-                resolve(candidate);
+                resolve({ status: "ok", dir: candidate });
                 return;
               }
             }
           }
-          resolve(null);
+          resolve({ status: "empty", dir: null });
         }
       });
       this.writeClientRequest({ jsonrpc: "2.0", id: reqId, method: "roots/list" });
@@ -227,34 +261,78 @@ var McpStdioServer = class {
     this.inFlightRootsPromise = trackedPromise;
     return trackedPromise;
   }
-  async resolveWorkspaceRoot() {
+  async resolveWorkspaceRoot({ hostSessionId = null, directConvId = null } = {}) {
     if (this.initWorkspaceRoot) {
-      return { dir: this.initWorkspaceRoot, confirmed: true };
+      return { dir: this.initWorkspaceRoot, confirmed: true, ambiguousDirs: null };
     }
-    if (this.rootsQueried) {
-      return this.cachedRootsDir
-        ? { dir: this.cachedRootsDir, confirmed: true }
-        : { dir: process.cwd(), confirmed: false };
+    if (this.cachedRootsDir) {
+      return { dir: this.cachedRootsDir, confirmed: true, ambiguousDirs: null };
     }
-    const shouldQuery = Boolean(
-      this.writeClientRequest &&
-        !this.stdinEnded &&
-        (this.clientSupportsRoots || isInsideInstalledPluginDir(process.cwd()))
-    );
-    if (!shouldQuery) {
-      return { dir: process.cwd(), confirmed: false };
+    const canQueryRoots = Boolean(this.writeClientRequest && !this.stdinEnded && !this.rootsUnsupported);
+    if (this.clientSupportsRoots && canQueryRoots && !this.rootsQueried && Date.now() >= this.rootsRetryAfterMs) {
+      const epoch = this.rootsEpoch;
+      const res = await this.requestRootsList(resolveRootsTimeoutFast(2500));
+      if (this.rootsEpoch === epoch) {
+        if (res.status === "ok" && res.dir) {
+          this.rootsQueried = true;
+          this.cachedRootsDir = res.dir;
+          this.rootsTimeoutCount = 0;
+          this.rootsRetryAfterMs = 0;
+          return { dir: res.dir, confirmed: true, ambiguousDirs: null };
+        }
+        if (res.status === "error") {
+          this.rootsQueried = true;
+          this.rootsUnsupported = true;
+          this.cachedRootsDir = null;
+        } else if (res.status === "empty") {
+          this.rootsQueried = true;
+          this.cachedRootsDir = null;
+        } else if (res.status === "timeout") {
+          this.rootsTimeoutCount += 1;
+          this.rootsRetryAfterMs = this.rootsTimeoutCount >= 2 ? Date.now() + 3e4 : Date.now();
+        }
+      } else if (this.rootsQueried && this.cachedRootsDir) {
+        return { dir: this.cachedRootsDir, confirmed: true, ambiguousDirs: null };
+      }
     }
-    const epoch = this.rootsEpoch;
-    const dir = await this.requestRootsList(1e3);
-    if (this.rootsEpoch === epoch) {
-      this.rootsQueried = true;
-      this.cachedRootsDir = dir;
-    } else if (this.rootsQueried) {
-      return this.cachedRootsDir
-        ? { dir: this.cachedRootsDir, confirmed: true }
-        : { dir: process.cwd(), confirmed: false };
+    const effectiveDirectId = directConvId || this.initSessionId || null;
+    const effectiveHostId = hostSessionId || this.initSessionId || null;
+    if (effectiveDirectId || effectiveHostId) {
+      const sessDir = await lookupFastSessionWorkspace([effectiveDirectId, effectiveHostId]);
+      if (sessDir) {
+        return { dir: sessDir, confirmed: true, ambiguousDirs: null };
+      }
     }
-    return dir ? { dir, confirmed: true } : { dir: process.cwd(), confirmed: false };
+    const configuredWs = resolveConfiguredWorkspaceFast();
+    if (configuredWs) {
+      return { dir: configuredWs, confirmed: true, ambiguousDirs: null };
+    }
+    if (this.vscodeCwdHint) {
+      return { dir: this.vscodeCwdHint, confirmed: true, ambiguousDirs: null };
+    }
+    const insidePlugin = isInsideInstalledPluginDir(process.cwd());
+    if (!this.clientSupportsRoots && insidePlugin && canQueryRoots && !this.rootsQueried) {
+      const epoch = this.rootsEpoch;
+      const res = await this.requestRootsList(resolveRootsTimeoutFast(400));
+      if (this.rootsEpoch === epoch) {
+        this.rootsQueried = true;
+        if (res.status === "error") this.rootsUnsupported = true;
+        this.cachedRootsDir = res.status === "ok" ? res.dir : null;
+      }
+      if (res.status === "ok" && res.dir) {
+        return { dir: res.dir, confirmed: true, ambiguousDirs: null };
+      }
+    }
+    if (insidePlugin) {
+      const activeRes = await lookupFastUniqueActiveWorkspace();
+      if (activeRes && activeRes.status === "unique" && activeRes.dir) {
+        return { dir: activeRes.dir, confirmed: true, ambiguousDirs: null };
+      }
+      if (activeRes && activeRes.status === "ambiguous") {
+        return { dir: process.cwd(), confirmed: false, ambiguousDirs: activeRes.dirs };
+      }
+    }
+    return { dir: process.cwd(), confirmed: false, ambiguousDirs: null };
   }
   async handleMessage(raw) {
     if (!raw || typeof raw !== "object" || Array.isArray(raw)) {
@@ -286,6 +364,9 @@ var McpStdioServer = class {
         this.rootsEpoch += 1;
         this.cachedRootsDir = null;
         this.rootsQueried = false;
+        this.rootsUnsupported = false;
+        this.rootsTimeoutCount = 0;
+        this.rootsRetryAfterMs = 0;
         this.inFlightRootsPromise = null;
       }
       return null;
@@ -422,7 +503,7 @@ var McpStdioServer = class {
           .map(normalizeFastSessionId)
           .find(Boolean) ?? null;
       try {
-        const res = await tool.handler(args, { server: this, rpcId: id });
+        const res = await tool.handler(args, { server: this, rpcId: id, hostSessionId, directConvId });
         const rpcResp = buildBoundedToolRpcResponse(id, res.text, Boolean(res.isError), DEFAULT_INLINE_MAX_BYTES - 1);
         if (!res.isError && res.telemetry && res.telemetry.rawBytes > 0) {
           try {
@@ -1144,7 +1225,7 @@ function resolvePath(inputPath, baseDir) {
   const root = baseDir ? path.resolve(expandHome(baseDir)) : process.cwd();
   return path.isAbsolute(expanded) ? path.normalize(expanded) : path.resolve(root, expanded);
 }
-async function resolveToolWorkspaceCwd(rawCwd, server) {
+async function resolveToolWorkspaceCwd(rawCwd, serverOrOptions) {
   let rawStr = typeof rawCwd === "string" ? rawCwd.trim() : "";
   if (rawStr && /^file:\/\//i.test(rawStr)) {
     try {
@@ -1155,11 +1236,30 @@ async function resolveToolWorkspaceCwd(rawCwd, server) {
   if (expandedRaw && path.isAbsolute(expandedRaw)) {
     return { cwd: path.normalize(expandedRaw), error: null };
   }
-  const { dir: baseRoot, confirmed } = server
-    ? await server.resolveWorkspaceRoot()
-    : { dir: process.cwd(), confirmed: false };
+  const isServerDirect = Boolean(
+    serverOrOptions && typeof serverOrOptions.resolveWorkspaceRoot === "function"
+  );
+  const server = isServerDirect ? serverOrOptions : serverOrOptions?.server;
+  const hostSessionId = isServerDirect ? null : serverOrOptions?.hostSessionId || null;
+  const directConvId = isServerDirect ? null : serverOrOptions?.directConvId || null;
+  let wsState;
+  if (server) {
+    wsState = await server.resolveWorkspaceRoot({ hostSessionId, directConvId });
+  } else {
+    const cfgWs = resolveConfiguredWorkspaceFast();
+    wsState = cfgWs
+      ? { dir: cfgWs, confirmed: true, ambiguousDirs: null }
+      : { dir: process.cwd(), confirmed: false, ambiguousDirs: null };
+  }
+  const { dir: baseRoot, confirmed, ambiguousDirs } = wsState;
   const resolved = expandedRaw ? resolvePath(expandedRaw, baseRoot) : resolvePath(baseRoot);
   if (!confirmed && isInsideInstalledPluginDir(resolved)) {
+    if (Array.isArray(ambiguousDirs) && ambiguousDirs.length > 1) {
+      return {
+        cwd: null,
+        error: `Error: Workspace root could not be determined (${ambiguousDirs.length} active workspaces detected; server cwd is inside plugin directory '${resolved}'). Pass the active workspace absolute path in 'cwd'.`
+      };
+    }
     return {
       cwd: null,
       error: `Error: Workspace root could not be determined (server cwd is inside plugin directory '${resolved}'). Pass the active workspace absolute path in 'cwd'.`
@@ -2066,7 +2166,7 @@ async function runApplyEdits(input, options = {}) {
     }
     verifySpec = { command: verify.command, cwd: verify.cwd, timeoutSec: verify.timeoutSec };
   }
-  const wsRes = await resolveToolWorkspaceCwd(input.cwd, options.server);
+  const wsRes = await resolveToolWorkspaceCwd(input.cwd, options);
   if (wsRes.error) {
     return { text: wsRes.error, isError: true };
   }
@@ -3980,7 +4080,7 @@ async function runBatchSearch(input, options = {}) {
       isError: true
     };
   }
-  const wsRes = await resolveToolWorkspaceCwd(input.cwd, options.server);
+  const wsRes = await resolveToolWorkspaceCwd(input.cwd, options);
   if (wsRes.error) {
     return { text: wsRes.error, isError: true };
   }
@@ -4217,6 +4317,37 @@ function closeFastTelemetryStore() {
   fastTelemetryDbPath = "";
   fastTelemetryInitPromise = null;
 }
+async function getExistingFastWorkspaceStore() {
+  const targetDbPath = resolveOutlineDbPath();
+  if (!targetDbPath || !fsSyncNode.existsSync(targetDbPath)) return null;
+  return getFastTelemetryStore();
+}
+async function lookupFastSessionWorkspace(sessionIds = []) {
+  try {
+    const store = await getExistingFastWorkspaceStore();
+    if (!store || typeof store.resolveSessionWorkspace !== "function") return null;
+    const dir = store.resolveSessionWorkspace(sessionIds, { pluginRootNorm: FAST_PLUGIN_ROOT_NORM });
+    return dir && !isInsideInstalledPluginDir(dir) ? dir : null;
+  } catch {
+    return null;
+  }
+}
+async function lookupFastUniqueActiveWorkspace() {
+  try {
+    const store = await getExistingFastWorkspaceStore();
+    if (!store || typeof store.resolveUniqueActiveWorkspace !== "function") return null;
+    const res = store.resolveUniqueActiveWorkspace({ pluginRootNorm: FAST_PLUGIN_ROOT_NORM });
+    if (res && res.status === "unique" && res.dir && !isInsideInstalledPluginDir(res.dir)) {
+      return res;
+    }
+    if (res && res.status === "ambiguous") {
+      return res;
+    }
+    return null;
+  } catch {
+    return null;
+  }
+}
 async function recordFastSavingsEvent({ toolName, telemetry, finalText, hostSessionId = null, directConvId = null }) {
   if (!telemetry || !Number.isFinite(telemetry.rawBytes) || telemetry.rawBytes <= 0) return;
   const returnedBytes = Buffer.byteLength(typeof finalText === "string" ? finalText : "", "utf8");
@@ -4442,7 +4573,7 @@ async function runReadSlices(input, options = {}) {
       isError: true
     };
   }
-  const wsRes = await resolveToolWorkspaceCwd(input.cwd, options.server);
+  const wsRes = await resolveToolWorkspaceCwd(input.cwd, options);
   if (wsRes.error) {
     return { text: wsRes.error, isError: true };
   }
@@ -4779,7 +4910,7 @@ async function runChecks(input, options = {}) {
       isError: true
     };
   }
-  const wsRes = await resolveToolWorkspaceCwd(input.cwd, options.server);
+  const wsRes = await resolveToolWorkspaceCwd(input.cwd, options);
   if (wsRes.error) {
     return { text: wsRes.error, isError: true };
   }
@@ -5000,7 +5131,7 @@ function createAgyFastServer() {
   server.registerTool(
     {
       name: "batch_search",
-      description: "Batch file or read-only git searches.",
+      description: "Batch file or read-only git searches (pass cwd).",
       inputSchema: {
         type: "object",
         properties: {
@@ -5037,7 +5168,7 @@ function createAgyFastServer() {
   server.registerTool(
     {
       name: "apply_edits",
-      description: "Atomic edits. Group hunks by path. bestEffort skips invalid files. verify runs after writing.",
+      description: "Atomic edits (pass cwd). Group hunks by path; bestEffort skips bad files; verify runs after write.",
       inputSchema: {
         type: "object",
         properties: {
@@ -5084,7 +5215,7 @@ function createAgyFastServer() {
   server.registerTool(
     {
       name: "read_slices",
-      description: "Outline files or read lineRanges like 'path:1-5,9-12'.",
+      description: "Outline files or read lineRanges like 'path:1-5,9-12' (pass cwd).",
       inputSchema: {
         type: "object",
         properties: {
@@ -5129,7 +5260,7 @@ function createAgyFastServer() {
   server.registerTool(
     {
       name: "run_checks",
-      description: "Run independent shell checks concurrently.",
+      description: "Run independent shell checks concurrently (pass cwd).",
       inputSchema: {
         type: "object",
         properties: {

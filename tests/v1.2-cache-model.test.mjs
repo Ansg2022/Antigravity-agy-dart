@@ -630,7 +630,8 @@ test("P0-2.6: Live PreInvocation hook, Sidecar dashboard (/api/cache-diag + inde
     const hookQuiet = runHook(
       "hooks/pre-invocation.mjs",
       { conversationId: convId, transcriptPath },
-      tmpDb
+      tmpDb,
+      { AGY_DART_CACHE_WATCH_INLINE_ALERTS: "1" }
     );
     assert.equal(hookQuiet.injectSteps, undefined, `Expected zero alerts on warm 1h/1M session, got: ${JSON.stringify(hookQuiet)}`);
 
@@ -638,7 +639,8 @@ test("P0-2.6: Live PreInvocation hook, Sidecar dashboard (/api/cache-diag + inde
     const hookExp = runHook(
       "hooks/pre-invocation.mjs",
       { conversationId: "expired-1h-conv", transcriptPath: expiredPath },
-      tmpDb
+      tmpDb,
+      { AGY_DART_CACHE_WATCH_INLINE_ALERTS: "1" }
     );
     assert.equal(hookExp.injectSteps?.length, 1);
     assert.equal(hookExp.injectSteps[0].systemMessage.systemMessage, "");

@@ -4,6 +4,11 @@
  * Fast (<5ms) tail scan of transcript.jsonl for server-side KV-cache protection.
  * Uses Antigravity's zero-prefix-pollution UI-only `metadata.user_markdown`
  * (with empty `systemMessage: ""`) so alerts never mutate the model prompt prefix.
+ * Inline `metadata.user_markdown` step emission is opt-in (`cacheWatchInlineAlerts`,
+ * default `false`) to avoid Antigravity host `utils.ScrubInternalFields` panics on
+ * `map<string, string>` metadata (upstream google-antigravity/antigravity-cli#1394 & #1845),
+ * while keeping all non-banner bookkeeping (compaction invalidation, TTL calibration,
+ * receipt claims, turn sequence, and Sidecar/desktop watchdog leases) active.
  */
 import { executionReceiptsFromSteps, fastToolClaimsFromSteps } from "../context/lib/execution-receipts.js";
 import fs from "node:fs";
@@ -79,6 +84,21 @@ function resolveDirectConversationId(payload = {}) {
     process.env.ANTIGRAVITY_CONVERSATION_ID ||
     "default"
   );
+}
+
+function extractPreInvocationPayloadCwd(payload = {}) {
+  if (!payload || typeof payload !== "object") return "";
+  if (typeof payload.cwd === "string" && payload.cwd.trim()) return payload.cwd.trim();
+  const lists = [payload.workspacePaths, payload.workspace_paths, payload.workspaceRoots, payload.workspace_roots];
+  for (const list of lists) {
+    if (Array.isArray(list)) {
+      for (const item of list) {
+        const raw = typeof item === "string" ? item : item?.uri || item?.path || "";
+        if (typeof raw === "string" && raw.trim()) return raw.trim();
+      }
+    }
+  }
+  return "";
 }
 
 function formatDuration(sec) {
@@ -1182,6 +1202,26 @@ async function main() {
       ensureTurnSeqBumped();
     }
 
+    const preInvWorkspaceCwd = resolvedCwd || extractPreInvocationPayloadCwd(payload);
+    if (
+      !isKeepaliveTurn &&
+      preInvWorkspaceCwd &&
+      targetConvId &&
+      targetConvId !== "default" &&
+      typeof store.recordSessionWorkspace === "function"
+    ) {
+      try {
+        store.recordSessionWorkspace(targetConvId, preInvWorkspaceCwd, {
+          rootSessionId:
+            sessionId && sessionId !== targetConvId
+              ? sessionId
+              : resolvedParentConvId || sessionId,
+          active: true,
+          source: "PreInvocation"
+        });
+      } catch {}
+    }
+
     if (
       (watchdogActive || ttlNotifyActive || ttlKeepaliveExplicit || watermarkNotifyActive || isKeepaliveTurn) &&
       targetConvId &&
@@ -1219,8 +1259,37 @@ async function main() {
       } catch {}
     }
 
-    // Inherit parent pause state for subagents, while isolating alert suppression keys per direct conversation
-    if (isKeepaliveTurn || !effectiveCfg.cacheWatch || store.isPaused(sessionId) || (isSubagentConv && store.isPaused(targetConvId)) || !diag) {
+    // Preserve dual-side desktop watermark reset after /compact even when inline chat banners are disabled
+    if (
+      diag &&
+      diag.watermark === "ok" &&
+      targetConvId &&
+      targetConvId !== "default" &&
+      (dbExists || store.db)
+    ) {
+      try {
+        const wmDesktopKey = `cache_alert:${targetConvId}:wm_desktop`;
+        const prevWmDesktop =
+          typeof store.getTimedMeta === "function"
+            ? store.getTimedMeta(wmDesktopKey, "")
+            : store.getMeta(wmDesktopKey, "");
+        if (prevWmDesktop) {
+          store.deleteMeta(wmDesktopKey);
+        }
+      } catch {}
+    }
+
+    // Inherit parent pause state for subagents, while isolating alert suppression keys per direct conversation.
+    // Inline `metadata.user_markdown` step emission is gated behind explicit opt-in (`cacheWatchInlineAlerts`)
+    // to prevent host-side `proto_utils.go:34` panics on Antigravity builds affected by upstream #1394/#1845.
+    if (
+      isKeepaliveTurn ||
+      !effectiveCfg.cacheWatch ||
+      !effectiveCfg.cacheWatchInlineAlerts ||
+      store.isPaused(sessionId) ||
+      (isSubagentConv && store.isPaused(targetConvId)) ||
+      !diag
+    ) {
       store.close();
       store = null;
       process.stdout.write("{}\n");

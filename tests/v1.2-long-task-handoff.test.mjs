@@ -541,7 +541,8 @@ test("Long-Task 4: PreInvocation silences TTL & cold-compact banners during mid-
     const midTurnRes = runHook(
       "hooks/pre-invocation.mjs",
       { conversationId: "lt-inv-mid", transcriptPath: toolLoopTranscript, invocationNum: 1 },
-      dbPath
+      dbPath,
+      { AGY_DART_CACHE_WATCH_INLINE_ALERTS: "1" }
     );
     assert.equal(midTurnRes.injectSteps, undefined, "Mid-turn tool loop must suppress TTL & cold-compact handoff banners");
 
@@ -549,7 +550,8 @@ test("Long-Task 4: PreInvocation silences TTL & cold-compact banners during mid-
     const entryRes = runHook(
       "hooks/pre-invocation.mjs",
       { conversationId: "lt-inv-entry", transcriptPath: toolLoopTranscript, invocationNum: 0 },
-      dbPath
+      dbPath,
+      { AGY_DART_CACHE_WATCH_INLINE_ALERTS: "1" }
     );
     assert.equal(entryRes.injectSteps?.length, 1);
     assert.equal(entryRes.injectSteps[0].systemMessage.systemMessage, "");
@@ -576,7 +578,8 @@ test("Long-Task 4: PreInvocation silences TTL & cold-compact banners during mid-
     const critMidRes = runHook(
       "hooks/pre-invocation.mjs",
       { conversationId: "lt-inv-crit", transcriptPath: critLoopTranscript, invocationNum: 3 },
-      dbPath
+      dbPath,
+      { AGY_DART_CACHE_WATCH_INLINE_ALERTS: "1" }
     );
     assert.equal(critMidRes.injectSteps?.length, 1);
     const critMd = critMidRes.injectSteps[0].systemMessage.metadata.user_markdown;

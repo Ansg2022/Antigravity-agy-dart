@@ -2,6 +2,7 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import { createHash } from "node:crypto";
 import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import readline from "node:readline";
 import { fileURLToPath } from "node:url";
@@ -11,10 +12,11 @@ try {
   enableVersionedCompileCache();
 } catch {}
 
-const [{ stableSortObject }, { ContextModeStore }, { createTools, normalizeSessionId }, handoffMod] = await Promise.all([
+const [{ stableSortObject }, { ContextModeStore }, { createTools, normalizeSessionId }, { getEffectiveConfig }, handoffMod] = await Promise.all([
   import("./lib/stable-json.js"),
   import("./lib/store.js"),
   import("./lib/tools.js"),
+  import("./lib/config.js"),
   import("./lib/handoff.js").catch(() => ({}))
 ]);
 const inferWorkspaceFromStore =
@@ -78,11 +80,33 @@ function resolveDirectoryCandidate(raw) {
       return null;
     }
   }
+  if (candidate === "~") {
+    candidate = os.homedir();
+  } else if (candidate.startsWith("~/") || candidate.startsWith("~\\")) {
+    candidate = path.join(os.homedir(), candidate.slice(2));
+  }
   try {
     const abs = path.resolve(candidate);
     if (fs.statSync(abs).isDirectory()) return abs;
   } catch {}
   return null;
+}
+
+function resolveConfiguredWorkspace() {
+  try {
+    const cfgDir = resolveDirectoryCandidate(getEffectiveConfig().defaultCwd);
+    if (cfgDir && !isInsideInstalledPluginDir(cfgDir)) return cfgDir;
+  } catch {}
+  return null;
+}
+
+function resolveRootsTimeoutCtx(defaultMs) {
+  const raw = process.env.AGY_DART_ROOTS_TIMEOUT_MS;
+  if (typeof raw === "string" && raw.trim()) {
+    const n = Number(raw.trim());
+    if (Number.isFinite(n) && n >= 50 && n <= 15000) return Math.floor(n);
+  }
+  return defaultMs;
 }
 
 function resolveSingleWorkspace(candidates) {
@@ -136,6 +160,9 @@ let explicitWorkspaceConfigured = Boolean(envWorkspaceDir && !isInsideInstalledP
 let clientSupportsRoots = false;
 let cachedRootsDir = null;
 let rootsQueried = false;
+let rootsUnsupported = false;
+let rootsTimeoutCount = 0;
+let rootsRetryAfterMs = 0;
 let rootsEpoch = 0;
 let inFlightRootsPromise = null;
 let nextRootsReqSeq = 1;
@@ -154,19 +181,60 @@ function resolveHostSessionId() {
   );
 }
 
+function resolveDirectConversationIdForCall() {
+  return (
+    callContext.getStore()?.directConversationId ||
+    callContext.getStore()?.sessionId ||
+    initSessionId ||
+    normalizeSessionId(process.env.ANTIGRAVITY_CONVERSATION_ID) ||
+    normalizeSessionId(process.env.CONVERSATION_ID)
+  );
+}
+
 function resolveActiveWorkspaceState() {
   if (explicitWorkspaceConfigured) {
-    return { cwd: currentCwd, confirmed: true };
+    return { cwd: currentCwd, confirmed: true, located: true };
   }
   if (cachedRootsDir) {
-    return { cwd: cachedRootsDir, confirmed: true };
+    return { cwd: cachedRootsDir, confirmed: true, located: true };
   }
   const insidePlugin = isInsideInstalledPluginDir(currentCwd);
   const hostSessionId = resolveHostSessionId();
-  if (insidePlugin && hostSessionId && inferWorkspaceFromStore) {
-    const inferred = inferWorkspaceFromStore(store, hostSessionId);
-    if (inferred && !isInsideInstalledPluginDir(inferred)) {
-      return { cwd: inferred, confirmed: true };
+  const directConvId = resolveDirectConversationIdForCall();
+  const hasExistingStore = Boolean(store.db || fs.existsSync(store.dbPath));
+  if (insidePlugin && (hostSessionId || directConvId)) {
+    if (hasExistingStore && typeof store.resolveSessionWorkspace === "function") {
+      const sessDir = store.resolveSessionWorkspace([directConvId, hostSessionId], {
+        pluginRootNorm: PLUGIN_ROOT_NORM
+      });
+      if (sessDir && !isInsideInstalledPluginDir(sessDir)) {
+        return { cwd: sessDir, confirmed: true, located: true };
+      }
+    }
+    if (hostSessionId && inferWorkspaceFromStore) {
+      const inferred = inferWorkspaceFromStore(store, hostSessionId);
+      if (inferred && !isInsideInstalledPluginDir(inferred)) {
+        return { cwd: inferred, confirmed: true, located: true };
+      }
+    }
+  }
+  const configuredDir = resolveConfiguredWorkspace();
+  if (configuredDir) {
+    return { cwd: configuredDir, confirmed: true, located: true };
+  }
+  if (
+    insidePlugin &&
+    !hostSessionId &&
+    !directConvId &&
+    hasExistingStore &&
+    typeof store.resolveUniqueActiveWorkspace === "function"
+  ) {
+    const activeRes = store.resolveUniqueActiveWorkspace({ pluginRootNorm: PLUGIN_ROOT_NORM });
+    if (activeRes.status === "unique" && activeRes.dir && !isInsideInstalledPluginDir(activeRes.dir)) {
+      return { cwd: activeRes.dir, confirmed: true, located: true };
+    }
+    if (activeRes.status === "ambiguous") {
+      return { cwd: currentCwd, confirmed: false, ambiguousDirs: activeRes.dirs };
     }
   }
   return { cwd: currentCwd, confirmed: !insidePlugin && Boolean(hostSessionId) };
@@ -189,7 +257,12 @@ function resolveSessionIdForCall(cwd, { optional = false } = {}) {
       return hostSessionId;
     }
   }
-  const located = explicitWorkspaceConfigured || cachedRootsDir || callContext.getStore()?.explicitPath;
+  const wsState = resolveActiveWorkspaceState();
+  const located =
+    explicitWorkspaceConfigured ||
+    cachedRootsDir ||
+    callContext.getStore()?.explicitPath ||
+    Boolean(wsState?.located && normalizeCompareDir(wsState.cwd) === normalizeCompareDir(cwd));
   if (!located || !handoffMod.isSafeWorkspaceDir?.(cwd) || isInsideInstalledPluginDir(cwd)) {
     if (optional) return null;
     throw new Error("Workspace root could not be determined for anonymous session data. Pass the active workspace absolute path in 'cwd'.");
@@ -345,21 +418,30 @@ function sendJsonRpc(obj) {
 }
 
 function requestClientRootsList(timeoutMs = 1000) {
-  if (stdinClosed) return Promise.resolve(null);
+  if (stdinClosed) return Promise.resolve({ status: "error", dir: null });
   if (inFlightRootsPromise) return inFlightRootsPromise;
   inFlightRootsPromise = new Promise((resolve) => {
     const reqId = `agy-ctx-roots-${nextRootsReqSeq++}`;
     const timer = setTimeout(() => {
       pendingClientRequests.delete(reqId);
-      resolve(null);
+      resolve({ status: "timeout", dir: null });
     }, timeoutMs);
     timer.unref();
     pendingClientRequests.set(reqId, {
       timer,
       resolve: (respMsg) => {
         clearTimeout(timer);
+        if (respMsg && typeof respMsg === "object" && Object.prototype.hasOwnProperty.call(respMsg, "status")) {
+          resolve(respMsg);
+          return;
+        }
+        if (respMsg && typeof respMsg === "object" && Object.prototype.hasOwnProperty.call(respMsg, "error")) {
+          resolve({ status: "error", dir: null });
+          return;
+        }
         const roots = respMsg?.result?.roots;
-        resolve(Array.isArray(roots) ? resolveSingleWorkspace(roots.map(item => item?.uri || item?.path)) : null);
+        const dir = Array.isArray(roots) ? resolveSingleWorkspace(roots.map(item => item?.uri || item?.path)) : null;
+        resolve(dir ? { status: "ok", dir } : { status: "empty", dir: null });
       }
     });
     sendJsonRpc({ jsonrpc: "2.0", id: reqId, method: "roots/list" });
@@ -398,7 +480,7 @@ let shuttingDown = false;
 function cancelPendingClientRequests() {
   for (const [, pending] of pendingClientRequests) {
     clearTimeout(pending.timer);
-    pending.resolve(null);
+    pending.resolve({ status: "error", dir: null });
   }
   pendingClientRequests.clear();
 }
@@ -468,6 +550,9 @@ rl.on("line", async (line) => {
       rootsEpoch += 1;
       cachedRootsDir = null;
       rootsQueried = false;
+      rootsUnsupported = false;
+      rootsTimeoutCount = 0;
+      rootsRetryAfterMs = 0;
       inFlightRootsPromise = null;
     }
     return;
@@ -539,15 +624,20 @@ rl.on("line", async (line) => {
             break;
           }
         }
-        if (
+        const shouldQueryRootsCtx =
           !explicitWorkspaceConfigured &&
+          !cachedRootsDir &&
           !rootsQueried &&
+          !rootsUnsupported &&
           !stdinClosed &&
           !isExplicitAbsoluteCwdArg(toolArgs.cwd) &&
-          (clientSupportsRoots || isInsideInstalledPluginDir(currentCwd))
-        ) {
+          (clientSupportsRoots
+            ? Date.now() >= rootsRetryAfterMs
+            : isInsideInstalledPluginDir(currentCwd) && !resolveConfiguredWorkspace());
+        if (shouldQueryRootsCtx) {
           const epoch = rootsEpoch;
-          const rootsDir = await requestClientRootsList(1000);
+          const timeoutMs = resolveRootsTimeoutCtx(clientSupportsRoots ? 2500 : 400);
+          const rootsRes = await requestClientRootsList(timeoutMs);
           if (rootsEpoch !== epoch) {
             sendResponse(id, {
               isError: true,
@@ -555,8 +645,22 @@ rl.on("line", async (line) => {
             });
             break;
           }
-          rootsQueried = true;
-          cachedRootsDir = rootsDir;
+          if (rootsRes.status === "ok" && rootsRes.dir) {
+            rootsQueried = true;
+            cachedRootsDir = rootsRes.dir;
+            rootsTimeoutCount = 0;
+            rootsRetryAfterMs = 0;
+          } else if (rootsRes.status === "error") {
+            rootsQueried = true;
+            rootsUnsupported = true;
+            cachedRootsDir = null;
+          } else if (rootsRes.status === "empty" || !clientSupportsRoots) {
+            rootsQueried = true;
+            cachedRootsDir = null;
+          } else if (rootsRes.status === "timeout") {
+            rootsTimeoutCount += 1;
+            rootsRetryAfterMs = rootsTimeoutCount >= 2 ? Date.now() + 30000 : Date.now();
+          }
         }
         // Strictly per-call session isolation via AsyncLocalStorage: never mutate process-global
         // session state across concurrent conversations sharing one long-lived MCP stdio server.

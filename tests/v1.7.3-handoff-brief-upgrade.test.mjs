@@ -7396,6 +7396,17 @@ test("v1.7.3-16: Wrap-up Item 1 — Aggregate alert card Copy Rescue Brief / Vie
         ` drawerOpen=${state.drawerOpen}, targeted=${state.targeted}, ended=${state.ended})`
     );
   };
+  const waitForWatchdogCurrent = async (ctx, expectedConvId, timeoutMs = 4000) => {
+    const deadline = Date.now() + timeoutMs;
+    while (Date.now() < deadline) {
+      const ready = vm.runInContext(
+        `Boolean(cachedWatchdog?.current?.conversationId === ${JSON.stringify(expectedConvId)} && isWatchdogIncidentAlignedWithTarget() && getCurrentWatchdogIncidentKey())`,
+        ctx
+      );
+      if (ready) return;
+      await new Promise((r) => setTimeout(r, 15));
+    }
+  };
 
   try {
     // 1. Direct API checks: targeted stallConversationId=A vs ordinary aggregate (top=B) vs non-existent/reserved/unsafe
@@ -7724,7 +7735,7 @@ test("v1.7.3-16: Wrap-up Item 1 — Aggregate alert card Copy Rescue Brief / Vie
         });
         await new Promise((r) => setTimeout(r, 30));
         vm.runInContext("setScope('app');", liveCtx);
-        await new Promise((r) => setTimeout(r, 50));
+        await waitForWatchdogCurrent(liveCtx, convA);
         hoBodies.length = 0;
 
         vm.runInContext("openWatchdogRescueDrawer();", liveCtx);
@@ -7782,7 +7793,7 @@ test("v1.7.3-16: Wrap-up Item 1 — Aggregate alert card Copy Rescue Brief / Vie
         });
         await new Promise((r) => setTimeout(r, 25));
         vm.runInContext("setScope('app');", promoCtx);
-        await new Promise((r) => setTimeout(r, 35));
+        await waitForWatchdogCurrent(promoCtx, convA);
         promoBodies.length = 0;
         serverPromotedB = true;
         vm.runInContext("openWatchdogRescueDrawer();", promoCtx);
@@ -7897,7 +7908,7 @@ test("v1.7.3-16: Wrap-up Item 1 — Aggregate alert card Copy Rescue Brief / Vie
 
         await new Promise((r) => setTimeout(r, 30));
         vm.runInContext(`setScope(${JSON.stringify(aggScope)});`, ctx);
-        await new Promise((r) => setTimeout(r, 60));
+        await waitForWatchdogCurrent(ctx, convA);
         assert.equal(vm.runInContext("cachedWatchdog?.current?.conversationId", ctx), convA);
 
         hoBodies.length = 0;
@@ -8097,7 +8108,7 @@ test("v1.7.3-16: Wrap-up Item 1 — Aggregate alert card Copy Rescue Brief / Vie
 
         await new Promise((r) => setTimeout(r, 30));
         vm.runInContext(`setScope(${JSON.stringify(aggScope)});`, ctx);
-        await new Promise((r) => setTimeout(r, 60));
+        await waitForWatchdogCurrent(ctx, convA);
         assert.equal(vm.runInContext("cachedWatchdog?.current?.conversationId", ctx), convA);
 
         // Step 1: Click A's "View Brief" via bound button handler, defer A's HTTP response
@@ -8306,7 +8317,7 @@ test("v1.7.3-16: Wrap-up Item 1 — Aggregate alert card Copy Rescue Brief / Vie
 
         await new Promise((r) => setTimeout(r, 30));
         vm.runInContext(`setScope(${JSON.stringify(aggScope)});`, ctx);
-        await new Promise((r) => setTimeout(r, 60));
+        await waitForWatchdogCurrent(ctx, convA);
 
         hoBodies.length = 0;
         copied.length = 0;

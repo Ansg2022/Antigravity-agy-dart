@@ -77,13 +77,13 @@ AI 要搜好几个词时一次同时搜完，要改多个文件时一次改完�
 **Windows（PowerShell）：**
 
 ```powershell
-irm https://raw.githubusercontent.com/zou172866/Antigravity-agy-dart/v1.7.8/install.ps1 | iex
+irm https://raw.githubusercontent.com/zou172866/Antigravity-agy-dart/v1.8.0/install.ps1 | iex
 ```
 
 **macOS / Linux：**
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/zou172866/Antigravity-agy-dart/v1.7.8/install.sh | sh
+curl -fsSL https://raw.githubusercontent.com/zou172866/Antigravity-agy-dart/v1.8.0/install.sh | sh
 ```
 
 ### 方法二：直接发给 Antigravity 装
@@ -91,13 +91,13 @@ curl -fsSL https://raw.githubusercontent.com/zou172866/Antigravity-agy-dart/v1.7
 复制这句发给 Antigravity：
 
 ```text
-请将 https://github.com/zou172866/Antigravity-agy-dart.git 的 v1.7.8 标签克隆到临时目录，运行其中的 scripts/install.mjs install 完成全局安装并跑 doctor 自检（Windows 如未安装 rg 请同时传 --install-rg）。
+请将 https://github.com/zou172866/Antigravity-agy-dart.git 的 v1.8.0 标签克隆到临时目录，运行其中的 scripts/install.mjs install 完成全局安装并跑 doctor 自检（Windows 如未安装 rg 请同时传 --install-rg）。
 ```
 
 ### 方法三：克隆仓库自定义安装
 
 ```powershell
-git clone --branch v1.7.8 --depth 1 https://github.com/zou172866/Antigravity-agy-dart.git
+git clone --branch v1.8.0 --depth 1 https://github.com/zou172866/Antigravity-agy-dart.git
 cd Antigravity-agy-dart
 
 # Windows PowerShell（加 -InstallRg 可顺手自动安装快速搜索工具 rg）
@@ -145,6 +145,12 @@ node scripts/install.mjs tool-loading eager         # 12 个工具全部预载
 ---
 
 ## 更新日志
+
+### v1.8.0
+- **新增后台安全审查配额监测与重启防丢账本（Issue #1886）**：新增零依赖增量只读日志审计引擎（`context/lib/safety-monitor-audit.js`），自动发现 Antigravity 桌面端（`%APPDATA%\Antigravity\logs\language_server.log`，兼容 `D:\Roaming` 等自定义盘符）与 CLI 日志（`~/.gemini/antigravity-cli/log/cli-*.log`，自动跳过重复副本 `cli.log` 并拆分 Windows 并发交错行）；按分钟聚合持久化至 `~/.agy-dart/safety-audit-state.json`，解决桌面端重启清空日志丢现场问题；同 `tid` 精确统计隐藏 `streamGenerateContent` 请求占比，严格屏蔽时间戳/端口/UUID 的 429 假阳性，精准告警 `429_avalanche`、零 429 重型误报突发（`heavy_burst_or_sticky`）与逼近 ~4,400/5h 悬崖水位（`approaching_quota`）。三端同步透出：`ctx_doctor`（严格 `<= 8.4 KB`）、Sidecar 面板（`/api/safety-audit`，正常单行静默收起、异常自动展开并支持一键换新窗 Handoff 与复制脱敏报告）以及 CLI（`npm run safety:audit` / `node bin/agy-dart.mjs audit safety` / `cache:audit -- --with-safety`）。
+- **工作区外读文件止损修复与 Handoff 断链引导**：优化 `hooks/pre-tool-use.mjs`，当拦截**工作区外**大文件时保留内联大纲，但改引导使用原生分页 `read_file`（命中 `allowed_tool` 17 µs 白名单、0 次云端审查），避免把 AI 推向 MCP 工具误触发 20 万–30 万字符的 `gemini-4-hydrogen-sonar` Signal E 重型误报；`handoff.js` 新增告警态 `## Safety Monitor Advisory`，并精简更新 `rules/AGENTS.md`（393 tokens，稳守 400 token 预算内）与按需排错手册第 7 节。
+- **PreInvocation 宿主崩溃防护（Issue #7 / 上游 #1394 & #1845）**：`hooks/pre-invocation.mjs` 中的对话内联 `metadata.user_markdown` 横幅改为显式开关 `cacheWatchInlineAlerts`（默认关闭，可通过 `~/.agy-dart/config.json` 或 `AGY_DART_CACHE_WATCH_INLINE_ALERTS` 开启），规避部分宿主版本 `proto_utils.go` panic，同时完整保留 Watchdog 租约、`/compact` 清理、TTL 校准与侧边栏/桌面告警能力。
+- **修复 `fast` / `context` MCP 首次省略 `cwd` 报工作区无法解析（Issue #6）**：在 `SessionStart`、`PreInvocation` 与 `Stop` 钩子打通动态 `session_workspace` 注册表，让常驻插件目录启动的 MCP 进程在首轮省略 `cwd` 时即可自动定位当前工作区并随切窗刷新（多窗口同时活跃存在歧义时仍安全快速报错，防止跨仓误读误改）；同步新增支持能力感知的 `roots/list` 冷启动重试，以及 `AGY_DART_WORKSPACE` / `AGY_DART_DEFAULT_CWD` 与 `~/.agy-dart/config.json` `defaultCwd` 显式配置。
 
 ### v1.7.8
 - **新增可选「自动更新」静默升级开关（默认关闭）**：面板顶栏新增 `自动更新：关/开` 切换按钮（同时支持 `~/.agy-dart/config.json` `autoUpdateInstall` 与 `AGY_DART_AUTO_UPDATE_INSTALL` / `AGY_DART_DISABLE_AUTO_UPDATE_INSTALL` 环境变量）；开启后启动与每 6 小时后台检查仅对同主版本且带 SHA-256 校验 `.tgz` 资产的 Release 自动升级，自动避让在途保活请求、单版本失败熔断，并在面板重载后展示一次可关闭的升级完成提示。
@@ -268,7 +274,7 @@ npm run cache:simulate
 装到 DeepSeek Harness、Claude Code 或 Codex 时，安装器会把改动记录存在 `~/.agy-dart/<宿主名>-install.json` 里，方便以后卸载时干净还原，不会弄乱你原本的配置。
 
 ```sh
-git clone --branch v1.7.8 --depth 1 https://github.com/zou172866/Antigravity-agy-dart.git
+git clone --branch v1.8.0 --depth 1 https://github.com/zou172866/Antigravity-agy-dart.git
 cd Antigravity-agy-dart
 node bin/agy-dart.mjs install
 node bin/agy-dart.mjs doctor

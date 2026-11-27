@@ -162,11 +162,42 @@ function resolveWorkspaceDir(rawOrPayload) {
   for (const list of lists) {
     if (Array.isArray(list)) {
       for (const item of list) {
-        if (typeof item === "string" && item.trim()) return item.trim();
+        const raw = typeof item === "string" ? item : item?.uri || item?.path || "";
+        if (typeof raw === "string" && raw.trim()) return raw.trim();
       }
     }
   }
   return "";
+}
+
+function resolveSessionIds(rawOrPayload, env = process.env) {
+  const p = parseHookPayload(rawOrPayload) || {};
+  const common = p.common && typeof p.common === "object" && !Array.isArray(p.common) ? p.common : null;
+  const meta = p.metadata && typeof p.metadata === "object" && !Array.isArray(p.metadata) ? p.metadata : null;
+  const e = env && typeof env === "object" ? env : {};
+  const convId =
+    nonEmptyString(p.conversationId) ||
+    nonEmptyString(p.conversation_id) ||
+    nonEmptyString(common?.conversationId) ||
+    nonEmptyString(common?.conversation_id) ||
+    nonEmptyString(p.sessionId) ||
+    nonEmptyString(p.session_id) ||
+    nonEmptyString(e.ANTIGRAVITY_CONVERSATION_ID);
+  const rootSessionId =
+    nonEmptyString(p.rootConversationId) ||
+    nonEmptyString(p.root_conversation_id) ||
+    nonEmptyString(common?.rootConversationId) ||
+    nonEmptyString(common?.root_conversation_id) ||
+    nonEmptyString(meta?.rootConversationId) ||
+    nonEmptyString(meta?.root_conversation_id) ||
+    nonEmptyString(p.parentConversationId) ||
+    nonEmptyString(p.parent_conversation_id) ||
+    nonEmptyString(common?.parentConversationId) ||
+    nonEmptyString(common?.parent_conversation_id) ||
+    nonEmptyString(e.ANTIGRAVITY_ROOT_CONVERSATION_ID) ||
+    nonEmptyString(e.ANTIGRAVITY_PARENT_CONVERSATION_ID) ||
+    convId;
+  return { convId, rootSessionId };
 }
 
 /**
@@ -253,6 +284,14 @@ async function main() {
         if (!isSubagent) {
           store.clearSessionOverrides();
           store.maybeRunDailyMaintenance(14);
+        }
+        const { convId, rootSessionId } = resolveSessionIds(payload, process.env);
+        if (workspaceDir && convId && typeof store.recordSessionWorkspace === "function") {
+          store.recordSessionWorkspace(convId, workspaceDir, {
+            rootSessionId: rootSessionId || convId,
+            active: true,
+            source: "SessionStart"
+          });
         }
         if (workspaceDir && effectiveCfg.repoHubs) {
           return getCachedRepoHotspots(workspaceDir, store, { maxFiles: 120, maxHubs: 5 }) || "";

@@ -1124,6 +1124,24 @@ export function createTools({
       } catch {}
       const sessionId = getSessionId(cwd, { optional: true });
       const cutoffInfo = store.getCutoffInfo(sessionId);
+      let safetyReport = null;
+      let formatSafetyCompactFn = null;
+      let safetyMonitor = { status: "not_detected", severity: "none" };
+      try {
+        const safetyMod = await import("./safety-monitor-audit.js");
+        formatSafetyCompactFn = safetyMod.formatSafetyAuditCompactForDoctor;
+        const tmpRoot = path.resolve(os.tmpdir()).toLowerCase();
+        const dbPathNorm = typeof store?.dbPath === "string" && store.dbPath ? path.resolve(store.dbPath).toLowerCase() : "";
+        const isEphemeralTestStore = Boolean(dbPathNorm && dbPathNorm.startsWith(tmpRoot));
+        const hasExplicitSafetyPaths =
+          Array.isArray(cfgSnap.values.safetyLogPaths) && cfgSnap.values.safetyLogPaths.length > 0;
+        const hasExplicitStatePath = Boolean(cfgSnap.values.safetyStatePath);
+        safetyReport = safetyMod.auditSafetyMonitor({
+          persistState: hasExplicitStatePath || !isEphemeralTestStore,
+          disableDefaultDiscovery: isEphemeralTestStore && !hasExplicitSafetyPaths && !process.env.AGY_DART_SAFETY_LOG_PATHS
+        });
+        safetyMonitor = safetyMod.formatSafetyAuditCompactForDoctor(safetyReport);
+      } catch {}
       const out = {
         doctor: doc,
         features: {
@@ -1133,7 +1151,8 @@ export function createTools({
           headingAwareMarkdownChunking: true,
           secretRedactionEnabled: isSecretRedactionEnabled(),
           sensitiveFileGuardMode: getSensitiveFileGuardMode(),
-          readGuardMode: cfgSnap.values.readGuardMode
+          readGuardMode: cfgSnap.values.readGuardMode,
+          safetyAuditEnabled: cfgSnap.values.safetyAudit !== false
         },
         readGuard: {
           mode: cfgSnap.values.readGuardMode,
@@ -1152,6 +1171,7 @@ export function createTools({
           maxSteps: cfgSnap.values.readDedupMaxSteps,
           maxTurns: cfgSnap.values.readDedupMaxTurns
         },
+        safetyMonitor,
         config: {
           path: cfgSnap.configPath,
           loaded: cfgSnap.fileExists && !cfgSnap.configError,
@@ -1190,6 +1210,9 @@ export function createTools({
           rejected: trimmedRejected,
           rejectedTruncated: true
         };
+      }
+      if (Buffer.byteLength(JSON.stringify(out, null, 2), "utf8") > maxDoctorBytes && safetyReport && formatSafetyCompactFn) {
+        out.safetyMonitor = formatSafetyCompactFn(safetyReport, { minimal: true });
       }
       return out;
     },

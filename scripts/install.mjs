@@ -223,6 +223,7 @@ export const RUNTIME_FILES = Object.freeze([
   "context/lib/text-diff.js",
   "context/lib/json-crusher.js",
   "context/lib/handoff.js",
+  "context/lib/safety-monitor-audit.js",
   "context/lib/watchdog-lease.js",
   "context/lib/watchdog.js",
   "hooks/compile-cache.mjs",

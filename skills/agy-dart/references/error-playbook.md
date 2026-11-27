@@ -12,6 +12,8 @@ Read this file on demand when hitting a guard block, edit rollback, rejected pro
 | KV-cache hit rate drops or Turn-0 prefix grows | Bloated rules/skill frontmatter, non-deterministic MCP `tools/list`, conflicting legacy plugin, or dynamic `systemMessage` hook | Run `npm run cache:audit -- --workspace . --no-live` and `node bin/agy-dart.mjs audit skills --workspace .` |
 | Slow search, Windows encoding garble, or `run_checks` timeout | Missing `rg`, complex shell quoting, or `> 60s` job run inside `run_checks` | Install `rg` (`--install-rg`), use `ctx_execute` script file for heavy parsing, route `> 60s`/daemon jobs to native `run_command` (`WaitMsBeforeAsync <= 2000`) |
 | `building toolbox: tool "mcp_ide-tools_mcp_agy-dart_fast_apply_edits" ... at '/required': items at 1 and 2 are equal` | Antigravity `ide-tools` bridge re-wraps eager `mcp_agy-dart_fast_*` tools and appends `toolSummary` to `/required` twice without deduplicating | Run `node ~/.gemini/config/plugins/agy-dart/scripts/install.mjs tool-loading lazy` (or remove `eager: true` under `mcpServers.fast`) and restart Antigravity |
+| Quota drops unexpectedly, tool calls stall 3–6s, or Safety Monitor alerts `heavy_burst_or_sticky` / `429_avalanche` | Antigravity background safety pipeline (`sir_flash_lite` -> `gemini-4-hydrogen-sonar`, Issue #1886) sending up to 300K-char trajectories silently | Do NOT restart Antigravity first (restarts truncate `language_server.log`); run `npm run safety:audit` / `agy-dart audit safety`, open **Handoff Brief** to switch to a fresh window, and use native `read_file` for outside-workspace paths |
+| `Workspace root could not be determined (server cwd is inside plugin directory ...)` | MCP server launched inside `${PLUGIN_ROOT}` without host `roots/list`, or multiple workspaces are simultaneously active (`N active workspaces detected`) | Pass the active workspace absolute path in `cwd`; for single-workspace setups you can also set `AGY_DART_WORKSPACE` or `"defaultCwd"` in `~/.agy-dart/config.json` |
 
 ---
 
@@ -138,3 +140,24 @@ agent executor error: building toolbox: tool "mcp_ide-tools_mcp_agy-dart_fast_ap
 2. **Inspect / confirm**:
    - Raw server schemas cached on disk live under `~/.gemini/antigravity/mcp/agy-dart_fast/apply_edits.json` (App/IDE) or `~/.gemini/antigravity-cli/mcp/agy-dart_fast/apply_edits.json` (CLI) and show `"required": ["edits"]`; if `ide-tools` caches schemas on disk, check `~/.gemini/antigravity*/mcp/ide-tools/`.
    - Leaving only `read_slices` with `"eager": true` (which declares no top-level `required` array in `fast/mcp-server.mjs`) shifts the error to `mcp_ide-tools_mcp_agy-dart_fast_read_slices` with `at '/required': items at 0 and 1 are equal`, confirming both duplicates are injected by the host bridge.
+
+---
+
+## 7. Background Safety Monitor Quota Burn & False-Alarm Bursts (Issue #1886)
+
+### How Antigravity's 3-stage background safety pipeline works
+- **Stage 1 (`agy_tool_safety`, local ~20 µs)**: Native `read_file` hits `allowed_tool` (even on outside-workspace paths) and skips all cloud reviews. Write tools (`edit_file`, `write_file`), shell calls with `unquoted_shell_operators` (`;`, `|`, `&&`) or `unknown_command`, and **all MCP tools** (including `mcp_agy-dart_*`, even when Eager) return `unsupported_tool` and enter Stage 2.
+- **Stage 2 (`sir_flash_lite`, ~48K char cap, ~1.1s)**: Runs on `MODEL_TIER_FLASH_LITE`. Hitting ~4,400 calls in a 5h window triggers `HTTP 429 RESOURCE_EXHAUSTED` + `parent sir_flash_lite failed, running it anyway`, escalating calls directly into Stage 3.
+- **Stage 3 (`severe_internal_risks_agy` / `gemini-4-hydrogen-sonar`, up to 300K char cap, 3–6s)**: Invoked either after 429 fallback OR under zero-429 false-alarm / sticky-review escalations. These background `streamGenerateContent` requests are invisible in chat transcripts and standard usage panels.
+
+### Diagnostics (before restarting Antigravity!)
+- Desktop Antigravity **truncates `%APPDATA%\Antigravity\logs\language_server.log` on every restart**. Run diagnostics before restarting (or keep the **agy-dart Context** Sidecar open, which incrementally persists 5h rolling buckets to `~/.agy-dart/safety-audit-state.json`).
+- Offline redacted CLI audit: `npm run safety:audit` or `node bin/agy-dart.mjs audit safety [--json] [--safety-log-path <path>] [--window-hours 5]`.
+- Inside an agent session: call `ctx_doctor` and inspect `safetyMonitor`.
+- Configuration overrides in `~/.agy-dart/config.json` (or `AGY_DART_SAFETY_*` env vars): `safetyAudit`, `safetyLogPaths`, `safetyStatePath`, `safetyWindowHours`, `safetyPrecheckWarnCount` (default `3500`), `safetyPrecheckLimit` (default `4400`), `safetyHeavyBurstCount` (default `3`), `safetyHeavyBurstWindowMin` (default `5`), `safetyStickyCharThreshold` (default `150000`).
+
+### Proven source-side mitigations
+1. **Outside-workspace files -> native `read_file`**: Reading global configs, `~/.gemini/...`, plugins, or brain artifacts with native ranged `read_file` stays on the `allowed_tool` fast-path (0 cloud checks), whereas calling `mcp_agy-dart_fast_*` outside the workspace frequently triggers Signal E 200K–300K char `gemini-4-hydrogen-sonar` false alarms.
+2. **In-workspace multi-step work -> batch with `agy-dart_fast`**: Because `edit_file` and compound shell calls always trigger Stage 2, batching multiple in-workspace edits into one `apply_edits` or multiple queries into one `batch_search` lowers total `sir_flash_lite` call volume while keeping context lean.
+3. **Break long-trajectory & sticky-review chains early**: Once a long session completes a major phase—especially after `git push`, PR updates, CDP browser automation, or repeated heavy safety escalations—generate a **Handoff Brief** and continue in a fresh window so subsequent steps do not carry a 250K–300K review tail.
+4. **Concurrent `agy` CLI bursts**: Single-session daily workflows can keep normal batching, but when running many parallel `agy` CLI workers, avoid unnecessary unquoted shell operators (`&&`, `;`, `|`, `2>/dev/null`) that drive `unquoted_shell_operators` / `unknown_command` triggers toward the 4,400/5h limit.

@@ -12,6 +12,10 @@ import os from "node:os";
 import path from "node:path";
 import { spawn } from "node:child_process";
 import { fileURLToPath } from "node:url";
+import {
+  auditSafetyMonitor,
+  formatSafetyAuditMarkdown
+} from "../context/lib/safety-monitor-audit.js";
 import { sha256Hex, stableSortObject, stableStringify } from "../context/lib/stable-json.js";
 
 const DEFAULT_TIMEOUT_MS = 4000;
@@ -3323,12 +3327,30 @@ export function formatSkillsAuditMarkdown(report) {
   return lines.join("\n");
 }
 
+export function auditSafetyMonitorOnly(options = {}) {
+  return auditSafetyMonitor({
+    ...(Array.isArray(options.safetyLogPaths) && options.safetyLogPaths.length > 0
+      ? { logPaths: options.safetyLogPaths }
+      : {}),
+    ...(options.windowHours !== undefined ? { windowHours: options.windowHours } : {}),
+    ...(options.persistState !== undefined ? { persistState: options.persistState } : {}),
+    ...(options.statePath ? { statePath: options.statePath } : {}),
+    ...(options.disableDefaultDiscovery !== undefined
+      ? { disableDefaultDiscovery: options.disableDefaultDiscovery }
+      : {}),
+    ...(options.nowMs !== undefined ? { nowMs: options.nowMs } : {})
+  });
+}
+
+export { formatSafetyAuditMarkdown };
+
 export async function auditEnvironmentCache(options = {}) {
   const workspace = path.resolve(options.workspace || process.cwd());
   const configDir = path.resolve(options.configDir || path.join(getHomeDir(), ".gemini", "config"));
   const live = options.live !== undefined ? Boolean(options.live) : true;
   const rawTimeout = options.timeoutMs ?? options.timeout ?? DEFAULT_TIMEOUT_MS;
   const timeoutMs = Number.isFinite(Number(rawTimeout)) && Number(rawTimeout) > 0 ? Math.round(Number(rawTimeout)) : DEFAULT_TIMEOUT_MS;
+  const includeSafety = Boolean(options.includeSafety);
 
   const findings = [];
   const { activePlugins, disabledPlugins } = discoverPlugins(configDir, workspace);
@@ -3336,6 +3358,32 @@ export async function auditEnvironmentCache(options = {}) {
   const prefix = auditTurn0Prefix(configDir, workspace, activePlugins, findings);
   const mcp = await auditMcpServers(configDir, workspace, activePlugins, { live, timeoutMs }, findings);
   const hooks = auditHooksAndPlugins(configDir, workspace, activePlugins, disabledPlugins, findings);
+  let safety = null;
+  if (includeSafety) {
+    safety = auditSafetyMonitorOnly(options);
+    if (safety.status === "429_avalanche") {
+      findings.push({
+        severity: "critical",
+        category: "safety",
+        code: "safety_429_avalanche",
+        target: "safety-monitor",
+        message: safety.summaryEn,
+        recommendation:
+          "Pause concurrent CLI/multi-window bursts, generate a Handoff Brief to start a fresh window, and wait for the 5h sir_flash_lite quota window reset."
+      });
+    } else if (safety.status === "heavy_burst_or_sticky" || safety.status === "approaching_quota") {
+      findings.push({
+        severity: safety.severity === "critical" ? "critical" : "warn",
+        category: "safety",
+        code: safety.status === "approaching_quota" ? "safety_approaching_quota" : "safety_heavy_burst_or_sticky",
+        target: "safety-monitor",
+        message: safety.summaryEn,
+        recommendation:
+          safety.actions?.[0]?.labelEn ||
+          "Start a fresh conversation window via Handoff Brief and keep outside-workspace reads on native read_file."
+      });
+    }
+  }
 
   const sortedFindings = sortFindings(findings);
   const { score, grade, scoreBreakdown } = computeHealthScore(sortedFindings);
@@ -3352,7 +3400,8 @@ export async function auditEnvironmentCache(options = {}) {
       workspace,
       configDir,
       live,
-      timeoutMs
+      timeoutMs,
+      ...(includeSafety ? { includeSafety: true } : {})
     },
     score,
     grade,
@@ -3361,6 +3410,7 @@ export async function auditEnvironmentCache(options = {}) {
     prefix,
     mcp,
     hooks,
+    ...(includeSafety ? { safety } : {}),
     findings: sortedFindings
   });
 }
@@ -3463,6 +3513,11 @@ export function formatCacheAuditMarkdown(report) {
     }
   }
 
+  if (report.safety) {
+    lines.push("", "## 5. Background Safety Monitor Audit (Issue #1886)", "");
+    lines.push(formatSafetyAuditMarkdown(report.safety));
+  }
+
   return lines.join("\n");
 }
 
@@ -3474,6 +3529,11 @@ export function parseCliArgs(argv) {
     live: true,
     timeoutMs: DEFAULT_TIMEOUT_MS,
     skillsOnly: false,
+    safetyAudit: false,
+    includeSafety: false,
+    safetyLogPaths: [],
+    windowHours: undefined,
+    persistState: true,
     json: false,
     help: false
   };
@@ -3486,6 +3546,23 @@ export function parseCliArgs(argv) {
       opts.json = true;
     } else if (a === "--skills-only") {
       opts.skillsOnly = true;
+    } else if (a === "--safety-audit") {
+      opts.safetyAudit = true;
+    } else if (a === "--with-safety") {
+      opts.includeSafety = true;
+    } else if (a === "--no-state") {
+      opts.persistState = false;
+    } else if (a === "--safety-log-path" || a.startsWith("--safety-log-path=")) {
+      const next = a.includes("=") ? a.slice("--safety-log-path=".length) : args[++i];
+      if (!next || (!a.includes("=") && next.startsWith("-"))) throw new Error("Missing path after --safety-log-path");
+      opts.safetyLogPaths.push(path.resolve(next));
+    } else if (a === "--window-hours" || a.startsWith("--window-hours=")) {
+      const next = a.includes("=") ? a.slice("--window-hours=".length) : args[++i];
+      const parsed = Number(next);
+      if (!next || !Number.isFinite(parsed) || parsed < 1 || parsed > 24) {
+        throw new Error(`Invalid --window-hours value '${next}'. Expected integer 1..24.`);
+      }
+      opts.windowHours = Math.round(parsed);
     } else if (a === "--live") {
       opts.live = true;
     } else if (a === "--no-live") {
@@ -3520,14 +3597,19 @@ Usage:
   node scripts/cache-audit.mjs [options]
 
 Options:
-  --workspace <dir>    Workspace root to audit (default: current working directory)
-  --config-dir <dir>   Antigravity config root (default: ~/.gemini/config)
-  --skills-only        Offline fast view: audit Skills Turn-0 tax & progressive disclosure only
-  --live               Probe configured stdio MCP servers live twice (default)
-  --no-live            Skip live MCP server probing
-  --timeout <ms>       Per-server MCP probe timeout in ms (default: ${DEFAULT_TIMEOUT_MS})
-  --json               Output machine-readable JSON report
-  -h, --help           Show this help
+  --workspace <dir>         Workspace root to audit (default: current working directory)
+  --config-dir <dir>        Antigravity config root (default: ~/.gemini/config)
+  --skills-only             Offline fast view: audit Skills Turn-0 tax & progressive disclosure only
+  --safety-audit            Offline Safety Monitor quota-burn audit (Issue #1886 Desktop & CLI logs)
+  --with-safety             Include Safety Monitor audit section in the full cache audit report
+  --safety-log-path <path>  Override Safety Monitor log file/directory (repeatable)
+  --window-hours <1..24>    Rolling Safety Monitor window in hours (default: 5)
+  --no-state                Stateless Safety Monitor scan (do not read/write persisted rolling state)
+  --live                    Probe configured stdio MCP servers live twice (default)
+  --no-live                 Skip live MCP server probing
+  --timeout <ms>            Per-server MCP probe timeout in ms (default: ${DEFAULT_TIMEOUT_MS})
+  --json                    Output machine-readable JSON report
+  -h, --help                Show this help
 `);
 }
 
@@ -3535,6 +3617,15 @@ async function main() {
   const opts = parseCliArgs(process.argv);
   if (opts.help) {
     printHelp();
+    return;
+  }
+  if (opts.safetyAudit) {
+    const report = auditSafetyMonitorOnly(opts);
+    if (opts.json) {
+      process.stdout.write(JSON.stringify(report, null, 2) + "\n");
+    } else {
+      process.stdout.write(formatSafetyAuditMarkdown(report) + "\n");
+    }
     return;
   }
   if (opts.skillsOnly) {

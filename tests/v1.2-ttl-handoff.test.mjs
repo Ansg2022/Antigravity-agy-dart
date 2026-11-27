@@ -720,7 +720,8 @@ test("P1-7.4: PreInvocation proactive expiring TTL alert (deduped >=60k, silent 
     const live1 = runHook(
       "hooks/pre-invocation.mjs",
       { conversationId: "live-exp-conv", transcriptPath },
-      tmpDb
+      tmpDb,
+      { AGY_DART_CACHE_WATCH_INLINE_ALERTS: "1" }
     );
     assert.equal(live1.injectSteps?.length, 1);
     assert.equal(live1.injectSteps[0].systemMessage.systemMessage, "", "Must preserve zero-prefix-pollution systemMessage: ''");
@@ -734,7 +735,8 @@ test("P1-7.4: PreInvocation proactive expiring TTL alert (deduped >=60k, silent 
     const live2 = runHook(
       "hooks/pre-invocation.mjs",
       { conversationId: "live-exp-conv", transcriptPath },
-      tmpDb
+      tmpDb,
+      { AGY_DART_CACHE_WATCH_INLINE_ALERTS: "1" }
     );
     assert.equal(live2.injectSteps, undefined);
   } finally {

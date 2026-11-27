@@ -484,7 +484,8 @@ test("v1.5.3-4: PreInvocation chat banner window badge & Sidecar wd-other-alerts
       },
       {
         AGY_DART_DB_PATH: dbPath,
-        AGY_DART_CONFIG_PATH: path.join(tmpDir, "missing.json")
+        AGY_DART_CONFIG_PATH: path.join(tmpDir, "missing.json"),
+        AGY_DART_CACHE_WATCH_INLINE_ALERTS: "1"
       }
     );
     assert.equal(rHook.status, 0);

@@ -2122,6 +2122,7 @@ test("v1.7.4-osc-11: Audit follow-ups — host empty-output & Log: meta, spaced/
         ...process.env,
         AGY_DART_DB_PATH: dbPath,
         AGY_DART_CACHE_WATCH: "1",
+        AGY_DART_CACHE_WATCH_INLINE_ALERTS: "1",
         AGY_DART_STALL_WATCHDOG: "1",
         AGY_DART_LANG: "en",
         AGY_DART_SUMMARY_DB_PATH: path.join(tmpBase, "missing-summaries.db")

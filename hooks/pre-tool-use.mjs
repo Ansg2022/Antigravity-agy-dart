@@ -554,6 +554,31 @@ export function classifyFileTier(
   return { tier: "source", isMinifiedContent: false };
 }
 
+function isPathInsideWorkspaceRoots(targetPath, payloadCwd, workspacePaths = []) {
+  if (!targetPath) return true;
+  const roots = [];
+  if (Array.isArray(workspacePaths)) {
+    for (const r of workspacePaths) {
+      if (typeof r === "string" && r.trim()) roots.push(r.trim());
+    }
+  }
+  if (typeof payloadCwd === "string" && payloadCwd.trim()) roots.push(payloadCwd.trim());
+  if (roots.length === 0) return true;
+  const norm = (p) => {
+    const resolved = path.resolve(p).replace(/\\/g, "/").replace(/\/+$/, "");
+    return process.platform === "win32" ? resolved.toLowerCase() : resolved;
+  };
+  const targetNorm = norm(targetPath);
+  for (const root of roots) {
+    const rootNorm = norm(root);
+    if (!rootNorm) continue;
+    if (targetNorm === rootNorm || targetNorm.startsWith(rootNorm + "/")) {
+      return true;
+    }
+  }
+  return false;
+}
+
 function isUserAttachedFile(filePath, absPath) {
   const normalized = (absPath || filePath || "").replace(/\\/g, "/").toLowerCase();
   return (
@@ -2808,6 +2833,13 @@ export async function evaluatePreToolPayload(rawPayload) {
                       : "";
                   const reportedBytes =
                     isMinifiedDenseSlice || isOversizedMultiLineSlice ? slicedRangeBytes : remainingBytes;
+                  const hasDeclaredWorkspace = Boolean(
+                    (typeof payload?.cwd === "string" && payload.cwd.trim()) ||
+                      (Array.isArray(payload?.workspacePaths) && payload.workspacePaths.some((p) => typeof p === "string" && p.trim()))
+                  );
+                  const isOutsideWorkspace =
+                    hasDeclaredWorkspace &&
+                    !isPathInsideWorkspaceRoots(absPath, payload?.cwd, payload?.workspacePaths);
                   const softRetryHint = !isHardDeny
                     ? ` Or call ${toolName} once more to proceed (host caps each read at 45 KiB / ${HOST_READ_MAX_LINES} lines).`
                     : "";
@@ -2817,8 +2849,8 @@ export async function evaluatePreToolPayload(rawPayload) {
                     reason =
                       `[agy-dart protection] File slice is ${formatBytes(reportedBytes)} (~${Math.round(reportedBytes / 4).toLocaleString()} tokens), exceeding the ${formatBytes(tierCutoffBytes)} context limit. ` +
                       `Reading giant single-line/minified content risks severe context bloat. ` +
-                      (isSubagentCall
-                        ? `Prefer inspecting specific offsets or narrow ranges.${softRetryHint}`
+                      (isSubagentCall || isOutsideWorkspace
+                        ? `${isOutsideWorkspace ? "File is outside the active workspace; prefer inspecting specific native " + toolName + " offsets or narrow ranges instead of MCP tools." : "Prefer inspecting specific offsets or narrow ranges."}${softRetryHint}`
                         : `For logs/docs/data use call_mcp_tool(ServerName:"${CTX_SERVER}", ToolName:"ctx_index" or "ctx_execute", path:"${filePath}").${softRetryHint}`);
                   } else if (isOversizedMultiLineSlice) {
                     const suggestedLines = Math.max(
@@ -2830,7 +2862,9 @@ export async function evaluatePreToolPayload(rawPayload) {
                       `Pass a smaller StartLine/EndLine window (<= ${suggestedLines} lines)${
                         isSubagentCall
                           ? `.${softRetryHint}`
-                          : `, or use call_mcp_tool(ServerName:"${CTX_SERVER}", ToolName:"ctx_index" or "ctx_execute", path:"${filePath}").${softRetryHint}`
+                          : isOutsideWorkspace
+                            ? ` using native ${toolName} (keeps allowed_tool fast-path with 0 cloud safety review for files outside the workspace).${softRetryHint}`
+                            : `, or use call_mcp_tool(ServerName:"${CTX_SERVER}", ToolName:"ctx_index" or "ctx_execute", path:"${filePath}").${softRetryHint}`
                       }`;
                   } else if (tier === "review") {
                     const lineRangeHint =
@@ -2839,13 +2873,21 @@ export async function evaluatePreToolPayload(rawPayload) {
                       `[agy-dart protection] Diff/patch file is ${formatBytes(reportedBytes)} (~${Math.round(reportedBytes / 4).toLocaleString()} tokens${lineMeta}), exceeding the ${formatBytes(tierCutoffBytes)} review limit. ` +
                       (isSubagentCall
                         ? `Use ${lineRangeHint} to inspect specific hunks.${softRetryHint}`
-                        : `Outline changed files & hunks via ${FAST_SERVER} read_slices({ outlines: ["${filePath}"] }) then read targeted ${lineRangeHint}.${softRetryHint}`);
+                        : isOutsideWorkspace
+                          ? `File is outside the active workspace; use native ${toolName} with ${lineRangeHint} (keeps allowed_tool fast-path with 0 cloud safety review) instead of MCP tools.${softRetryHint}`
+                          : `Outline changed files & hunks via ${FAST_SERVER} read_slices({ outlines: ["${filePath}"] }) then read targeted ${lineRangeHint}.${softRetryHint}`);
                   } else if (isSubagentCall) {
                     const lineRangeHint =
                       tierMaxLineRange > 0 ? `StartLine/EndLine (<= ${tierMaxLineRange} lines)` : "StartLine/EndLine";
                     reason =
                       `[agy-dart protection] File is ${formatBytes(reportedBytes)} (~${Math.round(reportedBytes / 4).toLocaleString()} tokens${lineMeta}), exceeding the ${formatBytes(tierCutoffBytes)} context limit. ` +
-                      `Use native ${toolName} with ${lineRangeHint} to read relevant sections (or ${FAST_SERVER} read_slices if available).${softRetryHint}`;
+                      `Use native ${toolName} with ${lineRangeHint} to read relevant sections${isOutsideWorkspace ? "" : ` (or ${FAST_SERVER} read_slices if available)`}.${softRetryHint}`;
+                  } else if (isOutsideWorkspace) {
+                    const lineRangeHint =
+                      tierMaxLineRange > 0 ? `StartLine/EndLine (<= ${tierMaxLineRange} lines)` : "StartLine/EndLine";
+                    reason =
+                      `[agy-dart protection] File is ${formatBytes(reportedBytes)} (~${Math.round(reportedBytes / 4).toLocaleString()} tokens${lineMeta}), exceeding the ${formatBytes(tierCutoffBytes)} context limit. ` +
+                      `File is outside the active workspace; use native ${toolName} with ${lineRangeHint} (keeps allowed_tool fast-path with 0 cloud safety review) instead of MCP tools.${softRetryHint}`;
                   } else {
                     const lineInstruction =
                       tierMaxLineRange > 0

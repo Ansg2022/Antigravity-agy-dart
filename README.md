@@ -77,13 +77,13 @@ Use **Node.js 22.16.0 or later in the 22.x line, or Node.js 24 or later**. The i
 **Windows (PowerShell):**
 
 ```powershell
-irm https://raw.githubusercontent.com/zou172866/Antigravity-agy-dart/v1.7.8/install.ps1 | iex
+irm https://raw.githubusercontent.com/zou172866/Antigravity-agy-dart/v1.8.0/install.ps1 | iex
 ```
 
 **macOS / Linux:**
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/zou172866/Antigravity-agy-dart/v1.7.8/install.sh | sh
+curl -fsSL https://raw.githubusercontent.com/zou172866/Antigravity-agy-dart/v1.8.0/install.sh | sh
 ```
 
 ### Option 2: Let Antigravity install it
@@ -91,13 +91,13 @@ curl -fsSL https://raw.githubusercontent.com/zou172866/Antigravity-agy-dart/v1.7
 Send this to Antigravity:
 
 ```text
-Clone tag v1.7.8 of https://github.com/zou172866/Antigravity-agy-dart.git to a temp folder, run `node scripts/install.mjs install` (add `--install-rg` on Windows if `rg` is missing), and confirm `doctor` passes.
+Clone tag v1.8.0 of https://github.com/zou172866/Antigravity-agy-dart.git to a temp folder, run `node scripts/install.mjs install` (add `--install-rg` on Windows if `rg` is missing), and confirm `doctor` passes.
 ```
 
 ### Option 3: Clone & install with custom flags
 
 ```powershell
-git clone --branch v1.7.8 --depth 1 https://github.com/zou172866/Antigravity-agy-dart.git
+git clone --branch v1.8.0 --depth 1 https://github.com/zou172866/Antigravity-agy-dart.git
 cd Antigravity-agy-dart
 
 # Windows PowerShell (optional -InstallRg auto-installs ripgrep)
@@ -153,6 +153,12 @@ node scripts/install.mjs tool-loading eager         # All 12 tools eager-loaded
 ---
 
 ## Changelog
+
+### v1.8.0
+- **Background Safety Monitor quota-burn observability & restart-proof ledger (Issue #1886)**: Added a zero-dependency incremental log auditor (`context/lib/safety-monitor-audit.js`) across Antigravity Desktop (`%APPDATA%\Antigravity\logs\language_server.log`, supporting redirected Roaming drives) and CLI (`~/.gemini/antigravity-cli/log/cli-*.log`, deduplicating `cli.log` and splitting Windows interleaved lines). Persists rolling 5h/24h minute buckets (`~/.agy-dart/safety-audit-state.json`) so Desktop restart truncations no longer erase history, computes exact `tid`-correlated hidden `streamGenerateContent` share, guards strictly against naive `429` false positives, and alerts on `429_avalanche`, zero-429 `heavy_burst_or_sticky` false-alarm bursts, and `approaching_quota` (~4,400/5h cliff). Surfaced across `ctx_doctor` (<=8.4 KB safe), a quiet/auto-expanding Sidecar Dashboard card (`/api/safety-audit` with one-click Handoff & redacted Markdown copy), and CLI (`npm run safety:audit` / `node bin/agy-dart.mjs audit safety` / `cache:audit -- --with-safety`).
+- **Outside-workspace `read_file` guardrail & Handoff break-chain advisory**: Updated `hooks/pre-tool-use.mjs` so large files outside the active workspace still return an inline outline but stay on native ranged `read_file` (`allowed_tool`, 0 cloud review) instead of nudging MCP tools that can trigger 200K–300K char `gemini-4-hydrogen-sonar` Signal E false alarms. Added optional `## Safety Monitor Advisory` to `handoff.js` and concise guidance in `rules/AGENTS.md` (393 tok, within 400-tok budget) + `skills/agy-dart/references/error-playbook.md`.
+- **PreInvocation host panic guard (Issue #7 / upstream #1394 & #1845)**: Gated inline `metadata.user_markdown` banner emission in `hooks/pre-invocation.mjs` behind opt-in `cacheWatchInlineAlerts` (default `false`; configurable via `~/.agy-dart/config.json` or `AGY_DART_CACHE_WATCH_INLINE_ALERTS`) to prevent host `proto_utils.go` panics while keeping all non-banner bookkeeping (leases, `/compact` invalidation, turn sequence, TTL calibration, and Sidecar/desktop alerts) active.
+- **Workspace root auto-fallback for `fast` & `context` MCP servers (Issue #6)**: Fixed `"Workspace root could not be determined (server cwd is inside plugin directory)"` when hosts launch MCP servers inside the plugin folder without passing `cwd`. Added a live `session_workspace` registry wired through `SessionStart`, `PreInvocation`, and `Stop` hooks so omitted-`cwd` calls resolve on Turn 1 and track window switches without restarting MCP servers (while still failing fast on ambiguous multi-window sessions), added capability-aware `roots/list` cold-start retries, and added `AGY_DART_WORKSPACE` / `AGY_DART_DEFAULT_CWD` and `defaultCwd` (`~/.agy-dart/config.json`) overrides.
 
 ### v1.7.8
 - **Opt-in silent auto-updates (default OFF)**: Added an `Auto-Update: OFF/ON` toggle in the dashboard topbar (also configurable via `autoUpdateInstall` in `~/.agy-dart/config.json` or `AGY_DART_AUTO_UPDATE_INSTALL` / `AGY_DART_DISABLE_AUTO_UPDATE_INSTALL`). When enabled, background checks (at startup and every 6 hours) silently upgrade same-major releases only when a verified SHA-256 `.tgz` asset is present, defer during active TTL keepalive pings, trip a per-version circuit breaker on failure, and display a one-time dismissible notice after reload.
@@ -272,7 +278,7 @@ After adding, removing, or editing modules or tests, keep these three places in 
 When installing for DeepSeek Harness, Claude Code, or Codex, the installer saves an undo record in `~/.agy-dart/<host>-install.json` so uninstalling cleanly restores your original config.
 
 ```sh
-git clone --branch v1.7.8 --depth 1 https://github.com/zou172866/Antigravity-agy-dart.git
+git clone --branch v1.8.0 --depth 1 https://github.com/zou172866/Antigravity-agy-dart.git
 cd Antigravity-agy-dart
 node bin/agy-dart.mjs install
 node bin/agy-dart.mjs doctor

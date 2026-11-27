@@ -1392,6 +1392,53 @@ function formatVerificationLineSafe(label, rec, { allowRawSummary = true } = {})
   return `- **${label}**: ${status}${exitPart}${cmdPart}${summaryPart}${srcPart}`;
 }
 
+function isAlertingSafetyContext(safetyContext) {
+  if (!safetyContext || typeof safetyContext !== "object") return false;
+  const st = String(safetyContext.status || "").toLowerCase();
+  const sev = String(safetyContext.severity || "").toLowerCase();
+  return (
+    st === "429_avalanche" ||
+    st === "heavy_burst_or_sticky" ||
+    st === "approaching_quota" ||
+    sev === "warn" ||
+    sev === "critical"
+  );
+}
+
+function buildSafetyAdvisoryLines(safetyContext) {
+  if (!isAlertingSafetyContext(safetyContext)) return [];
+  const status = redactAndFlatten(String(safetyContext.status || "alert"), 32);
+  const sev = redactAndFlatten(String(safetyContext.severity || "warn").toUpperCase(), 16);
+  const w = safetyContext.window || safetyContext;
+  const precheck = toFiniteNumber(w.precheckCount) ?? 0;
+  const limit = toFiniteNumber(w.precheckLimit) ?? 4400;
+  const heavy = toFiniteNumber(w.heavyReviewCount) ?? 0;
+  const heavyAvg = toFiniteNumber(w.heavyAvgChars) ?? 0;
+  const falseAlarms = toFiniteNumber(w.heavyTriggeredFalse ?? w.heavyFalseAlarmCount) ?? 0;
+  const rate429 = toFiniteNumber(w.rateLimit429Count) ?? 0;
+  const fallbacks = toFiniteNumber(w.fallbackEscalationCount) ?? 0;
+  const hiddenPct = toFiniteNumber(safetyContext.streamRequests?.hiddenSharePct ?? safetyContext.hiddenStreamSharePct);
+  const metrics = [`5h prechecks: ${precheck}/${limit}`];
+  if (rate429 > 0 || fallbacks > 0) metrics.push(`429/fallback: ${rate429}/${fallbacks}`);
+  if (heavy > 0) {
+    metrics.push(
+      `heavy reviews: ${heavy} (avg ${Math.round(heavyAvg / 1000)}K chars${falseAlarms > 0 ? `, ${falseAlarms} false alarms` : ""})`
+    );
+  }
+  if (hiddenPct !== null) metrics.push(`hidden stream share: ${hiddenPct}%`);
+  const lines = [
+    `- **Alert**: \`${status}\` (${sev}) — ${metrics.join(" | ")}`
+  ];
+  const diag = redactAndFlatten(safetyContext.summaryEn || safetyContext.diagnosis || "", 200);
+  if (diag) {
+    lines.push(`- **Diagnosis**: ${diag}`);
+  }
+  lines.push(
+    "- **Mitigation**: Start in a fresh conversation window to break long-trajectory / sticky re-review chains; keep outside-workspace reads on native `read_file` (`allowed_tool`, 0 cloud review)."
+  );
+  return lines;
+}
+
 function buildAgentHandoffBrief({
   store = null,
   sessionId = "default",
@@ -1399,6 +1446,7 @@ function buildAgentHandoffBrief({
   maxBytes = DEFAULT_MAX_BYTES,
   sinceTs = null,
   stallContext = null,
+  safetyContext = null,
   conversationId = "",
   conversationConfirmed = false,
   scope = "conversation",
@@ -1576,6 +1624,7 @@ function buildAgentHandoffBrief({
   // Canonical section registry & prioritized items
   const SECTION_META = [
     { id: "stall", heading: "## Stall Rescue Snapshot" },
+    { id: "safety", heading: "## Safety Monitor Advisory" },
     { id: "intent", heading: "## User Intent" },
     { id: "plan", heading: "## Plan & Artifacts" },
     { id: "verification", heading: "## Verification & Checkpoint" },
@@ -1641,6 +1690,15 @@ function buildAgentHandoffBrief({
       }
     }
     summaryParts.unshift(`stall=${redactAndFlatten(String(stallContext.severity || "stalled").toLowerCase(), 16)}`);
+  }
+
+  // 1b. Optional Safety Monitor Advisory (Issue #1886 — only when actively alerting)
+  if (isAlertingSafetyContext(safetyContext)) {
+    const safetyLines = buildSafetyAdvisoryLines(safetyContext);
+    for (let i = 0; i < safetyLines.length; i++) {
+      pushItem("safety", 20 + i, safetyLines[i]);
+    }
+    summaryParts.push(`safety=${redactAndFlatten(String(safetyContext.status || "alert"), 24)}`);
   }
 
   // 2. User Intent (confirmed conversation only)
@@ -1999,6 +2057,7 @@ export function buildHandoffBrief({
   maxBytes = DEFAULT_MAX_BYTES,
   sinceTs = null,
   stallContext = null,
+  safetyContext = null,
   mode = "full",
   conversationId = "",
   conversationConfirmed = undefined,
@@ -2017,6 +2076,7 @@ export function buildHandoffBrief({
       maxBytes,
       sinceTs,
       stallContext,
+      safetyContext,
       conversationId,
       conversationConfirmed: conversationConfirmed === true,
       scope,
@@ -2131,6 +2191,15 @@ export function buildHandoffBrief({
     if (stallLines.length > 0) {
       sections.push(`## Stall Rescue Snapshot\n${stallLines.join("\n")}`);
       summaryParts.unshift(`stall=${sanitizeInline(String(stallContext.severity || "stalled").toLowerCase(), 16)}`);
+    }
+  }
+
+  // 1c. Optional Safety Monitor Advisory (only when alerting)
+  if (isAlertingSafetyContext(safetyContext)) {
+    const safetyLines = buildSafetyAdvisoryLines(safetyContext);
+    if (safetyLines.length > 0) {
+      sections.push(`## Safety Monitor Advisory\n${safetyLines.join("\n")}`);
+      summaryParts.push(`safety=${sanitizeInline(String(safetyContext.status || "alert"), 24)}`);
     }
   }
 

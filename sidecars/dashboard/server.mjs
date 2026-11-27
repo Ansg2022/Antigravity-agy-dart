@@ -18,6 +18,11 @@ import { getEffectiveConfig } from "../../context/lib/config.js";
 import { executionReceiptsFromSteps, fastToolClaimsFromSteps } from "../../context/lib/execution-receipts.js";
 import { buildHandoffBrief, inferWorkspaceFromStore } from "../../context/lib/handoff.js";
 import {
+  auditSafetyMonitor,
+  formatSafetyAuditMarkdown,
+  resetSafetyAuditCache
+} from "../../context/lib/safety-monitor-audit.js";
+import {
   DEFAULT_STALE_LEASE_MS,
   WatchdogMonitor,
   collectChildSubagentActivity,
@@ -326,6 +331,8 @@ export function closeRuntimeStore() {
   stopWatchdogMonitor();
   _convProjectIdCache.clear();
   claimedTranscriptStatCache.clear();
+  cachedSafetyAudit = { ts: 0, report: null };
+  resetSafetyAuditCache();
   _updateInFlight = false;
   _updateRestartScheduled = false;
   _autoCycleInFlight = null;
@@ -1968,7 +1975,36 @@ function getSourceChunksPayload(data = {}) {
   return { ok: true, sourceId, chunks: store.getSourceChunks(sourceId) };
 }
 
-function getHandoffPayload(data = {}, defaultConvId = "default") {
+const SAFETY_AUDIT_CACHE_TTL_MS = 15_000;
+let cachedSafetyAudit = { ts: 0, report: null };
+
+export function resetSidecarSafetyAuditCache() {
+  cachedSafetyAudit = { ts: 0, report: null };
+  resetSafetyAuditCache();
+}
+
+function getSafetyAuditPayload(data = {}, safetyAuditOptions = null) {
+  const forceRefresh = data?.forceRefresh === true;
+  const includeMarkdown = data?.includeMarkdown === true;
+  const now = Date.now();
+  let report = cachedSafetyAudit.report;
+  const isCustomOpts = Boolean(safetyAuditOptions && Object.keys(safetyAuditOptions).length > 0);
+  if (forceRefresh || isCustomOpts || !report || now - cachedSafetyAudit.ts >= SAFETY_AUDIT_CACHE_TTL_MS) {
+    report = auditSafetyMonitor({
+      ...(safetyAuditOptions || {})
+    });
+    if (!isCustomOpts) {
+      cachedSafetyAudit = { ts: now, report };
+    }
+  }
+  return {
+    ok: true,
+    ...report,
+    ...(includeMarkdown ? { markdown: formatSafetyAuditMarkdown(report) } : {})
+  };
+}
+
+function getHandoffPayload(data = {}, defaultConvId = "default", safetyAuditOptions = null) {
   const store = getRuntimeStore();
   const appStartTime = getAppStartTime();
   const mode = data?.mode === "agent" ? "agent" : "full";
@@ -2069,6 +2105,26 @@ function getHandoffPayload(data = {}, defaultConvId = "default") {
     } catch {}
   }
 
+  let safetyContext = null;
+  if (data.includeSafety !== false) {
+    try {
+      let latestSafety = cachedSafetyAudit.report;
+      if (!latestSafety && data.includeSafety === true) {
+        latestSafety = getSafetyAuditPayload({}, safetyAuditOptions);
+      }
+      if (
+        latestSafety &&
+        (latestSafety.severity === "warn" ||
+          latestSafety.severity === "critical" ||
+          latestSafety.status === "429_avalanche" ||
+          latestSafety.status === "heavy_burst_or_sticky" ||
+          latestSafety.status === "approaching_quota")
+      ) {
+        safetyContext = latestSafety;
+      }
+    } catch {}
+  }
+
   const brief = buildHandoffBrief({
     store,
     mode,
@@ -2081,6 +2137,7 @@ function getHandoffPayload(data = {}, defaultConvId = "default") {
     maxBytes,
     sinceTs,
     stallContext,
+    safetyContext,
     brainRoots: Array.isArray(monitor?.brainRoots) ? monitor.brainRoots : []
   });
 
@@ -2098,6 +2155,7 @@ function getHandoffPayload(data = {}, defaultConvId = "default") {
     conversationId: responseConvId,
     sessionId: effectiveCheckpointSid,
     hasStallContext: Boolean(stallContext),
+    hasSafetyContext: Boolean(safetyContext),
     markdown: brief.markdown,
     summary: brief.summary,
     bytes: brief.bytes,
@@ -3049,7 +3107,8 @@ const READ_ENDPOINTS = new Set([
   "/api/source-chunks",
   "/api/cache-diag",
   "/api/handoff",
-  "/api/watchdog"
+  "/api/watchdog",
+  "/api/safety-audit"
 ]);
 
 const MUTATING_ENDPOINTS = new Set([
@@ -3071,6 +3130,7 @@ export function createStandaloneServer({
   csrfToken = crypto.randomBytes(24).toString("hex"),
   maxBodyBytes = MAX_REQUEST_BODY_BYTES,
   watchdogOptions = null,
+  safetyAuditOptions = null,
   versionChecker = null,
   pluginUpdater = null,
   onAutoInstallEnabled = null
@@ -3211,7 +3271,7 @@ export function createStandaloneServer({
           return;
         }
         if (url.pathname === "/api/handoff") {
-          for (const bf of ["fromSidecarHost", "conversationConfirmed"]) {
+          for (const bf of ["fromSidecarHost", "conversationConfirmed", "includeSafety"]) {
             const bCheck = validateOptionalBooleanField(data, bf);
             if (!bCheck.ok) {
               sendJson(res, 400, { error: bCheck.error });
@@ -3223,7 +3283,7 @@ export function createStandaloneServer({
             sendJson(res, 400, { error: modeCheck.error });
             return;
           }
-          sendJson(res, 200, getHandoffPayload({ ...data, mode: modeCheck.mode }));
+          sendJson(res, 200, getHandoffPayload({ ...data, mode: modeCheck.mode }, "default", safetyAuditOptions));
           return;
         }
         if (url.pathname === "/api/watchdog") {
@@ -3235,6 +3295,17 @@ export function createStandaloneServer({
             }
           }
           sendJson(res, 200, getWatchdogPayload(data));
+          return;
+        }
+        if (url.pathname === "/api/safety-audit") {
+          for (const bf of ["forceRefresh", "includeMarkdown"]) {
+            const bCheck = validateOptionalBooleanField(data, bf);
+            if (!bCheck.ok) {
+              sendJson(res, 400, { error: bCheck.error });
+              return;
+            }
+          }
+          sendJson(res, 200, getSafetyAuditPayload(data, safetyAuditOptions));
           return;
         }
       }
@@ -3558,7 +3629,13 @@ if (isDirectRun) {
 
 export function registerSidecarRoutes(
   app,
-  { versionChecker = null, pluginUpdater = null, onUpdated = null, onAutoInstallEnabled = null } = {}
+  {
+    versionChecker = null,
+    pluginUpdater = null,
+    onUpdated = null,
+    onAutoInstallEnabled = null,
+    safetyAuditOptions = null
+  } = {}
 ) {
   const makeBadRequest = (msg) => {
     const err = new Error(msg);
@@ -3619,13 +3696,13 @@ export function registerSidecarRoutes(
     if (!data) return makeBadRequest("Request body must be a JSON object");
     const check = validateStringFields(data, ["scope", "conversationId", "stallConversationId", "sessionId", "cwd"]);
     if (!check.ok) return makeBadRequest(check.error);
-    for (const bf of ["fromSidecarHost", "conversationConfirmed"]) {
+    for (const bf of ["fromSidecarHost", "conversationConfirmed", "includeSafety"]) {
       const bCheck = validateOptionalBooleanField(data, bf);
       if (!bCheck.ok) return makeBadRequest(bCheck.error);
     }
     const modeCheck = validateHandoffMode(data.mode, { allowAgent: true });
     if (!modeCheck.ok) return makeBadRequest(modeCheck.error);
-    return getHandoffPayload({ ...data, mode: modeCheck.mode }, app.config?.conversationId);
+    return getHandoffPayload({ ...data, mode: modeCheck.mode }, app.config?.conversationId, safetyAuditOptions);
   }, "POST");
   app.api("/api/search", (rawData) => {
     const data = normalizeSidecarBody(rawData);
@@ -3702,6 +3779,15 @@ export function registerSidecarRoutes(
       if (!bCheck.ok) return makeBadRequest(bCheck.error);
     }
     return getWatchdogPayload(data, app.config?.conversationId);
+  }, "POST");
+  app.api("/api/safety-audit", (rawData) => {
+    const data = normalizeSidecarBody(rawData);
+    if (!data) return makeBadRequest("Request body must be a JSON object");
+    for (const bf of ["forceRefresh", "includeMarkdown"]) {
+      const bCheck = validateOptionalBooleanField(data, bf);
+      if (!bCheck.ok) return makeBadRequest(bCheck.error);
+    }
+    return getSafetyAuditPayload(data, safetyAuditOptions);
   }, "POST");
   app.api("/api/watchdog/action", (rawData) => {
     const data = normalizeSidecarBody(rawData);

@@ -1699,6 +1699,102 @@
       opacity: 0.78;
     }
 
+    /* Safety Monitor Quota-Burn Audit Strip / Alert Card (Issue #1886) */
+    .safety-strip {
+      padding: 8px 12px;
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+      transition: background 150ms ease, border-color 150ms ease;
+    }
+
+    .safety-strip.is-warn {
+      background: var(--warn-soft);
+      border-color: var(--warn-border);
+    }
+
+    .safety-strip.is-critical {
+      background: var(--danger-soft);
+      border-color: var(--danger-border);
+    }
+
+    .safety-head-row {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 8px;
+      flex-wrap: wrap;
+    }
+
+    .safety-head-left {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      min-width: 0;
+      flex: 1 1 auto;
+    }
+
+    .safety-inline-summary {
+      font-size: 11.5px;
+      color: var(--text-muted);
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+
+    .safety-strip.is-warn .safety-inline-summary {
+      color: var(--warn-text);
+      font-weight: 500;
+    }
+
+    .safety-strip.is-critical .safety-inline-summary {
+      color: var(--danger-text);
+      font-weight: 600;
+    }
+
+    .safety-details-body {
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+      padding-top: 6px;
+      border-top: 1px solid var(--border-subtle);
+    }
+
+    .safety-diagnosis {
+      font-size: 12px;
+      line-height: 1.45;
+      color: var(--text-primary);
+    }
+
+    .safety-reasons-row {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      gap: 5px;
+    }
+
+    .safety-reason-chip {
+      font-size: 11px;
+      padding: 2px 7px;
+      border-radius: 999px;
+      background: var(--surface-elevated);
+      border: 1px solid var(--border-subtle);
+      color: var(--text-secondary);
+      font-family: var(--font-mono);
+    }
+
+    .safety-actions-row {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      gap: 6px;
+    }
+
+    .safety-feedback {
+      font-size: 11px;
+      color: var(--ok-text);
+    }
+
     .wd-jump-pill.is-clickable:hover {
       filter: brightness(0.96);
       transform: translateY(-0.5px);
@@ -2681,6 +2777,57 @@
       </div>
     </section>
 
+    <!-- Band 1b: Safety Monitor Quota-Burn Audit (Quiet single line when OK/undetected; auto-expands on warn/critical) -->
+    <section id="safety-audit-card" class="band safety-strip" role="region" aria-label="Safety Monitor Audit">
+      <div class="safety-head-row">
+        <div class="safety-head-left">
+          <span class="band-title" data-i18n="safetyCardTitle">Safety Monitor</span>
+          <span id="safety-status-badge" class="meta-tag">--</span>
+          <span id="safety-inline-summary" class="safety-inline-summary" data-i18n="safetyChecking">Scanning Antigravity safety logs...</span>
+        </div>
+        <div class="band-actions">
+          <button id="safety-toggle-btn" type="button" onclick="toggleSafetyAuditDetails()" class="btn btn-ghost btn-sm" data-i18n="safetyDetailsBtn">Details</button>
+          <button id="safety-refresh-btn" type="button" onclick="refreshSafetyAudit(true)" class="btn btn-ghost btn-sm" data-i18n="refreshBtn" data-i18n-title="safetyRefreshTip" title="Force incremental re-scan of local Desktop/CLI safety logs">Refresh</button>
+        </div>
+      </div>
+
+      <div id="safety-details-body" class="safety-details-body hidden">
+        <div id="safety-diagnosis-text" class="safety-diagnosis"></div>
+
+        <div class="kpi-strip">
+          <div class="kpi-cell" data-i18n-title="safetyKpiPrecheckTip" title="sir_flash_lite pre-checks in rolling 5h window (~4,400 cliff triggers 429 fallback)">
+            <span class="kpi-label" data-i18n="safetyKpiPrecheck">5H PRE-CHECKS</span>
+            <span id="safety-kpi-prechecks" class="kpi-value kpi-value-sm">0 / 4,400</span>
+            <span id="safety-kpi-prechecks-sub" class="kpi-sub">0%</span>
+          </div>
+          <div class="kpi-cell" data-i18n-title="safetyKpiHeavyTip" title="severe_internal_risks_agy (gemini-4-hydrogen-sonar) heavy reviews up to 300K chars and false-alarm rate">
+            <span class="kpi-label" data-i18n="safetyKpiHeavy">HEAVY REVIEWS</span>
+            <span id="safety-kpi-heavy" class="kpi-value kpi-value-sm">0</span>
+            <span id="safety-kpi-heavy-sub" class="kpi-sub">avg 0K chars</span>
+          </div>
+          <div class="kpi-cell" data-i18n-title="safetyKpiHiddenTip" title="Hidden background safety requests vs total streamGenerateContent calls (correlated by tid)">
+            <span class="kpi-label" data-i18n="safetyKpiHidden">HIDDEN STREAM</span>
+            <span id="safety-kpi-hidden" class="kpi-value kpi-value-sm">--%</span>
+            <span id="safety-kpi-hidden-sub" class="kpi-sub">0 / 0 reqs</span>
+          </div>
+          <div class="kpi-cell" data-i18n-title="safetyKpi429Tip" title="Strict HTTP 429 / parent sir_flash_lite fallback count and cumulative monitor wait time">
+            <span class="kpi-label" data-i18n="safetyKpi429">429 / WAIT TAX</span>
+            <span id="safety-kpi-429" class="kpi-value kpi-value-sm">0 / 0s</span>
+            <span id="safety-kpi-429-sub" class="kpi-sub">est. 0 tok</span>
+          </div>
+        </div>
+
+        <div id="safety-reasons-row" class="safety-reasons-row hidden"></div>
+        <div id="safety-restart-note" class="muted-note hidden"></div>
+
+        <div class="safety-actions-row">
+          <button id="safety-handoff-btn" type="button" onclick="openSafetyHandoffBrief()" class="btn btn-primary btn-sm hidden" data-i18n="safetyHandoffBtn">Generate Handoff Brief</button>
+          <button id="safety-copy-report-btn" type="button" onclick="copySafetyAuditReport()" class="btn btn-secondary btn-sm" data-i18n="safetyCopyReportBtn">Copy Redacted Report</button>
+          <span id="safety-action-feedback" class="safety-feedback hidden"></span>
+        </div>
+      </div>
+    </section>
+
     <!-- Band 2: Sidecar Stall Guard (Dual-Source State Machine & Rescue Brief) -->
     <section id="watchdog-card" class="band">
       <div class="band-head">
@@ -3421,7 +3568,40 @@
         versionErrLocked: 'Plugin files are locked by a running process. Close Antigravity or re-run the installer.',
         versionErrRecovery: 'Update and rollback failed; backup preserved for manual recovery.',
         versionErrInstall: 'Failed to replace installed plugin files.',
-        versionErrRestoredSuffix: ' Previous files were restored.'
+        versionErrRestoredSuffix: ' Previous files were restored.',
+        safetyCardTitle: 'Safety Monitor',
+        safetyChecking: 'Scanning local safety logs...',
+        safetyDetailsBtn: 'Details',
+        safetyHideBtn: 'Hide',
+        safetyRefreshTip: 'Force incremental re-scan of local Antigravity Desktop/CLI safety logs',
+        safetyKpiPrecheck: '5H PRE-CHECKS',
+        safetyKpiPrecheckTip: 'sir_flash_lite pre-checks in rolling 5h window (~4,400 cliff triggers 429 fallback)',
+        safetyKpiHeavy: 'HEAVY REVIEWS',
+        safetyKpiHeavyTip: 'severe_internal_risks_agy (gemini-4-hydrogen-sonar) heavy reviews up to 300K chars and false-alarm rate',
+        safetyKpiHidden: 'HIDDEN STREAM',
+        safetyKpiHiddenTip: 'Hidden background safety requests vs total streamGenerateContent calls (correlated by tid)',
+        safetyKpi429: '429 / WAIT TAX',
+        safetyKpi429Tip: 'Strict HTTP 429 / parent sir_flash_lite fallback count and cumulative monitor wait time',
+        safetyHandoffBtn: 'Handoff to New Window',
+        safetyCopyReportBtn: 'Copy Redacted Report',
+        safetyCopied: 'Copied redacted report!',
+        safetyCopyFailed: 'Copy failed',
+        safetyBadgeNotDetected: 'No Logs',
+        safetyBadgeNoEvents: 'Idle',
+        safetyBadgeDisabled: 'OFF',
+        safetyBadgeOk: 'OK',
+        safetyBadgeWarn: 'WARN',
+        safetyBadgeBurst: 'HEAVY BURST',
+        safetyBadgeAvalanche: '429 AVALANCHE',
+        safetyInlineOk: '{pre}/{lim} pre-checks ({h}h) · {hidden} hidden reqs',
+        safetyInlineNotDetected: 'No Antigravity safety logs found (silent fallback)',
+        safetyInlineNoEvents: '{files} log(s) scanned · 0 safety events in {h}h',
+        safetyInlineDisabled: 'Disabled in config',
+        safetyFalseAlarmFmt: '{falseCnt} false ({pct}%) · avg {avgK}K',
+        safetyAvgCharsFmt: 'avg {avgK}K chars',
+        safetyReqsFmt: '{hidden} / {total} reqs',
+        safetyEstTokFmt: 'est. ~{low}–{high} tok',
+        safetyRestartNote: 'Desktop log truncated on restart ({ts}); persisted rolling buckets preserved ({count} truncation(s) survived).'
       },
       zh: {
         pageTitle: 'agy-dart 上下文检查器',
@@ -3902,7 +4082,40 @@
         versionErrLocked: '部分插件文件被运行中进程占用，请关闭 Antigravity 或改用命令行安装脚本更新。',
         versionErrRecovery: '更新与回滚均失败，已保留备份目录以便手动恢复。',
         versionErrInstall: '替换已安装插件文件时出错。',
-        versionErrRestoredSuffix: ' 已自动回滚恢复原版本文件。'
+        versionErrRestoredSuffix: ' 已自动回滚恢复原版本文件。',
+        safetyCardTitle: '后台安全审查',
+        safetyChecking: '正在扫描本地安全审查日志...',
+        safetyDetailsBtn: '详情',
+        safetyHideBtn: '收起',
+        safetyRefreshTip: '立即增量重扫本机 Antigravity 桌面端与 CLI 安全审查日志',
+        safetyKpiPrecheck: '5h 轻量预检',
+        safetyKpiPrecheckTip: '5 小时滚动窗口内 sir_flash_lite 预检次数（逼近 ~4,400 次将触发 429 降级雪崩）',
+        safetyKpiHeavy: '重型复审',
+        safetyKpiHeavyTip: 'severe_internal_risks_agy（gemini-4-hydrogen-sonar）重型复审次数、最高 300K 字符轨迹及误报率',
+        safetyKpiHidden: '隐藏请求占比',
+        safetyKpiHiddenTip: '按 tid 精确归因的后台审查请求占总 streamGenerateContent 请求比例',
+        safetyKpi429: '429 / 阻塞耗时',
+        safetyKpi429Tip: '严格过滤后的 429/降级次数与累计审查阻塞秒数',
+        safetyHandoffBtn: '一键 Handoff 换新窗',
+        safetyCopyReportBtn: '复制脱敏报告',
+        safetyCopied: '已复制脱敏报告',
+        safetyCopyFailed: '复制失败',
+        safetyBadgeNotDetected: '无日志',
+        safetyBadgeNoEvents: '静默',
+        safetyBadgeDisabled: '已关闭',
+        safetyBadgeOk: '正常',
+        safetyBadgeWarn: '逼近阈值',
+        safetyBadgeBurst: '重型连环复审',
+        safetyBadgeAvalanche: '429 雪崩',
+        safetyInlineOk: '{h}h 预检 {pre}/{lim} · 隐藏请求 {hidden}',
+        safetyInlineNotDetected: '未检测到本机安全审查日志（静默降级）',
+        safetyInlineNoEvents: '已扫 {files} 份日志 · 近 {h}h 无审查记录',
+        safetyInlineDisabled: '已在配置中关闭',
+        safetyFalseAlarmFmt: '误报 {falseCnt} 次 ({pct}%) · 均长 {avgK}K',
+        safetyAvgCharsFmt: '均长 {avgK}K 字符',
+        safetyReqsFmt: '{hidden} / {total} 次请求',
+        safetyEstTokFmt: '估算 ~{low}–{high} tok',
+        safetyRestartNote: '桌面端上次重启已清空旧日志（{ts}），agy-dart 已持久化保留 5h 账本（已跨 {count} 次重启截断）。'
       }
     };
 
@@ -3977,6 +4190,11 @@
     let cachedKv = null;
     let cachedResume = null;
     let cachedDoctor = null;
+    let cachedSafetyAudit = null;
+    let safetyUserExpanded = null;
+    let safetyAuditTimer = null;
+    let safetyAuditInitDone = false;
+    let lastSafetyAuditFetchMs = 0;
     let cachedCompactAdvice = 'none';
     let cachedLastUpdatedDate = null;
     let cachedDisconnectedErr = null;
@@ -4601,6 +4819,9 @@
       }
       if (cachedResume) {
         renderRecentSourcesAndEvents(cachedResume);
+      }
+      if (cachedSafetyAudit) {
+        renderSafetyAuditCard(cachedSafetyAudit);
       }
       if (cachedKv) {
         renderKvCacheCard(cachedKv);
@@ -5590,6 +5811,256 @@
       } finally {
         if (refreshIcon && reqSeq === refreshSeq) {
           setTimeout(() => refreshIcon.classList.remove('spinning'), 400);
+        }
+      }
+    }
+
+    function formatCompactK(n) {
+      const v = Number(n) || 0;
+      if (v >= 1000000) return `${(v / 1000000).toFixed(1)}M`;
+      if (v >= 1000) return `${Math.round(v / 1000)}K`;
+      return String(v);
+    }
+
+    function renderSafetyAuditCard(data) {
+      const card = document.getElementById('safety-audit-card');
+      if (!card || !data || typeof data !== 'object') return;
+      const badgeEl = document.getElementById('safety-status-badge');
+      const inlineEl = document.getElementById('safety-inline-summary');
+      const detailsEl = document.getElementById('safety-details-body');
+      const toggleBtn = document.getElementById('safety-toggle-btn');
+      const diagEl = document.getElementById('safety-diagnosis-text');
+      const preEl = document.getElementById('safety-kpi-prechecks');
+      const preSubEl = document.getElementById('safety-kpi-prechecks-sub');
+      const heavyEl = document.getElementById('safety-kpi-heavy');
+      const heavySubEl = document.getElementById('safety-kpi-heavy-sub');
+      const hiddenEl = document.getElementById('safety-kpi-hidden');
+      const hiddenSubEl = document.getElementById('safety-kpi-hidden-sub');
+      const kpi429El = document.getElementById('safety-kpi-429');
+      const kpi429SubEl = document.getElementById('safety-kpi-429-sub');
+      const reasonsEl = document.getElementById('safety-reasons-row');
+      const restartEl = document.getElementById('safety-restart-note');
+      const handoffBtn = document.getElementById('safety-handoff-btn');
+
+      const status = String(data.status || 'not_detected');
+      const severity = String(data.severity || 'none');
+      const isAlerting =
+        severity === 'warn' ||
+        severity === 'critical' ||
+        status === '429_avalanche' ||
+        status === 'heavy_burst_or_sticky' ||
+        status === 'approaching_quota';
+
+      card.classList.remove('is-warn', 'is-critical');
+      if (severity === 'critical' || status === '429_avalanche') {
+        card.classList.add('is-critical');
+      } else if (isAlerting) {
+        card.classList.add('is-warn');
+      }
+
+      if (badgeEl) {
+        badgeEl.classList.remove('is-ok', 'is-warn', 'is-danger', 'is-info');
+        if (status === '429_avalanche') {
+          badgeEl.textContent = t('safetyBadgeAvalanche');
+          badgeEl.classList.add('is-danger');
+        } else if (status === 'heavy_burst_or_sticky') {
+          badgeEl.textContent = t('safetyBadgeBurst');
+          badgeEl.classList.add(severity === 'critical' ? 'is-danger' : 'is-warn');
+        } else if (status === 'approaching_quota') {
+          badgeEl.textContent = t('safetyBadgeWarn');
+          badgeEl.classList.add('is-warn');
+        } else if (status === 'ok') {
+          badgeEl.textContent = t('safetyBadgeOk');
+          badgeEl.classList.add('is-ok');
+        } else if (status === 'disabled') {
+          badgeEl.textContent = t('safetyBadgeDisabled');
+        } else if (status === 'no_safety_events') {
+          badgeEl.textContent = t('safetyBadgeNoEvents');
+        } else {
+          badgeEl.textContent = t('safetyBadgeNotDetected');
+        }
+      }
+
+      const w = data.window || {};
+      const sr = data.streamRequests || {};
+      const src = data.sources || {};
+      const winH = Number(data.windowHours || 5);
+      const hiddenPctStr = sr.hiddenSharePct !== null && sr.hiddenSharePct !== undefined ? `${sr.hiddenSharePct}%` : '--%';
+      const diagMsg = currentLang === 'zh' ? (data.summaryZh || data.summaryEn || '') : (data.summaryEn || data.summaryZh || '');
+
+      if (inlineEl) {
+        if (isAlerting) {
+          inlineEl.textContent = diagMsg;
+        } else if (status === 'ok') {
+          inlineEl.textContent = t('safetyInlineOk', {
+            pre: Number(w.precheckCount || 0).toLocaleString(),
+            lim: Number(w.precheckLimit || 4400).toLocaleString(),
+            h: winH,
+            hidden: hiddenPctStr
+          });
+        } else if (status === 'no_safety_events') {
+          inlineEl.textContent = t('safetyInlineNoEvents', {
+            files: Number(src.filesScanned || 0),
+            h: winH
+          });
+        } else if (status === 'disabled') {
+          inlineEl.textContent = t('safetyInlineDisabled');
+        } else {
+          inlineEl.textContent = t('safetyInlineNotDetected');
+        }
+      }
+
+      const shouldExpand = safetyUserExpanded !== null ? safetyUserExpanded : isAlerting;
+      if (detailsEl && detailsEl.classList) {
+        if (shouldExpand) detailsEl.classList.remove('hidden');
+        else detailsEl.classList.add('hidden');
+      }
+      if (toggleBtn) {
+        toggleBtn.textContent = shouldExpand ? t('safetyHideBtn') : t('safetyDetailsBtn');
+      }
+
+      if (diagEl) diagEl.textContent = diagMsg;
+
+      if (preEl) {
+        preEl.textContent = `${Number(w.precheckCount || 0).toLocaleString()} / ${Number(w.precheckLimit || 4400).toLocaleString()}`;
+      }
+      if (preSubEl) {
+        preSubEl.textContent = `${Number(w.precheckUtilizationPct || 0)}%`;
+      }
+      if (heavyEl) {
+        heavyEl.textContent = String(Number(w.heavyReviewCount || 0));
+      }
+      if (heavySubEl) {
+        const avgK = Math.round(Number(w.heavyAvgChars || 0) / 1000);
+        if (Number(w.heavyTriggeredFalse || 0) > 0 && w.heavyFalseAlarmRatePct !== null && w.heavyFalseAlarmRatePct !== undefined) {
+          heavySubEl.textContent = t('safetyFalseAlarmFmt', {
+            falseCnt: Number(w.heavyTriggeredFalse || 0),
+            pct: w.heavyFalseAlarmRatePct,
+            avgK
+          });
+        } else {
+          heavySubEl.textContent = t('safetyAvgCharsFmt', { avgK });
+        }
+      }
+      if (hiddenEl) {
+        hiddenEl.textContent = hiddenPctStr;
+      }
+      if (hiddenSubEl) {
+        hiddenSubEl.textContent = t('safetyReqsFmt', {
+          hidden: Number(sr.hiddenTotal || 0),
+          total: Number(sr.total || 0)
+        });
+      }
+      if (kpi429El) {
+        const c429 = Number(w.rateLimit429Count || 0) + Number(w.fallbackEscalationCount || 0);
+        kpi429El.textContent = `${c429} / ${Number(w.totalLatencySec || 0)}s`;
+      }
+      if (kpi429SubEl) {
+        kpi429SubEl.textContent = t('safetyEstTokFmt', {
+          low: formatCompactK(w.estimatedHiddenInputTokensLow || 0),
+          high: formatCompactK(w.estimatedHiddenInputTokensHigh || 0)
+        });
+      }
+
+      if (reasonsEl) {
+        const reasons = Array.isArray(data.triggerReasons) ? data.triggerReasons.slice(0, 6) : [];
+        if (reasons.length > 0) {
+          reasonsEl.innerHTML = reasons
+            .map((r) => `<span class="safety-reason-chip">${escapeHtml(r.reason)} · ${Number(r.count)} (${Number(r.pct)}%)</span>`)
+            .join('');
+          reasonsEl.classList.remove('hidden');
+        } else {
+          reasonsEl.innerHTML = '';
+          reasonsEl.classList.add('hidden');
+        }
+      }
+
+      if (restartEl) {
+        const lastTs = src.lastDesktopRestart?.ts || '';
+        const truncs = Number(src.restartTruncationsDetected || 0);
+        if (lastTs || truncs > 0) {
+          restartEl.textContent = t('safetyRestartNote', {
+            ts: lastTs || 'detected',
+            count: truncs
+          });
+          restartEl.classList.remove('hidden');
+        } else {
+          restartEl.textContent = '';
+          restartEl.classList.add('hidden');
+        }
+      }
+
+      if (handoffBtn && handoffBtn.classList) {
+        if (isAlerting) handoffBtn.classList.remove('hidden');
+        else handoffBtn.classList.add('hidden');
+      }
+    }
+
+    function toggleSafetyAuditDetails() {
+      const detailsEl = document.getElementById('safety-details-body');
+      const isHidden = detailsEl && detailsEl.classList && typeof detailsEl.classList.contains === 'function'
+        ? detailsEl.classList.contains('hidden')
+        : true;
+      safetyUserExpanded = isHidden;
+      if (cachedSafetyAudit) {
+        renderSafetyAuditCard(cachedSafetyAudit);
+      } else if (detailsEl && detailsEl.classList) {
+        if (isHidden) detailsEl.classList.remove('hidden');
+        else detailsEl.classList.add('hidden');
+      }
+    }
+
+    function scheduleInitialSafetyAudit() {
+      if (safetyAuditInitDone) return;
+      safetyAuditInitDone = true;
+      safetyAuditTimer = setTimeout(() => {
+        safetyAuditTimer = null;
+        if (typeof document === 'undefined' || document.hidden !== true) {
+          return refreshSafetyAudit(false);
+        }
+      }, 400);
+    }
+
+    async function refreshSafetyAudit(force = true) {
+      lastSafetyAuditFetchMs = Date.now();
+      try {
+        const res = await apiFetch('/api/safety-audit', {
+          method: 'POST',
+          body: JSON.stringify({ forceRefresh: Boolean(force) })
+        });
+        if (!res.ok) return;
+        const sa = await res.json();
+        cachedSafetyAudit = sa;
+        renderSafetyAuditCard(sa);
+      } catch {}
+    }
+
+    function openSafetyHandoffBrief() {
+      toggleHandoffDrawer(true);
+      loadHandoffBrief({ forceRefresh: true });
+    }
+
+    async function copySafetyAuditReport() {
+      const fb = document.getElementById('safety-action-feedback');
+      try {
+        const res = await apiFetch('/api/safety-audit', {
+          method: 'POST',
+          body: JSON.stringify({ includeMarkdown: true })
+        });
+        if (!res.ok) throw new Error('HTTP ' + res.status);
+        const sa = await res.json();
+        const md = typeof sa.markdown === 'string' && sa.markdown ? sa.markdown : JSON.stringify(sa, null, 2);
+        const ok = await copyTextToClipboard(md);
+        if (fb) {
+          fb.textContent = ok ? t('safetyCopied') : t('safetyCopyFailed');
+          fb.classList.remove('hidden');
+          setTimeout(() => fb.classList.add('hidden'), 2600);
+        }
+      } catch {
+        if (fb) {
+          fb.textContent = t('safetyCopyFailed');
+          fb.classList.remove('hidden');
+          setTimeout(() => fb.classList.add('hidden'), 2600);
         }
       }
     }
@@ -11418,9 +11889,13 @@
     applyLanguageUi();
     refreshData(true);
     scheduleAutoVersionCheck();
+    scheduleInitialSafetyAudit();
     pollTimer = setInterval(() => {
       if (typeof document !== 'undefined' && document.hidden === true) return;
       refreshData(false);
+      if (Date.now() - lastSafetyAuditFetchMs >= 15000) {
+        void refreshSafetyAudit(false);
+      }
     }, 3000);
     if (typeof document !== 'undefined' && typeof document.addEventListener === 'function') {
       document.addEventListener('visibilitychange', () => {
@@ -11442,6 +11917,10 @@
       if (autoVersionCheckTimer !== null) {
         clearTimeout(autoVersionCheckTimer);
         autoVersionCheckTimer = null;
+      }
+      if (safetyAuditTimer !== null) {
+        clearTimeout(safetyAuditTimer);
+        safetyAuditTimer = null;
       }
       if (versionReloadTimer !== null) {
         clearTimeout(versionReloadTimer);
