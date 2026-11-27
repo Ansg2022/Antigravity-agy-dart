@@ -47,7 +47,14 @@ test("P0-2.1: MODEL_CACHE_PROFILES covers Gemini 4 / Neon / Carbon / Argon / Hyd
     assert.ok(profile.cacheWrite1hMultiplier >= profile.cacheWriteMultiplier, `${profile.id} cacheWrite1hMultiplier >= 5m`);
   }
 
-  // Gemini 4 & Antigravity next-gen codenames: 512k default effective window (Antigravity auto-compaction ceiling), 90% discount, 1.0x implicit cache write
+  // Gemini 4 & Antigravity next-gen codenames: 512k default effective window (Antigravity auto-compaction ceiling),
+  // 95% implicit cache read discount, 4,096-token min cacheable threshold, 2,050-token multi-turn delta rule, and per-variant pricing.
+  const expectedGemini4Price = (name) => {
+    if (/(?:^|[-_/\s.])(?:carbon|argon)(?:$|[-_/\s.\d])/i.test(name)) return 4.00;
+    if (/(?:^|[-_/\s.])neon(?:$|[-_/\s.\d])/i.test(name)) return 3.00;
+    if (/(?:^|[-_/\s.])hydrogen(?:$|[-_/\s.\d])/i.test(name)) return 1.50;
+    return 2.00;
+  };
   for (const name of [
     "gemini-4",
     "gemini-4-pro",
@@ -71,21 +78,25 @@ test("P0-2.1: MODEL_CACHE_PROFILES covers Gemini 4 / Neon / Carbon / Argon / Hyd
     assert.equal(p.warnTokens, 332800);
     assert.equal(p.criticalTokens, 409600);
     assert.equal(p.coldCompactTokens, 153600);
-    assert.equal(p.cacheDiscountRate, 0.90);
+    assert.equal(p.cacheDiscountRate, 0.95);
+    assert.equal(p.minCacheableTokens, 4096);
+    assert.equal(p.minTurnDeltaForFullCache, 2050);
     assert.equal(p.cacheWriteMultiplier, 1.0);
     assert.equal(p.cacheWrite1hMultiplier, 1.0);
-    assert.equal(p.inputPer1M, 2.00);
+    assert.equal(p.inputPer1M, expectedGemini4Price(name), `Expected ${name} inputPer1M`);
   }
 
-  // Explicit 1M / 1000k Gemini 4 variants preserve 1M window
+  // Explicit 1M / 1000k Gemini 4 variants preserve 1M window & per-variant pricing
   for (const g41mName of ["google/carbon-1m", "gemini-4-1m", "gemini-4-pro[1m]", "gemini-4-neon-1000k"]) {
     const p = resolveModelProfile(g41mName);
     assert.equal(p.id, "gemini-4-1m", `Expected ${g41mName} -> gemini-4-1m, got ${p.id}`);
     assert.equal(p.windowTokens, 1000000);
-    assert.equal(p.cacheDiscountRate, 0.90);
+    assert.equal(p.cacheDiscountRate, 0.95);
+    assert.equal(p.minCacheableTokens, 4096);
+    assert.equal(p.minTurnDeltaForFullCache, 2050);
     assert.equal(p.cacheWriteMultiplier, 1.0);
     assert.equal(p.cacheWrite1hMultiplier, 1.0);
-    assert.equal(p.inputPer1M, 2.00);
+    assert.equal(p.inputPer1M, expectedGemini4Price(g41mName), `Expected ${g41mName} inputPer1M`);
   }
 
   // Word-boundary safety: unrelated words containing "argon"/"neon" must NOT false-match

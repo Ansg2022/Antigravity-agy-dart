@@ -58,13 +58,17 @@ export const MODEL_CACHE_PROFILES = Object.freeze([
   },
   // Gemini 4 & Antigravity next-gen codenames (Neon / Carbon / Argon / Hydrogen)
   // Antigravity host enforces auto-compaction at 512k by default; honor explicit 1m/1000k tags first.
+  // Gemini 4 uses implicit caching only: 95% cache read discount, 4,096-token minimum, and 2,050-token
+  // multi-turn delta threshold (smaller additions re-process the trailing 2,050 tokens at standard rate).
   {
     id: "gemini-4-1m",
     pattern: /(?:gemini[-_/\s]?4(?:\.\d+)?\b|(?:^|[-_/\s.])(?:neon|carbon|argon|hydrogen)(?=$|[-_/\s.\d])).*(?:[-_/\s[(])(?:1m|1000k)\b/i,
     windowTokens: 1000000,
     ttlSec: 300,
-    cacheDiscountRate: 0.90,
+    cacheDiscountRate: 0.95,
     inputPer1M: 2.00,
+    minCacheableTokens: 4096,
+    minTurnDeltaForFullCache: 2050,
     cacheWriteMultiplier: 1.0,
     cacheWrite1hMultiplier: 1.0
   },
@@ -73,8 +77,10 @@ export const MODEL_CACHE_PROFILES = Object.freeze([
     pattern: /(?:gemini[-_/\s]?4(?:\.\d+)?\b|(?:^|[-_/\s.])(?:neon|carbon|argon|hydrogen)(?:$|[-_/\s.\d]))/i,
     windowTokens: 512000,
     ttlSec: 300,
-    cacheDiscountRate: 0.90,
+    cacheDiscountRate: 0.95,
     inputPer1M: 2.00,
+    minCacheableTokens: 4096,
+    minTurnDeltaForFullCache: 2050,
     cacheWriteMultiplier: 1.0,
     cacheWrite1hMultiplier: 1.0
   },
@@ -85,6 +91,7 @@ export const MODEL_CACHE_PROFILES = Object.freeze([
     ttlSec: 300,
     cacheDiscountRate: 0.90,
     inputPer1M: 2.00,
+    minCacheableTokens: 4096,
     cacheWriteMultiplier: 1.0,
     cacheWrite1hMultiplier: 1.0
   },
@@ -95,6 +102,7 @@ export const MODEL_CACHE_PROFILES = Object.freeze([
     ttlSec: 300,
     cacheDiscountRate: 0.75,
     inputPer1M: 1.25,
+    minCacheableTokens: 2048,
     cacheWriteMultiplier: 1.0,
     cacheWrite1hMultiplier: 1.0
   },
@@ -197,6 +205,8 @@ const DEFAULT_MODEL_PROFILE = Object.freeze({
   ttlSec: DEFAULT_CACHE_TTL_SEC,
   cacheDiscountRate: DEFAULT_CACHE_DISCOUNT_RATE,
   inputPer1M: DEFAULT_INPUT_PRICE_PER_1M,
+  minCacheableTokens: MIN_CACHEABLE_CONTEXT_TOKENS,
+  minTurnDeltaForFullCache: 0,
   cacheWriteMultiplier: DEFAULT_CACHE_WRITE_MULTIPLIER,
   cacheWrite1hMultiplier: DEFAULT_CACHE_WRITE_MULTIPLIER
 });
@@ -211,7 +221,21 @@ function resolveReferenceInputPrice(matched, rawModelName) {
     }
     return matched.inputPer1M;
   }
+  if (matched.id === "gemini-4-1m" || matched.id === "gemini-4-512k") {
+    if (/(?:^|[-_/\s.])(?:carbon|argon)(?:$|[-_/\s.\d])/i.test(rawModelName)) return 4.00;
+    if (/(?:^|[-_/\s.])neon(?:$|[-_/\s.\d])/i.test(rawModelName)) return 3.00;
+    if (/(?:^|[-_/\s.])hydrogen(?:$|[-_/\s.\d])/i.test(rawModelName)) return 1.50;
+    return matched.inputPer1M;
+  }
   return matched.inputPer1M ?? DEFAULT_INPUT_PRICE_PER_1M;
+}
+
+function resolveMinCacheableTokens(matched, rawModelName) {
+  if (matched.id === "gemini-flash-1m" && rawModelName) {
+    if (/gemini[-_/\s]?[34](?:\.\d+)?\b/i.test(rawModelName)) return 4096;
+    if (/gemini[-_/\s]?2\.5\b/i.test(rawModelName)) return 2048;
+  }
+  return matched.minCacheableTokens ?? MIN_CACHEABLE_CONTEXT_TOKENS;
 }
 
 /** Match model name against lightweight model profile table and compute proportional watermarks */
@@ -227,12 +251,16 @@ export function resolveModelProfile(modelName) {
     }
   }
   const inputPer1M = resolveReferenceInputPrice(matched, raw);
+  const minCacheableTokens = resolveMinCacheableTokens(matched, raw);
+  const minTurnDeltaForFullCache = matched.minTurnDeltaForFullCache ?? 0;
   return {
     id: matched.id,
     windowTokens: matched.windowTokens,
     ttlSec: matched.ttlSec,
     cacheDiscountRate: matched.cacheDiscountRate,
     inputPer1M,
+    minCacheableTokens,
+    minTurnDeltaForFullCache,
     cacheWriteMultiplier: matched.cacheWriteMultiplier ?? DEFAULT_CACHE_WRITE_MULTIPLIER,
     cacheWrite1hMultiplier: matched.cacheWrite1hMultiplier ?? matched.cacheWriteMultiplier ?? DEFAULT_CACHE_WRITE_MULTIPLIER,
     warnTokens: Math.round(matched.windowTokens * WARN_WINDOW_RATIO),
@@ -250,13 +278,18 @@ export function computeCacheWarmth({
   weightedHitRate = 0,
   criticalTokens = CONTEXT_CRITICAL_TOKENS,
   coldCompactTokens = 60000,
-  delayHotMinTokens = 30000
+  delayHotMinTokens = 30000,
+  minCacheableTokens = MIN_CACHEABLE_CONTEXT_TOKENS
 } = {}) {
   const safeTtl = Number.isFinite(ttlSec) && ttlSec > 0 ? ttlSec : DEFAULT_CACHE_TTL_SEC;
   const safeColdMin = Number.isFinite(coldCompactTokens) && coldCompactTokens > 0 ? coldCompactTokens : 60000;
   const safeDelayMin = Number.isFinite(delayHotMinTokens) && delayHotMinTokens > 0 ? delayHotMinTokens : 30000;
+  const safeMinCacheable =
+    Number.isFinite(minCacheableTokens) && minCacheableTokens > 0
+      ? minCacheableTokens
+      : MIN_CACHEABLE_CONTEXT_TOKENS;
   let cacheTemperature = "cold";
-  if (currentContextTokens >= MIN_CACHEABLE_CONTEXT_TOKENS && Number.isFinite(idleSeconds)) {
+  if (currentContextTokens >= safeMinCacheable && Number.isFinite(idleSeconds)) {
     if (idleSeconds < Math.min(60, safeTtl)) cacheTemperature = "hot";
     else if (idleSeconds < safeTtl) cacheTemperature = "warm";
     else cacheTemperature = "cold";

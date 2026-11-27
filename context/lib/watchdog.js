@@ -18,6 +18,7 @@ import crypto from "node:crypto";
 import fs from "node:fs";
 import { spawn } from "node:child_process";
 import { getEffectiveConfig, parseUiLang } from "./config.js";
+import { getConversationViaApi, isConversationServiceConfigured } from "./conversation-api.js";
 import { buildHandoffBrief, inferWorkspaceFromStore, isSafeWorkspaceDir } from "./handoff.js";
 import { isSecretRedactionEnabled } from "./security.js";
 import {
@@ -43,6 +44,7 @@ import {
   classifyToolExecutionKind,
   classifyTranscriptGenesisFile,
   classifyTranscriptGenesisSteps,
+  clearConversationSummaryCache,
   decodeFileUriOrPath,
   deriveLlmSubphase,
   detectSubagentFromTranscriptFile,
@@ -93,6 +95,7 @@ export {
   classifyToolExecutionKind,
   classifyTranscriptGenesisFile,
   classifyTranscriptGenesisSteps,
+  clearConversationSummaryCache,
   decodeFileUriOrPath,
   deriveLlmSubphase,
   detectSubagentFromTranscriptFile,
@@ -1682,6 +1685,9 @@ export class WatchdogMonitor {
     this._hasCustomLookupSummary = typeof options.lookupSummaryFn === "function";
     this.lookupSummaryFn =
       options.lookupSummaryFn || ((convId, opts = {}) => lookupConversationSummary(convId, opts));
+    this._hasCustomFetchConversation = typeof options.fetchConversationFn === "function";
+    this.fetchConversationFn =
+      typeof options.fetchConversationFn === "function" ? options.fetchConversationFn : null;
     this.notifyFn = options.notifyFn || sendDesktopNotification;
     this.keepaliveSendFn = typeof options.keepaliveSendFn === "function" ? options.keepaliveSendFn : null;
     this.focusWindowFn = options.focusWindowFn || focusDesktopConversationWindow;
@@ -1716,6 +1722,10 @@ export class WatchdogMonitor {
     this._narrowMarginSkipped = new Map();
     this._keepaliveInFlight = new Map();
     this._subagentIdentityCache = new Map();
+    this._convApiCache = new Map();
+    this._convApiInFlight = new Set();
+    this._convApiUnsupportedUntilTs = 0;
+    this._lastIdleLeasePruneTs = 0;
     this._lastTtlNotifyGlobalTs = 0;
     this._fallbackPendingJump = null;
     this.statSyncCount = 0;
@@ -2008,6 +2018,101 @@ export class WatchdogMonitor {
     return false;
   }
 
+  _canUseConversationApi(store) {
+    if (this._hasCustomFetchConversation) return true;
+    if (this._hasCustomLookupSummary) return false;
+    return this._shouldAllowDefaultSummaryDb(store) && isConversationServiceConfigured(process.env);
+  }
+
+  _rememberConversationApiRecord(conversationId, record, nowMs = this.nowFn(), ttlMs = 15_000) {
+    if (!conversationId) return;
+    if (this._convApiCache.size >= 256 && !this._convApiCache.has(conversationId)) {
+      const oldest = this._convApiCache.keys().next().value;
+      if (oldest !== undefined) this._convApiCache.delete(oldest);
+    }
+    this._convApiCache.set(conversationId, {
+      ts: nowMs,
+      expiresAt: nowMs + ttlMs,
+      record
+    });
+  }
+
+  _getCachedConversationApiRecord(conversationId, nowMs = this.nowFn()) {
+    const entry = this._convApiCache.get(conversationId);
+    if (!entry) return null;
+    if (nowMs >= entry.expiresAt) return null;
+    return entry.record || null;
+  }
+
+  async syncConversationApiStatus(conversationId, { store = null, force = false } = {}) {
+    const cleanId = sanitizeConversationId(conversationId);
+    if (!cleanId || cleanId === "__unbound__") return null;
+    const activeStore = store || this.getStore?.() || null;
+    if (!this._canUseConversationApi(activeStore)) return null;
+    const nowMs = this.nowFn();
+    if (!force && nowMs < this._convApiUnsupportedUntilTs) return null;
+    if (!force) {
+      const cached = this._getCachedConversationApiRecord(cleanId, nowMs);
+      if (cached) return cached;
+    }
+    if (this._convApiInFlight.has(cleanId)) return null;
+    this._convApiInFlight.add(cleanId);
+    try {
+      const res = this.fetchConversationFn
+        ? await this.fetchConversationFn(cleanId)
+        : await getConversationViaApi(cleanId);
+      const doneNow = this.nowFn();
+      if (res?.unsupported) {
+        this._convApiUnsupportedUntilTs = doneNow + 60_000;
+        return null;
+      }
+      if (res && res.ok && res.found) {
+        this._rememberConversationApiRecord(cleanId, res, doneNow, 15_000);
+        if (res.isSubagent) {
+          this._rememberSubagentIdentity(cleanId, true, { definitive: true, nowMs: doneNow });
+        }
+        return res;
+      }
+      return null;
+    } catch {
+      return null;
+    } finally {
+      this._convApiInFlight.delete(cleanId);
+    }
+  }
+
+  _scheduleConversationApiRefresh(store, conversationId, nowMs = this.nowFn()) {
+    if (!this._canUseConversationApi(store)) return;
+    if (nowMs < this._convApiUnsupportedUntilTs) return;
+    if (this._getCachedConversationApiRecord(conversationId, nowMs)) return;
+    if (this._convApiInFlight.has(conversationId)) return;
+    void this.syncConversationApiStatus(conversationId, { store });
+  }
+
+  _pruneExpiredIdleLeases(store, leases, nowWallMs) {
+    if (!store || !Array.isArray(leases) || leases.length === 0) return leases;
+    if (this._lastIdleLeasePruneTs > 0 && nowWallMs - this._lastIdleLeasePruneTs < 5 * 60_000) {
+      return leases;
+    }
+    this._lastIdleLeasePruneTs = nowWallMs;
+    const kept = [];
+    for (const lease of leases) {
+      if (
+        lease &&
+        lease.phase === WATCHDOG_PHASES.IDLE &&
+        lease.subphase !== "stopped_bg_pending" &&
+        (lease.updatedTs <= 0 || nowWallMs - lease.updatedTs > MAX_IDLE_LEASE_RETENTION_MS)
+      ) {
+        try {
+          store.deleteMeta?.(getWatchdogLeaseKey(lease.conversationId));
+        } catch {}
+        continue;
+      }
+      kept.push(lease);
+    }
+    return kept;
+  }
+
   _isConversationSubagent(store, conversationId, leaseInput = null, { requireDefinitive = false } = {}) {
     const cleanId = sanitizeConversationId(conversationId);
     if (!cleanId || cleanId === "__unbound__") return false;
@@ -2032,6 +2137,13 @@ export class WatchdogMonitor {
     }
 
     const nowMs = this.nowFn();
+    const apiRec = this._getCachedConversationApiRecord(cleanId, nowMs);
+    if (apiRec && apiRec.found && apiRec.isSubagent) {
+      this._rememberSubagentIdentity(cleanId, true, { definitive: true, nowMs });
+      return true;
+    }
+    this._scheduleConversationApiRefresh(store, cleanId, nowMs);
+
     const cached = this._subagentIdentityCache.get(cleanId);
     // A child can gain its official parent link after its title and transcript exist.
     // Only a positive worker identity may bypass the final pre-send check.
@@ -2159,6 +2271,12 @@ export class WatchdogMonitor {
   _isConversationArchived(store, conversationId, leaseInput = null) {
     const cleanId = sanitizeConversationId(conversationId);
     if (!cleanId || cleanId === "__unbound__") return false;
+    const nowMs = this.nowFn();
+    const apiRec = this._getCachedConversationApiRecord(cleanId, nowMs);
+    if (apiRec && apiRec.found) {
+      return Boolean(apiRec.archived);
+    }
+    this._scheduleConversationApiRefresh(store, cleanId, nowMs);
     const lease =
       leaseInput && leaseInput.conversationId === cleanId
         ? leaseInput
@@ -2331,7 +2449,18 @@ export class WatchdogMonitor {
         : profile?.windowTokens || 200_000;
     const effectivePct = isCustomOverride ? 0 : globalPct;
     const pctMinTokens = effectivePct > 0 ? Math.round((windowTokens * effectivePct) / 100) : 0;
-    return { globalPct, effectivePct, windowTokens, pctMinTokens };
+    const tailReprocessTokens = profile?.minTurnDeltaForFullCache || 0;
+    // Gemini 4 re-processes the trailing 2,050 tokens on small keepalive pings (< 2,050 token delta);
+    // require at least 10k cached context before auto-keepalive is ROI-positive.
+    const modelRoiMinTokens = !isCustomOverride && tailReprocessTokens > 0 ? 10000 : 0;
+    return {
+      globalPct,
+      effectivePct,
+      windowTokens,
+      pctMinTokens,
+      tailReprocessTokens,
+      modelRoiMinTokens
+    };
   }
 
   _resolveTtlKeepaliveEnabled(store, cfg, conversationId = "", lease = null) {
@@ -2690,8 +2819,8 @@ export class WatchdogMonitor {
       }
       if (!this._resolveTtlKeepaliveEnabled(store, cfg, lease.conversationId, lease)) continue;
       const isCustomOverride = Boolean(store.hasCustomTtlKeepaliveOverride?.(lease.conversationId));
-      let { pctMinTokens } = this._resolveLeaseKeepaliveMinContext(store, cfg, lease, { isCustomOverride });
-      let effectiveMinTokens = isCustomOverride ? 0 : Math.max(minTokens, pctMinTokens);
+      let { pctMinTokens, modelRoiMinTokens } = this._resolveLeaseKeepaliveMinContext(store, cfg, lease, { isCustomOverride });
+      let effectiveMinTokens = isCustomOverride ? 0 : Math.max(minTokens, pctMinTokens, modelRoiMinTokens);
       let leaseContextTokens = Number(lease.contextTokens || 0);
       if (effectiveMinTokens > 0 && leaseContextTokens > 0 && leaseContextTokens < effectiveMinTokens) continue;
       if (effectiveMinTokens > 0 && leaseContextTokens === 0 && !lease.transcriptPath) continue;
@@ -2784,10 +2913,10 @@ export class WatchdogMonitor {
             writeWatchdogLeaseIfUnchanged(store, workingLease.updatedTs, workingLease.phase, enrichedLease);
             workingLease = enrichedLease;
             updatedLeasesById.set(lease.conversationId, enrichedLease);
-            ({ pctMinTokens } = this._resolveLeaseKeepaliveMinContext(store, cfg, enrichedLease, {
+            ({ pctMinTokens, modelRoiMinTokens } = this._resolveLeaseKeepaliveMinContext(store, cfg, enrichedLease, {
               isCustomOverride
             }));
-            effectiveMinTokens = isCustomOverride ? 0 : Math.max(minTokens, pctMinTokens);
+            effectiveMinTokens = isCustomOverride ? 0 : Math.max(minTokens, pctMinTokens, modelRoiMinTokens);
             effectiveTtlSec = this._resolveLeaseEffectiveTtlSec(store, workingLease, cfg, nowWallMs);
             effectiveLeadSec = Math.min(leadSec, Math.max(5, Math.floor(effectiveTtlSec * 0.5)));
             if (!isFixedInterval && !(effectiveTtlSec > effectiveLeadSec)) continue;
@@ -3914,7 +4043,7 @@ export class WatchdogMonitor {
       };
     }
 
-    const rawLeases = listWatchdogLeases(store);
+    const rawLeases = this._pruneExpiredIdleLeases(store, listWatchdogLeases(store), nowWallMs);
     const leases = rawLeases.map((lease) => {
       if (
         lease &&
@@ -5156,7 +5285,8 @@ export class WatchdogMonitor {
         globalIntervalSec: globalTtlKeepaliveIntervalSec,
         intervalMode: convKeepaliveIntervalSec > 0 ? "fixed" : "auto",
         minContextPct: globalTtlKeepaliveMinContextPct,
-        minContextTokens: minCtxInfo.pctMinTokens,
+        minContextTokens: Math.max(minCtxInfo.pctMinTokens, minCtxInfo.modelRoiMinTokens || 0),
+        tailReprocessTokens: minCtxInfo.tailReprocessTokens || 0,
         windowTokens: minCtxInfo.windowTokens,
         isCustomOverride,
         usedCount: kaState.usedCount,

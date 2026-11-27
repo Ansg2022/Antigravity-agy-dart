@@ -15,6 +15,7 @@ import {
   hasActiveUpdateMarker
 } from "./version-update.mjs";
 import { getConfigSnapshot, getEffectiveConfig } from "../../context/lib/config.js";
+import { getConversationViaApi, isConversationServiceConfigured } from "../../context/lib/conversation-api.js";
 import { executionReceiptsFromSteps, fastToolClaimsFromSteps } from "../../context/lib/execution-receipts.js";
 import { buildHandoffBrief, inferWorkspaceFromStore } from "../../context/lib/handoff.js";
 import {
@@ -25,6 +26,7 @@ import {
 import {
   DEFAULT_STALE_LEASE_MS,
   WatchdogMonitor,
+  clearConversationSummaryCache,
   collectChildSubagentActivity,
   classifyTranscriptGenesisFile,
   computeEffectiveKeepaliveMinRemainSec,
@@ -47,6 +49,7 @@ import {
 } from "../../context/lib/watchdog.js";
 import {
   analyzeTranscriptCache,
+  clearTranscriptScanCache,
   computeCacheWarmth,
   CONTEXT_CRITICAL_TOKENS,
   CONTEXT_WARN_TOKENS,
@@ -202,7 +205,13 @@ function isMetadataTruthyFlag(val) {
 export async function sendSidecarKeepaliveMessage(
   conversationId,
   message,
-  { execFn = runAgentApiAsync, allowDefaultSummaryDb = null } = {}
+  {
+    execFn = runAgentApiAsync,
+    allowDefaultSummaryDb = null,
+    getConversationFn = null,
+    lsAddress = "",
+    csrfToken = ""
+  } = {}
 ) {
   if (!isSafeConversationId(conversationId) || /^-/.test(conversationId) || conversationId === "__unbound__") {
     return { ok: false, error: "invalid_conversation_id" };
@@ -228,46 +237,95 @@ export async function sendSidecarKeepaliveMessage(
   const cachedProjectId = _convProjectIdCache.get(conversationId) || "";
   let projectId = "";
   let hasMetadata = false;
-  try {
-    const metaRes = await execFn(["get-conversation-metadata", conversationId], { timeoutMs: 8000 });
-    const metaEvent = metaRes?.response?.conversationMetadata || metaRes?.response?.conversation_metadata;
-    const metaObj = metaEvent?.metadata && typeof metaEvent.metadata === "object" ? metaEvent.metadata : metaEvent || {};
-    hasMetadata = Boolean(metaEvent && typeof metaObj === "object" && !Array.isArray(metaObj) && Object.keys(metaObj).length);
-    if (isTrajectoryMetadataSubagent(conversationId, metaEvent || metaObj)) {
-      _convProjectIdCache.delete(conversationId);
-      return { ok: false, skippedSubagent: true, error: "subagent_keepalive_suppressed" };
-    }
-    if (
-      metaObj.killed === true ||
-      metaEvent?.killed === true ||
-      (Number.isFinite(Number(metaObj.killed)) && Number(metaObj.killed) > 0) ||
-      (Number.isFinite(Number(metaEvent?.killed)) && Number(metaEvent?.killed) > 0)
-    ) {
-      _convProjectIdCache.delete(conversationId);
-      return { ok: false, skippedKilled: true, error: "killed_conversation_keepalive_suppressed" };
-    }
-    const metaAnnotations =
-      (metaObj.annotations && typeof metaObj.annotations === "object" ? metaObj.annotations : null) ||
-      (metaEvent?.annotations && typeof metaEvent.annotations === "object" ? metaEvent.annotations : null);
-    if (
-      isMetadataTruthyFlag(metaObj.archived) ||
-      isMetadataTruthyFlag(metaEvent?.archived) ||
-      isMetadataTruthyFlag(metaAnnotations?.archived)
-    ) {
-      _convProjectIdCache.delete(conversationId);
-      return { ok: false, skippedArchived: true, error: "archived_conversation_keepalive_suppressed" };
-    }
-    const resolvedId = metaObj.projectId || metaObj.project_id || "";
-    if (typeof resolvedId === "string" && resolvedId.trim()) {
-      projectId = resolvedId.trim();
-      if (_convProjectIdCache.size >= 100 && !_convProjectIdCache.has(conversationId)) {
-        const oldest = _convProjectIdCache.keys().next().value;
-        if (oldest !== undefined) _convProjectIdCache.delete(oldest);
+  let apiHandledMetadata = false;
+
+  const shouldTryConvApi =
+    typeof getConversationFn === "function" ||
+    Boolean(lsAddress && csrfToken) ||
+    (execFn === runAgentApiAsync && isConversationServiceConfigured(process.env));
+
+  if (shouldTryConvApi) {
+    try {
+      const apiRes =
+        typeof getConversationFn === "function"
+          ? await getConversationFn(conversationId)
+          : await getConversationViaApi(conversationId, { lsAddress, csrfToken });
+      if (apiRes && apiRes.ok && apiRes.found) {
+        hasMetadata = true;
+        apiHandledMetadata = true;
+        if (apiRes.isSubagent) {
+          _convProjectIdCache.delete(conversationId);
+          return { ok: false, skippedSubagent: true, error: "subagent_keepalive_suppressed", source: "conversation_api" };
+        }
+        if (apiRes.archived) {
+          _convProjectIdCache.delete(conversationId);
+          return { ok: false, skippedArchived: true, error: "archived_conversation_keepalive_suppressed", source: "conversation_api" };
+        }
+        if (apiRes.isRunning || apiRes.isCancelling) {
+          return {
+            ok: false,
+            skippedActiveRun: true,
+            runState: apiRes.runState,
+            error: "active_run_keepalive_suppressed",
+            source: "conversation_api"
+          };
+        }
+        if (typeof apiRes.projectId === "string" && apiRes.projectId.trim()) {
+          projectId = apiRes.projectId.trim();
+          if (_convProjectIdCache.size >= 100 && !_convProjectIdCache.has(conversationId)) {
+            const oldest = _convProjectIdCache.keys().next().value;
+            if (oldest !== undefined) _convProjectIdCache.delete(oldest);
+          }
+          _convProjectIdCache.set(conversationId, projectId);
+        }
       }
-      _convProjectIdCache.set(conversationId, projectId);
+    } catch {
+      // Fail-open to legacy agentapi metadata check
     }
-  } catch {
-    // A locally identified primary chat can still use its cached or ambient project.
+  }
+
+  if (!apiHandledMetadata) {
+    try {
+      const metaRes = await execFn(["get-conversation-metadata", conversationId], { timeoutMs: 8000 });
+      const metaEvent = metaRes?.response?.conversationMetadata || metaRes?.response?.conversation_metadata;
+      const metaObj = metaEvent?.metadata && typeof metaEvent.metadata === "object" ? metaEvent.metadata : metaEvent || {};
+      hasMetadata = Boolean(metaEvent && typeof metaObj === "object" && !Array.isArray(metaObj) && Object.keys(metaObj).length);
+      if (isTrajectoryMetadataSubagent(conversationId, metaEvent || metaObj)) {
+        _convProjectIdCache.delete(conversationId);
+        return { ok: false, skippedSubagent: true, error: "subagent_keepalive_suppressed" };
+      }
+      if (
+        metaObj.killed === true ||
+        metaEvent?.killed === true ||
+        (Number.isFinite(Number(metaObj.killed)) && Number(metaObj.killed) > 0) ||
+        (Number.isFinite(Number(metaEvent?.killed)) && Number(metaEvent?.killed) > 0)
+      ) {
+        _convProjectIdCache.delete(conversationId);
+        return { ok: false, skippedKilled: true, error: "killed_conversation_keepalive_suppressed" };
+      }
+      const metaAnnotations =
+        (metaObj.annotations && typeof metaObj.annotations === "object" ? metaObj.annotations : null) ||
+        (metaEvent?.annotations && typeof metaEvent.annotations === "object" ? metaEvent.annotations : null);
+      if (
+        isMetadataTruthyFlag(metaObj.archived) ||
+        isMetadataTruthyFlag(metaEvent?.archived) ||
+        isMetadataTruthyFlag(metaAnnotations?.archived)
+      ) {
+        _convProjectIdCache.delete(conversationId);
+        return { ok: false, skippedArchived: true, error: "archived_conversation_keepalive_suppressed" };
+      }
+      const resolvedId = metaObj.projectId || metaObj.project_id || "";
+      if (typeof resolvedId === "string" && resolvedId.trim()) {
+        projectId = resolvedId.trim();
+        if (_convProjectIdCache.size >= 100 && !_convProjectIdCache.has(conversationId)) {
+          const oldest = _convProjectIdCache.keys().next().value;
+          if (oldest !== undefined) _convProjectIdCache.delete(oldest);
+        }
+        _convProjectIdCache.set(conversationId, projectId);
+      }
+    } catch {
+      // A locally identified primary chat can still use its cached or ambient project.
+    }
   }
   if (!hasMetadata && localIdentity === "unknown") {
     return { ok: false, error: "conversation_identity_unavailable" };
@@ -332,6 +390,8 @@ export function closeRuntimeStore() {
   stopWatchdogMonitor();
   _convProjectIdCache.clear();
   claimedTranscriptStatCache.clear();
+  clearConversationSummaryCache();
+  clearTranscriptScanCache();
   cachedSafetyAudit = { ts: 0, report: null };
   resetSafetyAuditCache();
   _updateInFlight = false;
@@ -1213,7 +1273,26 @@ function getCacheDiagPayload(data, defaultConvId = "default") {
     if (now - cachedLatestScan.ts < LATEST_SCAN_TTL_MS && cachedLatestScan.path && fs.existsSync(cachedLatestScan.path)) {
       transcriptPath = cachedLatestScan.path;
     } else {
-      transcriptPath = findTranscriptForConversation(null);
+      // Fast path: check recent non-subagent leases in store before scanning brain/
+      let leaseBestPath = null;
+      let leaseBestMtime = 0;
+      try {
+        const recentLeases = listWatchdogLeases(store)
+          .filter((l) => l && !l.isSubagent && typeof l.transcriptPath === "string" && l.transcriptPath.trim())
+          .sort((a, b) => Number(b.updatedTs || 0) - Number(a.updatedTs || 0))
+          .slice(0, 12);
+        for (const l of recentLeases) {
+          if (isUncPath(l.transcriptPath)) continue;
+          try {
+            const st = fs.statSync(l.transcriptPath);
+            if (st.isFile() && st.mtimeMs > leaseBestMtime) {
+              leaseBestMtime = st.mtimeMs;
+              leaseBestPath = l.transcriptPath;
+            }
+          } catch {}
+        }
+      } catch {}
+      transcriptPath = leaseBestPath || findTranscriptForConversation(null);
       cachedLatestScan = { ts: now, path: transcriptPath };
     }
   }
@@ -3596,6 +3675,7 @@ if (isDirectRun) {
       path.resolve(__dirname, "update-archive.mjs"),
       path.resolve(__dirname, "version-update.mjs"),
       path.resolve(__dirname, "../../context/lib/handoff.js"),
+      path.resolve(__dirname, "../../context/lib/conversation-api.js"),
       path.resolve(__dirname, "../../context/lib/watchdog.js"),
       path.resolve(__dirname, "../../context/lib/watchdog-lease.js"),
       path.resolve(__dirname, "../../context/lib/store.js"),

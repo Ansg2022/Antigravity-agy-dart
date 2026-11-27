@@ -3,6 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { sha256Hex, stableStringify } from "./stable-json.js";
 import { redactSecrets } from "./security.js";
+import { listRecentConversationIdsFromSummaryDb } from "./watchdog-lease.js";
 
 import {
   DEFAULT_CACHE_TTL_SEC,
@@ -5118,6 +5119,7 @@ export function analyzeTranscriptCache(steps, options = {}) {
       if (tMs !== null) lastPlannerMs = tMs;
 
       const activeTurnProfile = resolveModelProfile(model || prevModel || currentModel);
+      const activeMinCacheable = activeTurnProfile.minCacheableTokens ?? MIN_CACHEABLE_CONTEXT_TOKENS;
       if (safeCacheCreate1h > 0) {
         seen1hWriteByProfile.set(activeTurnProfile.id, true);
       }
@@ -5127,7 +5129,7 @@ export function analyzeTranscriptCache(steps, options = {}) {
       }
 
       const turnHitRate = Number((safeCache / ctxTok).toFixed(4));
-      if (ctxTok >= MIN_CACHEABLE_CONTEXT_TOKENS) {
+      if (ctxTok >= activeMinCacheable) {
         hitRateSum += safeCache / ctxTok;
         hitRateCount += 1;
       }
@@ -5187,15 +5189,30 @@ export function analyzeTranscriptCache(steps, options = {}) {
       let turnWastedRewritten = 0;
 
       // Check for cache bust relative to previous warm turn's prefix size
-      if (hasSeenPlanner && prevCtxTokens >= MIN_CACHEABLE_CONTEXT_TOKENS) {
+      if (hasSeenPlanner && prevCtxTokens >= activeMinCacheable) {
         warmTurns += 1;
         const retainedRatio = prevCtxTokens > 0 ? safeCache / prevCtxTokens : 1;
-        const isBust = retainedRatio < BUST_DROP_RATIO || (prevCtxTokens >= 10000 && safeCache === 0);
         const gapSec =
           tMs !== null && prevPlannerMs !== null && tMs >= prevPlannerMs
             ? Math.round((tMs - prevPlannerMs) / 1000)
             : null;
         const sameModel = !prevModel || !model || prevModel === model;
+        // Gemini 4 implicit caching only caches the full previous request when the new turn adds
+        // >= 2,050 tokens; for smaller turns it re-processes the trailing 2,050 tokens at standard rate.
+        const tailReprocessThreshold = activeTurnProfile.minTurnDeltaForFullCache || 0;
+        const isExpectedSmallDeltaTailReprocess =
+          tailReprocessThreshold > 0 &&
+          sameModel &&
+          !mediaLoadedSincePrev &&
+          !systemMsgSincePrev &&
+          ctxTok >= prevCtxTokens &&
+          deltaTokens > 0 &&
+          deltaTokens < tailReprocessThreshold &&
+          safeCache > 0 &&
+          prevCtxTokens - safeCache <= tailReprocessThreshold + 256;
+        const isBust =
+          !isExpectedSmallDeltaTailReprocess &&
+          (retainedRatio < BUST_DROP_RATIO || (prevCtxTokens >= 10000 && safeCache === 0));
 
         if (!isBust) {
           if (safeCache > 0) turnWasWarmHit = true;
@@ -5559,6 +5576,7 @@ export function analyzeTranscriptCache(steps, options = {}) {
   const delayHotMinTokens = explicitDelayHotTokens ?? Math.round(windowTokens * DELAY_HOT_WINDOW_RATIO);
   const contextUtilization = windowTokens > 0 ? Number((currentContextTokens / windowTokens).toFixed(4)) : 0;
 
+  const matchedMinCacheable = matchedProfile.minCacheableTokens ?? MIN_CACHEABLE_CONTEXT_TOKENS;
   const modelProfile = {
     id: matchedProfile.id,
     windowTokens,
@@ -5566,6 +5584,8 @@ export function analyzeTranscriptCache(steps, options = {}) {
     defaultTtlSec: matchedProfile.ttlSec,
     cacheDiscountRate,
     inputPer1M: inputPricePer1M,
+    minCacheableTokens: matchedMinCacheable,
+    minTurnDeltaForFullCache: matchedProfile.minTurnDeltaForFullCache ?? 0,
     cacheWriteMultiplier: baseWriteMult,
     cacheWrite1hMultiplier: longWriteMult
   };
@@ -5581,7 +5601,7 @@ export function analyzeTranscriptCache(steps, options = {}) {
     idleSeconds !== null ? Math.max(0, ttlSec - idleSeconds) : null;
 
   let ttlStatus = "cold";
-  if (currentContextTokens >= MIN_CACHEABLE_CONTEXT_TOKENS && idleSeconds !== null) {
+  if (currentContextTokens >= matchedMinCacheable && idleSeconds !== null) {
     if (idleSeconds >= ttlSec) ttlStatus = "expired";
     else if (ttlRemainingSec <= 60) ttlStatus = "expiring";
     else ttlStatus = "warm";
@@ -5598,7 +5618,8 @@ export function analyzeTranscriptCache(steps, options = {}) {
     weightedHitRate,
     criticalTokens,
     coldCompactTokens,
-    delayHotMinTokens
+    delayHotMinTokens,
+    minCacheableTokens: matchedMinCacheable
   });
   // Sum USD costs per-turn using each turn's active model profile (prevents 10x-50x skew across model_switch)
   let actualUsdRaw = 0;
@@ -6288,10 +6309,53 @@ export function isSafeConversationId(conversationId) {
   return /^[A-Za-z0-9._-]+$/.test(trimmed);
 }
 
+const DEFAULT_BRAIN_SCAN_MAX_ENTRIES = 500;
+const DEFAULT_BRAIN_SCAN_MAX_MS = 150;
+const LATEST_TRANSCRIPT_SCAN_CACHE_MAX = 16;
+const LATEST_TRANSCRIPT_SCAN_CACHE_TTL_MS = 10_000;
+const _latestTranscriptScanCache = new Map();
+
+export function clearTranscriptScanCache() {
+  _latestTranscriptScanCache.clear();
+}
+
+function probeConversationTranscriptInRoot(resolvedRoot, safeId) {
+  const candidates = [
+    path.join(resolvedRoot, safeId, ".system_generated", "logs", "transcript_full.jsonl"),
+    path.join(resolvedRoot, safeId, ".system_generated", "logs", "transcript.jsonl"),
+    path.join(resolvedRoot, safeId, ".system_generated", "transcript_full.jsonl"),
+    path.join(resolvedRoot, safeId, ".system_generated", "transcript.jsonl")
+  ];
+  for (const c of candidates) {
+    try {
+      const st = fs.statSync(c);
+      if (st.isFile()) return { path: c, mtimeMs: st.mtimeMs };
+    } catch {}
+  }
+  return null;
+}
+
+function findNewestTranscriptViaSummaryDb(brainRoot, maxCandidates = 32) {
+  if (!brainRoot || typeof brainRoot !== "string") return null;
+  const resolvedRoot = path.resolve(brainRoot);
+  const recentIds = listRecentConversationIdsFromSummaryDb(resolvedRoot, maxCandidates);
+  if (!Array.isArray(recentIds) || recentIds.length === 0) return null;
+  let best = null;
+  for (const cid of recentIds) {
+    if (!isSafeConversationId(cid)) continue;
+    const hit = probeConversationTranscriptInRoot(resolvedRoot, cid);
+    if (hit && (!best || hit.mtimeMs > best.mtimeMs)) {
+      best = hit;
+    }
+  }
+  return best;
+}
+
 /**
  * Locate Antigravity transcript_full.jsonl / transcript.jsonl for a conversationId.
  * When exactOnly=false (default), falls back to the most recently modified local transcript
- * if conversationId is omitted, "all", "app", "default", or not found.
+ * if conversationId is omitted, "all", "app", "default", or not found (using sibling
+ * `conversation_summaries.db` recent-ID fast path + bounded `brain/` directory scan).
  */
 export function findTranscriptForConversation(conversationId = null, optionsOrExtraRoots = {}) {
   const opts = Array.isArray(optionsOrExtraRoots)
@@ -6299,14 +6363,26 @@ export function findTranscriptForConversation(conversationId = null, optionsOrEx
     : optionsOrExtraRoots || {};
   const extraRoots = Array.isArray(opts.extraRoots) ? opts.extraRoots : [];
   const exactOnly = Boolean(opts.exactOnly);
+  const maxEntries =
+    Number.isFinite(Number(opts.maxEntries)) && Number(opts.maxEntries) >= 1
+      ? Math.floor(Number(opts.maxEntries))
+      : DEFAULT_BRAIN_SCAN_MAX_ENTRIES;
+  const maxScanMs =
+    Number.isFinite(Number(opts.maxScanMs)) && Number(opts.maxScanMs) >= 1
+      ? Math.floor(Number(opts.maxScanMs))
+      : DEFAULT_BRAIN_SCAN_MAX_MS;
+  const noCache = Boolean(opts.noCache);
+  const includeDefaultRoots = opts.includeDefaultRoots !== false;
 
   const home = os.homedir();
-  const roots = [
-    ...extraRoots,
-    path.join(home, ".gemini", "antigravity", "brain"),
-    path.join(home, ".gemini", "antigravity-ide", "brain"),
-    path.join(home, ".gemini", "antigravity-cli", "brain")
-  ];
+  const roots = includeDefaultRoots
+    ? [
+        ...extraRoots,
+        path.join(home, ".gemini", "antigravity", "brain"),
+        path.join(home, ".gemini", "antigravity-ide", "brain"),
+        path.join(home, ".gemini", "antigravity-cli", "brain")
+      ]
+    : [...extraRoots];
 
   const isSpecific =
     conversationId &&
@@ -6359,38 +6435,94 @@ export function findTranscriptForConversation(conversationId = null, optionsOrEx
 
   if (exactOnly) return null;
 
-  // Fallback: pick most recently modified transcript across brain roots (bounded scan)
+  // Bounded cache keyed by root directory mtime + sibling summary DB mtime
+  const nowMs = Date.now();
+  const rootStampParts = [];
+  for (const root of roots) {
+    if (!root || typeof root !== "string") continue;
+    let rMtime = 0;
+    try {
+      rMtime = Math.round(fs.statSync(root).mtimeMs);
+    } catch {}
+    let dbMtime = 0;
+    try {
+      if (path.basename(path.resolve(root)).toLowerCase() === "brain") {
+        dbMtime = Math.round(fs.statSync(path.join(path.dirname(path.resolve(root)), "conversation_summaries.db")).mtimeMs);
+      }
+    } catch {}
+    rootStampParts.push(`${root}:${rMtime}:${dbMtime}`);
+  }
+  const cacheKey = `${maxEntries}:${maxScanMs}:${roots.join("\0")}`;
+  const rootStamp = rootStampParts.join("|");
+  if (!noCache) {
+    const cached = _latestTranscriptScanCache.get(cacheKey);
+    if (cached && nowMs < cached.expiresAt && cached.rootStamp === rootStamp) {
+      if (!cached.path || fs.existsSync(cached.path)) {
+        return cached.path;
+      }
+    }
+  }
+
+  // Tier 1: Per-root O(1) recent-ID lookup via sibling conversation_summaries.db
+  // (avoids O(N) brain scan under unlimited history while never skipping custom roots without a DB)
   let bestPath = null;
   let bestMtime = 0;
+  const rootsNeedingDirScan = [];
   for (const root of roots) {
-    let entries;
-    try {
-      entries = fs.readdirSync(root, { withFileTypes: true });
-    } catch {
-      continue;
+    const summaryHit = findNewestTranscriptViaSummaryDb(root, 32);
+    if (summaryHit) {
+      if (summaryHit.mtimeMs > bestMtime) {
+        bestMtime = summaryHit.mtimeMs;
+        bestPath = summaryHit.path;
+      }
+    } else {
+      rootsNeedingDirScan.push(root);
     }
-    for (const entry of entries) {
-      if (!entry.isDirectory()) continue;
-      const base = path.join(root, entry.name);
-      const candidates = [
-        path.join(base, ".system_generated", "logs", "transcript_full.jsonl"),
-        path.join(base, ".system_generated", "logs", "transcript.jsonl"),
-        path.join(base, ".system_generated", "transcript_full.jsonl"),
-        path.join(base, ".system_generated", "transcript.jsonl")
-      ];
-      for (const c of candidates) {
-        try {
-          const st = fs.statSync(c);
-          if (st.mtimeMs > bestMtime) {
-            bestMtime = st.mtimeMs;
-            bestPath = c;
-          }
+  }
+
+  // Tier 2: Bounded brain directory scan fallback (entry cap + wall-clock budget)
+  if (rootsNeedingDirScan.length > 0) {
+    const scanStartMs = Date.now();
+    let scannedDirs = 0;
+    let budgetHit = false;
+    for (const root of rootsNeedingDirScan) {
+      if (budgetHit) break;
+      let entries;
+      try {
+        entries = fs.readdirSync(root, { withFileTypes: true });
+      } catch {
+        continue;
+      }
+      for (const entry of entries) {
+        if (!entry.isDirectory()) continue;
+        if (scannedDirs >= maxEntries) {
+          budgetHit = true;
           break;
-        } catch {
-          // try next
+        }
+        scannedDirs += 1;
+        if ((scannedDirs & 31) === 0 && Date.now() - scanStartMs >= maxScanMs) {
+          budgetHit = true;
+          break;
+        }
+        const hit = probeConversationTranscriptInRoot(root, entry.name);
+        if (hit && hit.mtimeMs > bestMtime) {
+          bestMtime = hit.mtimeMs;
+          bestPath = hit.path;
         }
       }
     }
+  }
+
+  if (!noCache) {
+    if (_latestTranscriptScanCache.size >= LATEST_TRANSCRIPT_SCAN_CACHE_MAX && !_latestTranscriptScanCache.has(cacheKey)) {
+      const oldest = _latestTranscriptScanCache.keys().next().value;
+      if (oldest !== undefined) _latestTranscriptScanCache.delete(oldest);
+    }
+    _latestTranscriptScanCache.set(cacheKey, {
+      rootStamp,
+      expiresAt: nowMs + LATEST_TRANSCRIPT_SCAN_CACHE_TTL_MS,
+      path: bestPath
+    });
   }
   return bestPath;
 }

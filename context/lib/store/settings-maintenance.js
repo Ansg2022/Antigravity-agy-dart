@@ -12,11 +12,11 @@ import {
 } from "./schema.js";
 
 const STORE_HEADLESS_FINISH_RE = /\bWhen you are done,\s*call the finish tool with your result\./i;
-const STORE_PRIMARY_HOST_AGENT_RE = /^(?:antigravity|main|default|primary|chat|user|assistant|cascade)$/i;
+const STORE_PRIMARY_HOST_AGENT_RE = /^(?:antigravity|main|default|primary|chat|user|assistant|cascade|coordinator)$/i;
 const STORE_SUBAGENT_ROLE_RE =
-  /(?:^|[-_\s/])(?:sub[-_]?agent|worker|research(?:er)?|verifier|review(?:er)?|explor(?:er|e)|audit(?:or)?|investigat(?:or)?|browser|image[-_]?generator)(?:$|[-_\s/])|^(?:DeepCoder|DeepInvestigator)[A-Za-z0-9_-]*$/i;
+  /(?:^|[-_\s/])(?:sub[-_]?agent|worker|monitor|swarm|research(?:er)?|verifier|review(?:er)?|explor(?:er|e)|audit(?:or)?|investigat(?:or)?|browser|image[-_]?generator)(?:$|[-_\s/])|^(?:DeepCoder|DeepInvestigator)[A-Za-z0-9_-]*$/i;
 const STORE_SUBAGENT_GENESIS_RE =
-  /\[Message\]\s+timestamp=\S+\s+sender=[0-9a-f-]{8,}|<original_task>|<subagent_reminder>|\brunning as a subagent,\s*invoked by a caller agent\b/i;
+  /\[Message\]\s+timestamp=\S+\s+sender=[0-9a-f-]{8,}|<original_task>|<subagent_reminder>|\brunning as a subagent,\s*invoked by a caller agent\b|<swarm_(?:brief|board|assignment)>|\[Swarm\s+(?:Brief|Assignment|Worker)\b|\bYou are a swarm worker\b|\bswarm_monitor\s+SKILL\.md\b/i;
 
 function isSameStorePath(a, b) {
   if (typeof a !== "string" || typeof b !== "string") return false;
@@ -64,8 +64,10 @@ function resolveStoreCandidateTranscriptPath(cid, { transcriptPath = "", allowDe
   return "";
 }
 
-function inspectSummaryDbForSubagent(DatabaseSyncCtor, cid, { transcriptPath = "", allowDefaultDb = false } = {}) {
-  if (!DatabaseSyncCtor || !cid) return { isSubagent: false, killed: false, parentId: "", title: "" };
+const MAX_MAINTENANCE_SUMMARY_LOOKUPS = 500;
+const MAX_MAINTENANCE_SCAN_MS = 200;
+
+function collectSummaryDbCandidates({ transcriptPath = "", allowDefaultDb = false } = {}) {
   const candidates = [];
   if (typeof process.env.AGY_DART_SUMMARY_DB_PATH === "string" && process.env.AGY_DART_SUMMARY_DB_PATH.trim()) {
     candidates.push(path.resolve(process.env.AGY_DART_SUMMARY_DB_PATH.trim()));
@@ -91,59 +93,144 @@ function inspectSummaryDbForSubagent(DatabaseSyncCtor, cid, { transcriptPath = "
       candidates.push(path.join(home, ".gemini", "antigravity-cli", "conversation_summaries.db"));
     }
   }
+  const unique = [];
   const seen = new Set();
   for (const dbPath of candidates) {
     const key = process.platform === "win32" ? dbPath.toLowerCase() : dbPath;
     if (seen.has(key)) continue;
     seen.add(key);
-    let sdb = null;
+    unique.push(dbPath);
+  }
+  return unique;
+}
+
+function querySummaryDbRow(sdb, cid) {
+  let row = null;
+  try {
+    row = sdb
+      .prepare(
+        "SELECT title, parent_conversation_id, nesting_depth, agent_name, killed FROM conversation_summaries WHERE conversation_id = ? LIMIT 1"
+      )
+      .get(cid);
+  } catch {
     try {
-      if (!fs.existsSync(dbPath)) continue;
-      sdb = new DatabaseSyncCtor(dbPath, { readOnly: true });
-      let row = null;
-      try {
-        row = sdb
-          .prepare(
-            "SELECT title, parent_conversation_id, nesting_depth, agent_name, killed FROM conversation_summaries WHERE conversation_id = ? LIMIT 1"
-          )
-          .get(cid);
-      } catch {
-        try {
-          row = sdb
-            .prepare(
-              "SELECT title, parent_conversation_id, nesting_depth, agent_name FROM conversation_summaries WHERE conversation_id = ? LIMIT 1"
-            )
-            .get(cid);
-        } catch {
-          row = sdb.prepare("SELECT title FROM conversation_summaries WHERE conversation_id = ? LIMIT 1").get(cid);
-        }
-      }
-      const parentId = readConversationParentId(sdb, cid, row?.parent_conversation_id);
-      if (!row && !parentId) continue;
-      row ??= {};
-      const title = typeof row.title === "string" ? row.title.trim() : "";
-      const depth = Number(row.nesting_depth);
-      const agent = typeof row.agent_name === "string" ? row.agent_name.trim() : "";
-      const killed = Boolean(row.killed === true || (Number.isFinite(Number(row.killed)) && Number(row.killed) > 0));
-      const isSubagent = Boolean(
-        parentId ||
-          (Number.isFinite(depth) && depth > 0) ||
-          (agent &&
-            !STORE_PRIMARY_HOST_AGENT_RE.test(agent) &&
-            (agent.toLowerCase() === "self" || STORE_SUBAGENT_ROLE_RE.test(agent) || !title))
-      );
-      return { isSubagent, killed, parentId, title };
+      row = sdb
+        .prepare(
+          "SELECT title, parent_conversation_id, nesting_depth, agent_name FROM conversation_summaries WHERE conversation_id = ? LIMIT 1"
+        )
+        .get(cid);
     } catch {
-      // Fail-open
-    } finally {
-      if (sdb) {
-        try {
-          sdb.close();
-        } catch {}
-      }
+      row = sdb.prepare("SELECT title FROM conversation_summaries WHERE conversation_id = ? LIMIT 1").get(cid);
     }
   }
-  return { isSubagent: false, killed: false, parentId: "", title: "" };
+  const parentId = readConversationParentId(sdb, cid, row?.parent_conversation_id);
+  if (!row && !parentId) return null;
+  row ??= {};
+  const title = typeof row.title === "string" ? row.title.trim() : "";
+  const depth = Number(row.nesting_depth);
+  const agent = typeof row.agent_name === "string" ? row.agent_name.trim() : "";
+  const killed = Boolean(row.killed === true || (Number.isFinite(Number(row.killed)) && Number(row.killed) > 0));
+  const isSubagent = Boolean(
+    parentId ||
+      (Number.isFinite(depth) && depth > 0) ||
+      (agent &&
+        !STORE_PRIMARY_HOST_AGENT_RE.test(agent) &&
+        (agent.toLowerCase() === "self" || STORE_SUBAGENT_ROLE_RE.test(agent) || !title))
+  );
+  return { isSubagent, killed, parentId, title };
+}
+
+/**
+ * Scoped read-only reader that reuses open `conversation_summaries.db` handles and enforces
+ * bounded lookup/time budgets across large historical sweeps (`v2.35.0+` unlimited history).
+ */
+export function createSummaryDbReader(
+  DatabaseSyncCtor,
+  { allowDefaultDb = false, maxLookups = MAX_MAINTENANCE_SUMMARY_LOOKUPS, maxScanMs = MAX_MAINTENANCE_SCAN_MS } = {}
+) {
+  const handles = new Map();
+  const rowCache = new Map();
+  const startedAt = Date.now();
+  let lookups = 0;
+  let openCount = 0;
+
+  const getHandle = (dbPath) => {
+    const key = process.platform === "win32" ? dbPath.toLowerCase() : dbPath;
+    if (handles.has(key)) return handles.get(key);
+    let sdb = null;
+    try {
+      if (fs.existsSync(dbPath)) {
+        try {
+          sdb = new DatabaseSyncCtor(dbPath, { readOnly: true, timeout: 200 });
+        } catch {
+          sdb = new DatabaseSyncCtor(dbPath, { readOnly: true });
+        }
+        openCount += 1;
+      }
+    } catch {
+      sdb = null;
+    }
+    handles.set(key, sdb);
+    return sdb;
+  };
+
+  return {
+    get openCount() {
+      return openCount;
+    },
+    get lookupCount() {
+      return lookups;
+    },
+    isBudgetExhausted() {
+      return lookups >= maxLookups || Date.now() - startedAt >= maxScanMs;
+    },
+    lookup(cid, { transcriptPath = "" } = {}) {
+      if (!DatabaseSyncCtor || !cid) return { isSubagent: false, killed: false, parentId: "", title: "" };
+      const cacheKey = `${cid}\0${transcriptPath || ""}`;
+      if (rowCache.has(cacheKey)) return rowCache.get(cacheKey);
+      if (this.isBudgetExhausted()) {
+        return { isSubagent: false, killed: false, parentId: "", title: "", budgetExhausted: true };
+      }
+      lookups += 1;
+      const candidates = collectSummaryDbCandidates({ transcriptPath, allowDefaultDb });
+      for (const dbPath of candidates) {
+        const sdb = getHandle(dbPath);
+        if (!sdb) continue;
+        try {
+          const hit = querySummaryDbRow(sdb, cid);
+          if (hit) {
+            rowCache.set(cacheKey, hit);
+            return hit;
+          }
+        } catch {
+          // Fail-open
+        }
+      }
+      const miss = { isSubagent: false, killed: false, parentId: "", title: "" };
+      rowCache.set(cacheKey, miss);
+      return miss;
+    },
+    close() {
+      for (const sdb of handles.values()) {
+        if (sdb) {
+          try {
+            sdb.close();
+          } catch {}
+        }
+      }
+      handles.clear();
+      rowCache.clear();
+    }
+  };
+}
+
+function inspectSummaryDbForSubagent(DatabaseSyncCtor, cid, { transcriptPath = "", allowDefaultDb = false } = {}) {
+  const reader = createSummaryDbReader(DatabaseSyncCtor, { allowDefaultDb, maxLookups: 1 });
+  try {
+    return reader.lookup(cid, { transcriptPath });
+  } finally {
+    reader.close();
+  }
 }
 
 function inspectTranscriptGenesisFileForSubagent(transcriptPath) {
@@ -1069,7 +1156,7 @@ export class SettingsMaintenanceMethods {
   recordSessionWorkspace(
     conversationId,
     workspaceDir,
-    { rootSessionId = "", active = true, source = "", nowMs = Date.now(), pluginRootNorm = null } = {}
+    { rootSessionId = "", active = true, isSubagent = undefined, source = "", nowMs = Date.now(), pluginRootNorm = null } = {}
   ) {
     const cid = sanitizeSessionWorkspaceConvId(conversationId);
     if (!cid) return null;
@@ -1092,6 +1179,7 @@ export class SettingsMaintenanceMethods {
       rootSessionId: cleanRoot || existing?.rootSessionId || cid,
       cwd: valid.dir,
       active: Boolean(active),
+      isSubagent: typeof isSubagent === "boolean" ? isSubagent : Boolean(existing?.isSubagent),
       updatedTs: ts,
       source: typeof source === "string" ? source.trim().slice(0, 32) : ""
     };
@@ -1223,15 +1311,10 @@ export class SettingsMaintenanceMethods {
     return "";
   }
 
-  /**
-   * Resolve a workspace directory ONLY when currently active (non-IDLE, fresh)
-   * conversations unanimously point to a single unique workspace.
-   * Returns { status: "unique" | "ambiguous" | "none", dir, dirs }.
-   */
-  resolveUniqueActiveWorkspace({
+  /** Collect currently active (non-IDLE, fresh) conversation workspace records with primary/subagent classification */
+  _collectActiveWorkspaceRecords({
     maxAgeMs = DEFAULT_ACTIVE_WORKSPACE_MAX_AGE_MS,
-    nowMs = Date.now(),
-    pluginRootNorm = null
+    nowMs = Date.now()
   } = {}) {
     const now = Number.isFinite(nowMs) ? Math.floor(nowMs) : Date.now();
     const ttl = Number.isFinite(maxAgeMs) && maxAgeMs > 0 ? Math.floor(maxAgeMs) : DEFAULT_ACTIVE_WORKSPACE_MAX_AGE_MS;
@@ -1250,9 +1333,14 @@ export class SettingsMaintenanceMethods {
             swActive: Boolean(parsed.active),
             swTs: updatedTs,
             swCwd: typeof parsed.cwd === "string" ? parsed.cwd : "",
+            swIsSubagent: Boolean(parsed.isSubagent),
+            swRootSessionId: sanitizeSessionWorkspaceConvId(parsed.rootSessionId),
             wlActive: null,
             wlTs: 0,
-            wlCwd: ""
+            wlCwd: "",
+            wlIsSubagent: false,
+            wlRootSessionId: "",
+            wlParentConvId: ""
           });
         } catch {}
       }
@@ -1274,27 +1362,40 @@ export class SettingsMaintenanceMethods {
           );
           const wlActive = phase !== "IDLE";
           const wlCwd = typeof parsed.cwd === "string" ? parsed.cwd : "";
+          const wlIsSubagent = Boolean(parsed.isSubagent);
+          const wlRootSessionId = sanitizeSessionWorkspaceConvId(
+            parsed.rootConversationId || parsed.rootSessionId || ""
+          );
+          const wlParentConvId = sanitizeSessionWorkspaceConvId(parsed.parentConversationId || "");
           const existing = perConv.get(cid);
           if (existing) {
             existing.wlActive = wlActive;
             existing.wlTs = wlTs;
             existing.wlCwd = wlCwd;
+            existing.wlIsSubagent = wlIsSubagent;
+            existing.wlRootSessionId = wlRootSessionId;
+            existing.wlParentConvId = wlParentConvId;
           } else {
             perConv.set(cid, {
               swActive: null,
               swTs: 0,
               swCwd: "",
+              swIsSubagent: false,
+              swRootSessionId: "",
               wlActive,
               wlTs,
-              wlCwd
+              wlCwd,
+              wlIsSubagent,
+              wlRootSessionId,
+              wlParentConvId
             });
           }
         } catch {}
       }
     } catch {}
 
-    const activeDirs = new Map();
-    for (const rec of perConv.values()) {
+    const activeRecords = [];
+    for (const [cid, rec] of perConv.entries()) {
       let effectiveActive = false;
       let effectiveTs = 0;
       let effectiveCwd = "";
@@ -1326,13 +1427,80 @@ export class SettingsMaintenanceMethods {
 
       if (!effectiveActive || effectiveTs <= 0) continue;
       if (now - effectiveTs > ttl || effectiveTs - now > 60_000) continue;
-      const valid = normalizeSafeSessionWorkspaceDir(effectiveCwd, { pluginRootNorm });
-      if (valid && !activeDirs.has(valid.canonicalKey)) {
-        activeDirs.set(valid.canonicalKey, valid.dir);
+
+      const isSubagent = Boolean(
+        rec.swIsSubagent ||
+          rec.wlIsSubagent ||
+          (rec.swRootSessionId && rec.swRootSessionId !== cid) ||
+          (rec.wlRootSessionId && rec.wlRootSessionId !== cid) ||
+          (rec.wlParentConvId && rec.wlParentConvId !== cid)
+      );
+      activeRecords.push({ cid, cwd: effectiveCwd, ts: effectiveTs, isSubagent });
+    }
+    return activeRecords;
+  }
+
+  /** Return true when another fresh, non-subagent conversation is currently active */
+  hasOtherActivePrimarySession(
+    excludeConvId = "",
+    { maxAgeMs = DEFAULT_ACTIVE_WORKSPACE_MAX_AGE_MS, nowMs = Date.now() } = {}
+  ) {
+    const cleanExclude = sanitizeSessionWorkspaceConvId(excludeConvId);
+    const activeRecords = this._collectActiveWorkspaceRecords({ maxAgeMs, nowMs });
+    return activeRecords.some((rec) => !rec.isSubagent && (!cleanExclude || rec.cid !== cleanExclude));
+  }
+
+  /**
+   * Return the unique active primary root session ID working in `workspaceDir`,
+   * or "" if zero or multiple distinct primary sessions share that workspace.
+   */
+  resolveUniqueActivePrimarySessionForWorkspace(
+    workspaceDir,
+    { maxAgeMs = DEFAULT_ACTIVE_WORKSPACE_MAX_AGE_MS, nowMs = Date.now(), pluginRootNorm = null } = {}
+  ) {
+    const target = normalizeSafeSessionWorkspaceDir(workspaceDir, { pluginRootNorm });
+    if (!target) return "";
+    const activeRecords = this._collectActiveWorkspaceRecords({ maxAgeMs, nowMs });
+    const matchedRootIds = new Set();
+    for (const rec of activeRecords) {
+      if (rec.isSubagent) continue;
+      const valid = normalizeSafeSessionWorkspaceDir(rec.cwd, { pluginRootNorm });
+      if (!valid || valid.canonicalKey !== target.canonicalKey) continue;
+      const rootSid =
+        typeof this.resolveRootSessionId === "function" ? this.resolveRootSessionId(rec.cid) : rec.cid;
+      if (rootSid) matchedRootIds.add(rootSid);
+      if (matchedRootIds.size > 1) return "";
+    }
+    return matchedRootIds.size === 1 ? [...matchedRootIds][0] : "";
+  }
+
+  /**
+   * Resolve a workspace directory ONLY when currently active (non-IDLE, fresh)
+   * conversations unanimously point to a single unique workspace.
+   * Prefers primary (non-subagent/non-swarm-worker) sessions so Swarm share/branch
+   * worktrees never make the coordinator's active workspace look ambiguous.
+   * Returns { status: "unique" | "ambiguous" | "none", dir, dirs }.
+   */
+  resolveUniqueActiveWorkspace({
+    maxAgeMs = DEFAULT_ACTIVE_WORKSPACE_MAX_AGE_MS,
+    nowMs = Date.now(),
+    pluginRootNorm = null
+  } = {}) {
+    const activeRecords = this._collectActiveWorkspaceRecords({ maxAgeMs, nowMs });
+    const primaryDirs = new Map();
+    const subagentDirs = new Map();
+
+    for (const rec of activeRecords) {
+      const valid = normalizeSafeSessionWorkspaceDir(rec.cwd, { pluginRootNorm });
+      if (!valid) continue;
+      const targetMap = rec.isSubagent ? subagentDirs : primaryDirs;
+      if (!targetMap.has(valid.canonicalKey)) {
+        targetMap.set(valid.canonicalKey, valid.dir);
       }
     }
 
-    const dirs = [...activeDirs.values()];
+    const chosenDirs = primaryDirs.size > 0 ? primaryDirs : subagentDirs;
+    const dirs = [...chosenDirs.values()];
     if (dirs.length === 1) {
       return { status: "unique", dir: dirs[0], dirs };
     }
@@ -2179,55 +2347,59 @@ export class SettingsMaintenanceMethods {
             isSameStorePath(this.dbPath, path.join(os.homedir(), ".agy-dart", "context.db")))
       );
       const DatabaseSyncCtor = this.db?.constructor || null;
-      const rows = this.db
-        .prepare("SELECT key, value FROM meta WHERE key LIKE 'cache:ttl_keepalive_state:%'")
-        .all();
-      for (const row of rows || []) {
-        if (!row || typeof row.key !== "string" || row.key.endsWith(":__unbound__")) continue;
-        if (typeof row.value !== "string") continue;
-        const cid = this._sanitizeKeepaliveConvId(row.key.slice("cache:ttl_keepalive_state:".length));
-        if (!cid) continue;
-        try {
-          const parsed = JSON.parse(row.value);
-          const explicitlyOn =
-            parsed &&
-            (parsed.enabled === true ||
-              (isGlobalOff &&
-                parsed.enabled !== false &&
-                parsed.maxCount !== null &&
-                parsed.maxCount !== undefined &&
-                parsed.maxCount !== "" &&
-                typeof parsed.maxCount !== "boolean" &&
-                Number.isFinite(Number(parsed.maxCount)) &&
-                Number(parsed.maxCount) >= 1));
-          if (!explicitlyOn) continue;
-          const leaseRaw = this.getMeta(`watchdog_lease:${cid}`, null);
-          let leaseObj = null;
-          if (leaseRaw && typeof leaseRaw === "string") {
-            leaseObj = JSON.parse(leaseRaw);
-            if (
-              leaseObj &&
-              (leaseObj.isSubagent === true ||
-                (leaseObj.parentConversationId && leaseObj.parentConversationId !== cid) ||
-                (leaseObj.rootSessionId && leaseObj.rootSessionId !== cid))
-            ) {
-              continue;
+      const summaryReader = DatabaseSyncCtor
+        ? createSummaryDbReader(DatabaseSyncCtor, { allowDefaultDb: allowDefaultSummaryDb })
+        : null;
+      try {
+        const rows = this.db
+          .prepare("SELECT key, value FROM meta WHERE key LIKE 'cache:ttl_keepalive_state:%'")
+          .all();
+        for (const row of rows || []) {
+          if (!row || typeof row.key !== "string" || row.key.endsWith(":__unbound__")) continue;
+          if (typeof row.value !== "string") continue;
+          const cid = this._sanitizeKeepaliveConvId(row.key.slice("cache:ttl_keepalive_state:".length));
+          if (!cid) continue;
+          try {
+            const parsed = JSON.parse(row.value);
+            const explicitlyOn =
+              parsed &&
+              (parsed.enabled === true ||
+                (isGlobalOff &&
+                  parsed.enabled !== false &&
+                  parsed.maxCount !== null &&
+                  parsed.maxCount !== undefined &&
+                  parsed.maxCount !== "" &&
+                  typeof parsed.maxCount !== "boolean" &&
+                  Number.isFinite(Number(parsed.maxCount)) &&
+                  Number(parsed.maxCount) >= 1));
+            if (!explicitlyOn) continue;
+            const leaseRaw = this.getMeta(`watchdog_lease:${cid}`, null);
+            let leaseObj = null;
+            if (leaseRaw && typeof leaseRaw === "string") {
+              leaseObj = JSON.parse(leaseRaw);
+              if (
+                leaseObj &&
+                (leaseObj.isSubagent === true ||
+                  (leaseObj.parentConversationId && leaseObj.parentConversationId !== cid) ||
+                  (leaseObj.rootSessionId && leaseObj.rootSessionId !== cid))
+              ) {
+                continue;
+              }
             }
-          }
-          const txPath = resolveStoreCandidateTranscriptPath(cid, {
-            transcriptPath: typeof leaseObj?.transcriptPath === "string" ? leaseObj.transcriptPath : "",
-            allowDefaultDb: allowDefaultSummaryDb
-          });
-          if ((allowDefaultSummaryDb || txPath) && DatabaseSyncCtor) {
-            const summary = inspectSummaryDbForSubagent(DatabaseSyncCtor, cid, {
-              transcriptPath: txPath,
+            const txPath = resolveStoreCandidateTranscriptPath(cid, {
+              transcriptPath: typeof leaseObj?.transcriptPath === "string" ? leaseObj.transcriptPath : "",
               allowDefaultDb: allowDefaultSummaryDb
             });
-            if (summary.isSubagent) continue;
-          }
-          if (txPath && inspectTranscriptGenesisFileForSubagent(txPath)) continue;
-          return true;
-        } catch {}
+            if ((allowDefaultSummaryDb || txPath) && summaryReader) {
+              const summary = summaryReader.lookup(cid, { transcriptPath: txPath });
+              if (summary.isSubagent) continue;
+            }
+            if (txPath && inspectTranscriptGenesisFileForSubagent(txPath)) continue;
+            return true;
+          } catch {}
+        }
+      } finally {
+        summaryReader?.close();
       }
     } catch {}
     return false;
@@ -2849,93 +3021,96 @@ export class SettingsMaintenanceMethods {
             isSameStorePath(this.dbPath, path.join(os.homedir(), ".agy-dart", "context.db")))
       );
       const DatabaseSyncCtor = this.db?.constructor || null;
-      const preScanRows = this.db
-        .prepare("SELECT key, value FROM meta WHERE key LIKE 'watchdog_lease:%'")
-        .all();
+      const summaryReader = DatabaseSyncCtor
+        ? createSummaryDbReader(DatabaseSyncCtor, { allowDefaultDb: allowDefaultSummaryDb })
+        : null;
       const subagentRepairMap = new Map();
-      for (const row of preScanRows || []) {
-        if (!row || typeof row.key !== "string" || typeof row.value !== "string") continue;
-        const cid = this._sanitizeKeepaliveConvId(row.key.slice("watchdog_lease:".length));
-        if (!cid || cid === "__unbound__") continue;
-        try {
-          const lease = JSON.parse(row.value);
-          if (!lease || typeof lease !== "object") continue;
-          if (lease.isSubagent === true) {
-            subagentRepairMap.set(cid, { markSubagent: false, scrubKeepalive: true, parentId: "" });
-            continue;
-          }
-          const inlineSub = Boolean(
-            (lease.parentConversationId && lease.parentConversationId !== cid) ||
-              (lease.rootSessionId && lease.rootSessionId !== cid) ||
-              (typeof lease.lastUserInput === "string" && STORE_HEADLESS_FINISH_RE.test(lease.lastUserInput))
-          );
-          if (inlineSub) {
-            subagentRepairMap.set(cid, {
-              markSubagent: true,
-              scrubKeepalive: true,
-              parentId: lease.parentConversationId || ""
-            });
-            continue;
-          }
-          let detectedSub = false;
-          let detectedKilled = false;
-          let foundParent = "";
-          const txPath = resolveStoreCandidateTranscriptPath(cid, {
-            transcriptPath: typeof lease.transcriptPath === "string" ? lease.transcriptPath : "",
-            allowDefaultDb: allowDefaultSummaryDb
-          });
-          if ((allowDefaultSummaryDb || txPath) && DatabaseSyncCtor) {
-            const summary = inspectSummaryDbForSubagent(DatabaseSyncCtor, cid, {
-              transcriptPath: txPath,
-              allowDefaultDb: allowDefaultSummaryDb
-            });
-            if (summary.isSubagent) detectedSub = true;
-            if (summary.killed) detectedKilled = true;
-            if (summary.parentId && summary.parentId !== cid) {
-              foundParent = summary.parentId;
-            }
-          }
-          if (!detectedSub && txPath && inspectTranscriptGenesisFileForSubagent(txPath)) {
-            detectedSub = true;
-          }
-          if (detectedSub || detectedKilled) {
-            subagentRepairMap.set(cid, {
-              markSubagent: detectedSub,
-              markKilled: detectedKilled,
-              scrubKeepalive: true,
-              parentId: foundParent
-            });
-          }
-        } catch {}
-      }
-
-      const kaPreRows = this.db
-        .prepare("SELECT key FROM meta WHERE key LIKE 'cache:ttl_keepalive_state:%'")
-        .all();
       const orphanSubagentKeepaliveIds = new Set();
-      for (const row of kaPreRows || []) {
-        if (!row || typeof row.key !== "string" || row.key.endsWith(":__unbound__")) continue;
-        const cid = this._sanitizeKeepaliveConvId(row.key.slice("cache:ttl_keepalive_state:".length));
-        if (!cid || subagentRepairMap.has(cid)) continue;
-        try {
-          const txPath = resolveStoreCandidateTranscriptPath(cid, { allowDefaultDb: allowDefaultSummaryDb });
-          let detectedSub = false;
-          let detectedKilled = false;
-          if ((allowDefaultSummaryDb || txPath) && DatabaseSyncCtor) {
-            const summary = inspectSummaryDbForSubagent(DatabaseSyncCtor, cid, {
-              transcriptPath: txPath,
+      try {
+        const preScanRows = this.db
+          .prepare("SELECT key, value FROM meta WHERE key LIKE 'watchdog_lease:%'")
+          .all();
+        for (const row of preScanRows || []) {
+          if (!row || typeof row.key !== "string" || typeof row.value !== "string") continue;
+          const cid = this._sanitizeKeepaliveConvId(row.key.slice("watchdog_lease:".length));
+          if (!cid || cid === "__unbound__") continue;
+          try {
+            const lease = JSON.parse(row.value);
+            if (!lease || typeof lease !== "object") continue;
+            if (lease.isSubagent === true) {
+              subagentRepairMap.set(cid, { markSubagent: false, scrubKeepalive: true, parentId: "" });
+              continue;
+            }
+            const inlineSub = Boolean(
+              (lease.parentConversationId && lease.parentConversationId !== cid) ||
+                (lease.rootSessionId && lease.rootSessionId !== cid) ||
+                (typeof lease.lastUserInput === "string" && STORE_HEADLESS_FINISH_RE.test(lease.lastUserInput))
+            );
+            if (inlineSub) {
+              subagentRepairMap.set(cid, {
+                markSubagent: true,
+                scrubKeepalive: true,
+                parentId: lease.parentConversationId || ""
+              });
+              continue;
+            }
+            if (summaryReader?.isBudgetExhausted()) continue;
+            let detectedSub = false;
+            let detectedKilled = false;
+            let foundParent = "";
+            const txPath = resolveStoreCandidateTranscriptPath(cid, {
+              transcriptPath: typeof lease.transcriptPath === "string" ? lease.transcriptPath : "",
               allowDefaultDb: allowDefaultSummaryDb
             });
-            if (summary.isSubagent) detectedSub = true;
-            if (summary.killed) detectedKilled = true;
-          }
-          if (!detectedSub && txPath && inspectTranscriptGenesisFileForSubagent(txPath)) {
-            detectedSub = true;
-          }
-          if (detectedSub || detectedKilled) {
-            orphanSubagentKeepaliveIds.add(cid);
-          }
-        } catch {}
+            if ((allowDefaultSummaryDb || txPath) && summaryReader) {
+              const summary = summaryReader.lookup(cid, { transcriptPath: txPath });
+              if (summary.isSubagent) detectedSub = true;
+              if (summary.killed) detectedKilled = true;
+              if (summary.parentId && summary.parentId !== cid) {
+                foundParent = summary.parentId;
+              }
+            }
+            if (!detectedSub && txPath && inspectTranscriptGenesisFileForSubagent(txPath)) {
+              detectedSub = true;
+            }
+            if (detectedSub || detectedKilled) {
+              subagentRepairMap.set(cid, {
+                markSubagent: detectedSub,
+                markKilled: detectedKilled,
+                scrubKeepalive: true,
+                parentId: foundParent
+              });
+            }
+          } catch {}
+        }
+
+        const kaPreRows = this.db
+          .prepare("SELECT key FROM meta WHERE key LIKE 'cache:ttl_keepalive_state:%'")
+          .all();
+        for (const row of kaPreRows || []) {
+          if (!row || typeof row.key !== "string" || row.key.endsWith(":__unbound__")) continue;
+          const cid = this._sanitizeKeepaliveConvId(row.key.slice("cache:ttl_keepalive_state:".length));
+          if (!cid || subagentRepairMap.has(cid)) continue;
+          if (summaryReader?.isBudgetExhausted()) break;
+          try {
+            const txPath = resolveStoreCandidateTranscriptPath(cid, { allowDefaultDb: allowDefaultSummaryDb });
+            let detectedSub = false;
+            let detectedKilled = false;
+            if ((allowDefaultSummaryDb || txPath) && summaryReader) {
+              const summary = summaryReader.lookup(cid, { transcriptPath: txPath });
+              if (summary.isSubagent) detectedSub = true;
+              if (summary.killed) detectedKilled = true;
+            }
+            if (!detectedSub && txPath && inspectTranscriptGenesisFileForSubagent(txPath)) {
+              detectedSub = true;
+            }
+            if (detectedSub || detectedKilled) {
+              orphanSubagentKeepaliveIds.add(cid);
+            }
+          } catch {}
+        }
+      } finally {
+        summaryReader?.close();
       }
 
       this._withWriteTx(() => {

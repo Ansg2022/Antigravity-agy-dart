@@ -84,8 +84,12 @@ test("v1.6.1-1: Dynamic timeout matrix (600s / 900s / 1200s), isHighReasoningMod
 
   // 2. High-reasoning model matcher positive & negative boundary checks
   for (const posModel of [
+    "gemini-4-carbon",
     "gemini-4-carbon-high",
+    "gemini-4-neon",
     "gemini-4-neon-xhigh",
+    "orchestrator-neon",
+    "orchestrator_neon",
     "Carbon High",
     "Neon (XHigh)",
     "Claude Thinking",
@@ -108,8 +112,11 @@ test("v1.6.1-1: Dynamic timeout matrix (600s / 900s / 1200s), isHighReasoningMod
     undefined,
     "gpt-4o",
     "gpt-4o-mini",
-    "gemini-4-carbon",
     "gemini-4-carbon-low",
+    "gemini-4-carbon-medium",
+    "gemini-4-neon-low",
+    "gemini-4-neon-medium",
+    "gemini-4-hydrogen",
     "claude-4-sonnet",
     "deepseek-v3",
     "highlight-v2",

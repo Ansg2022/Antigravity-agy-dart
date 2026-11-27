@@ -28,16 +28,17 @@ export const TTL_KEEPALIVE_PROMPT_RE = /\[agy-dart TTL(?:保活| Keepalive)(?:\s
 export const HEADLESS_FINISH_PROMPT_RE =
   /\bWhen you are done,\s*call the finish tool with your result\./i;
 export const SUBAGENT_ROLE_RE =
-  /(?:^|[-_\s/])(?:sub[-_]?agent|worker|research(?:er)?|verifier|review(?:er)?|explor(?:er|e)|audit(?:or)?|investigat(?:or)?|browser|image[-_]?generator)(?:$|[-_\s/])|^(?:DeepCoder|DeepInvestigator)[A-Za-z0-9_-]*$/i;
-const PRIMARY_HOST_AGENT_NAME_RE = /^(?:antigravity|main|default|primary|chat|user|assistant|cascade)$/i;
+  /(?:^|[-_\s/])(?:sub[-_]?agent|worker|monitor|swarm|research(?:er)?|verifier|review(?:er)?|explor(?:er|e)|audit(?:or)?|investigat(?:or)?|browser|image[-_]?generator)(?:$|[-_\s/])|^(?:DeepCoder|DeepInvestigator)[A-Za-z0-9_-]*$/i;
+const PRIMARY_HOST_AGENT_NAME_RE = /^(?:antigravity|main|default|primary|chat|user|assistant|cascade|coordinator)$/i;
 const SUBAGENT_GENESIS_SYS_MSG_RE =
-  /\[Message\]\s+timestamp=\S+\s+sender=[0-9a-f-]{8,}|<original_task>|<subagent_reminder>|\brunning as a subagent,\s*invoked by a caller agent\b/i;
+  /\[Message\]\s+timestamp=\S+\s+sender=[0-9a-f-]{8,}|<original_task>|<subagent_reminder>|\brunning as a subagent,\s*invoked by a caller agent\b|<swarm_(?:brief|board|assignment)>|\[Swarm\s+(?:Brief|Assignment|Worker)\b|\bYou are a swarm worker\b|\bswarm_monitor\s+SKILL\.md\b/i;
 export const SUBAGENT_TOOL_RE =
   /^(?:subagent|task|agent|delegate|call_subagent|invoke_subagent|run_workflow|schedule|manage_task|send_message|browser_subagent|spawn_subagent|run_subagent)$/i;
 export const LONG_MCP_TOOL_RE = /^(?:ctx_execute|ctx_batch|run_checks)$/i;
 export const SLOW_GEN_TOOL_RE = /^(?:generate_image|image_generator)$/i;
+const LOW_OR_MEDIUM_EFFORT_RE = /(?:^|[-_/\s(])(?:low|medium|med|minimal)(?:$|[-_/\s)])/i;
 const HIGH_REASONING_MODEL_RE =
-  /(?:^|[-_/\s(])(?:high|xhigh)(?:$|[-_/\s)])|thinking|(?:^|[-_/\s(])o[134](?:$|[-_/\s.)])|deepseek[-_/\s]?r1|(?:^|[-_/\s(])opus(?:$|[-_/\s).\d])/i;
+  /(?:^|[-_/\s(])(?:high|xhigh)(?:$|[-_/\s)])|thinking|(?:^|[-_/\s(])o[134](?:$|[-_/\s.)])|deepseek[-_/\s]?r1|(?:^|[-_/\s(])opus(?:$|[-_/\s).\d])|gemini[-_/\s]?4(?:[-_/\s.])?(?:carbon|neon)(?:$|[-_/\s.\d])|orchestrator[-_/\s._]*neon/i;
 export const KNOWN_MCP_TOOL_RE =
   /^(?:ctx_execute|ctx_batch|ctx_index|ctx_search|ctx_resume|ctx_stats|ctx_doctor|ctx_purge|batch_search|apply_edits|read_slices|run_checks|list_resources|read_resource)$/i;
 const HOST_NAMESPACE_RE = /^(?:default_api|builtin|host|antigravity|core|native)$/i;
@@ -876,6 +877,8 @@ export function readWatchdogTranscriptTail(transcriptPath, maxBytes = 32768) {
 export function isSubagentLeasePayload(payload = {}, env = process.env) {
   const envSub = String(env?.ANTIGRAVITY_SUBAGENT || "").trim().toLowerCase();
   if (envSub === "1" || envSub === "true") return true;
+  const envSwarmWorker = String(env?.ANTIGRAVITY_SWARM_WORKER || "").trim().toLowerCase();
+  if (envSwarmWorker === "1" || envSwarmWorker === "true") return true;
   if (env?.ANTIGRAVITY_PARENT_CONVERSATION_ID) return true;
   if (!payload || typeof payload !== "object" || Array.isArray(payload)) return false;
   const common =
@@ -887,12 +890,37 @@ export function isSubagentLeasePayload(payload = {}, env = process.env) {
 
   for (const bag of [payload, common, meta]) {
     if (!bag) continue;
-    if (bag.subagent === true || bag.isSubagent === true || bag.is_subagent === true) return true;
+    if (
+      bag.subagent === true ||
+      bag.isSubagent === true ||
+      bag.is_subagent === true ||
+      bag.swarmWorker === true ||
+      bag.isSwarmWorker === true ||
+      bag.is_swarm_worker === true
+    ) {
+      return true;
+    }
     if (
       (typeof bag.subagentId === "string" && bag.subagentId.trim()) ||
       (typeof bag.subagent_id === "string" && bag.subagent_id.trim())
     ) {
       return true;
+    }
+    const workerName = [bag.workerName, bag.worker_name, bag.rosterName, bag.roster_name]
+      .find((v) => typeof v === "string" && v.trim());
+    if (workerName && !PRIMARY_HOST_AGENT_NAME_RE.test(workerName.trim())) {
+      return true;
+    }
+    const swarmObj = bag.swarm && typeof bag.swarm === "object" && !Array.isArray(bag.swarm) ? bag.swarm : null;
+    if (swarmObj) {
+      if (swarmObj.isWorker === true || swarmObj.is_worker === true) return true;
+      const swRole = typeof swarmObj.role === "string" ? swarmObj.role.trim() : "";
+      if (swRole && !PRIMARY_HOST_AGENT_NAME_RE.test(swRole) && SUBAGENT_ROLE_RE.test(swRole)) return true;
+      const swName = [swarmObj.workerName, swarmObj.worker_name, swarmObj.name]
+        .find((v) => typeof v === "string" && v.trim());
+      if (swName && !PRIMARY_HOST_AGENT_NAME_RE.test(swName.trim()) && swRole.toLowerCase() !== "coordinator") {
+        return true;
+      }
     }
     const spec = bag.subagentSpec ?? bag.subagent_spec ?? null;
     if (spec && typeof spec === "object" && !Array.isArray(spec) && Object.keys(spec).length > 0) {
@@ -954,6 +982,8 @@ export function isSubagentLeasePayload(payload = {}, env = process.env) {
     payload.agent_type,
     payload.agentName,
     payload.agent_name,
+    payload.swarmRole,
+    payload.swarm_role,
     payload.sessionType,
     payload.session_type,
     payload.sessionKind,
@@ -961,13 +991,17 @@ export function isSubagentLeasePayload(payload = {}, env = process.env) {
     common?.agentName,
     common?.agent_name,
     common?.role,
+    common?.swarmRole,
+    common?.swarm_role,
     meta?.role,
     meta?.agentRole,
     meta?.agent_role,
     meta?.agentType,
     meta?.agent_type,
     meta?.agentName,
-    meta?.agent_name
+    meta?.agent_name,
+    meta?.swarmRole,
+    meta?.swarm_role
   ];
   for (const candidate of roleCandidates) {
     if (typeof candidate === "string" && candidate.trim()) {
@@ -1525,7 +1559,7 @@ function readConversationFtsArchived(db, conversationId) {
   if (!db || !conversationId) return null;
   try {
     const row = db
-      .prepare("SELECT MAX(archived) AS archived FROM conversations_fts WHERE conversation_id = ?")
+      .prepare("SELECT MAX(archived) AS archived FROM (SELECT archived FROM conversations_fts WHERE conversation_id = ? LIMIT 32)")
       .get(conversationId);
     if (!row || row.archived === null || row.archived === undefined) return null;
     if (row.archived === true) return true;
@@ -1538,6 +1572,56 @@ function readConversationFtsArchived(db, conversationId) {
   } catch {
     return null;
   }
+}
+
+function parseSummaryArchivedColumn(val) {
+  if (val === null || val === undefined) return null;
+  if (val === true) return true;
+  if (val === false) return false;
+  const rawStr = typeof val === "string" ? val.trim().toLowerCase() : "";
+  if (rawStr === "true") return true;
+  if (rawStr === "false") return false;
+  const n = Number(val);
+  if (Number.isFinite(n)) return n > 0;
+  return null;
+}
+
+const SUMMARY_LOOKUP_CACHE_MAX = 256;
+const SUMMARY_LOOKUP_CACHE_TTL_MS = 10_000;
+const _summaryLookupCache = new Map();
+
+export function clearConversationSummaryCache() {
+  _summaryLookupCache.clear();
+}
+
+function statSignatureSafe(filePath) {
+  if (!filePath) return "-";
+  try {
+    const st = fs.statSync(filePath);
+    return `${Math.round(st.mtimeMs)}:${st.size}`;
+  } catch {
+    return "-";
+  }
+}
+
+function buildSummaryDiskStamp(dbCandidates, safeId) {
+  const parts = [];
+  for (const dbPath of dbCandidates) {
+    const agRoot = path.dirname(dbPath);
+    const annPath = path.resolve(agRoot, "annotations", `${safeId}.pbtxt`);
+    parts.push(
+      `${statSignatureSafe(dbPath)}/${statSignatureSafe(`${dbPath}-wal`)}/${statSignatureSafe(annPath)}`
+    );
+  }
+  return parts.join("|");
+}
+
+function rememberSummaryLookupCache(key, entry) {
+  if (_summaryLookupCache.size >= SUMMARY_LOOKUP_CACHE_MAX && !_summaryLookupCache.has(key)) {
+    const oldest = _summaryLookupCache.keys().next().value;
+    if (oldest !== undefined) _summaryLookupCache.delete(oldest);
+  }
+  _summaryLookupCache.set(key, entry);
 }
 
 /**
@@ -1595,6 +1679,30 @@ export function lookupConversationSummary(conversationId, options = {}) {
     summaryDbPath: safeOpts.summaryDbPath || "",
     allowDefaultDb: safeOpts.allowDefaultDb !== false
   });
+  const allowUntitledCustomAgent = safeOpts.allowUntitledCustomAgent !== false;
+  const useCache = safeOpts.bypassCache !== true;
+  const cacheKey = useCache
+    ? `${safeId}\0${allowUntitledCustomAgent ? "1" : "0"}\0${dbCandidates.join("\0")}`
+    : "";
+  const nowMs = Date.now();
+  const diskStamp = useCache ? buildSummaryDiskStamp(dbCandidates, safeId) : "";
+  if (useCache) {
+    const cached = _summaryLookupCache.get(cacheKey);
+    if (cached && nowMs < cached.expiresAt && cached.diskStamp === diskStamp) {
+      const r = cached.record;
+      return {
+        found: r.found,
+        title: inlineTitle || r.title,
+        cwd: inlineCwd || r.cwd,
+        isSubagent: Boolean(inlineSubagent || r.isSubagent),
+        killed: r.killed,
+        archived: r.archived,
+        parentConversationId: inlineParent || r.parentConversationId,
+        nestingDepth: r.nestingDepth,
+        agentName: r.agentName
+      };
+    }
+  }
 
   let fallbackArchived = false;
   for (const dbPath of dbCandidates) {
@@ -1617,20 +1725,28 @@ export function lookupConversationSummary(conversationId, options = {}) {
       try {
         row = db
           .prepare(
-            "SELECT title, workspace_uris, parent_conversation_id, nesting_depth, agent_name, killed FROM conversation_summaries WHERE conversation_id = ? LIMIT 1"
+            "SELECT title, workspace_uris, parent_conversation_id, nesting_depth, agent_name, killed, archived FROM conversation_summaries WHERE conversation_id = ? LIMIT 1"
           )
           .get(safeId);
       } catch {
         try {
           row = db
             .prepare(
-              "SELECT title, workspace_uris, parent_conversation_id, nesting_depth, agent_name FROM conversation_summaries WHERE conversation_id = ? LIMIT 1"
+              "SELECT title, workspace_uris, parent_conversation_id, nesting_depth, agent_name, killed FROM conversation_summaries WHERE conversation_id = ? LIMIT 1"
             )
             .get(safeId);
         } catch {
-          row = db
-            .prepare("SELECT title, workspace_uris FROM conversation_summaries WHERE conversation_id = ? LIMIT 1")
-            .get(safeId);
+          try {
+            row = db
+              .prepare(
+                "SELECT title, workspace_uris, parent_conversation_id, nesting_depth, agent_name FROM conversation_summaries WHERE conversation_id = ? LIMIT 1"
+              )
+              .get(safeId);
+          } catch {
+            row = db
+              .prepare("SELECT title, workspace_uris FROM conversation_summaries WHERE conversation_id = ? LIMIT 1")
+              .get(safeId);
+          }
         }
       }
       const dbParent = readConversationParentId(db, safeId, row?.parent_conversation_id);
@@ -1644,16 +1760,39 @@ export function lookupConversationSummary(conversationId, options = {}) {
           : 0;
         const dbAgent = typeof row.agent_name === "string" ? row.agent_name.trim().slice(0, 96) : "";
         const dbKilled = Boolean(row.killed === true || (Number.isFinite(Number(row.killed)) && Number(row.killed) > 0));
+        const rowArchived = parseSummaryArchivedColumn(row.archived);
         const dbArchived =
-          annArchived !== null ? annArchived : readConversationFtsArchived(db, safeId) === true;
+          annArchived !== null
+            ? annArchived
+            : rowArchived !== null
+              ? rowArchived
+              : readConversationFtsArchived(db, safeId) === true;
         const dbSubagent = isSummaryMetadataSubagent({
           conversationId: safeId,
           parentConversationId: dbParent,
           nestingDepth: dbDepth,
           agentName: dbAgent,
           title: dbTitle,
-          allowUntitledCustomAgent: safeOpts.allowUntitledCustomAgent !== false
+          allowUntitledCustomAgent
         });
+        const record = {
+          found: true,
+          title: dbTitle,
+          cwd: dbCwd,
+          isSubagent: dbSubagent,
+          killed: dbKilled,
+          archived: dbArchived,
+          parentConversationId: dbParent,
+          nestingDepth: dbDepth,
+          agentName: dbAgent
+        };
+        if (useCache) {
+          rememberSummaryLookupCache(cacheKey, {
+            diskStamp,
+            expiresAt: nowMs + SUMMARY_LOOKUP_CACHE_TTL_MS,
+            record
+          });
+        }
         return {
           found: true,
           title: inlineTitle || dbTitle,
@@ -1680,6 +1819,24 @@ export function lookupConversationSummary(conversationId, options = {}) {
     }
   }
 
+  const missRecord = {
+    found: false,
+    title: "",
+    cwd: "",
+    isSubagent: false,
+    killed: false,
+    archived: fallbackArchived,
+    parentConversationId: "",
+    nestingDepth: 0,
+    agentName: ""
+  };
+  if (useCache) {
+    rememberSummaryLookupCache(cacheKey, {
+      diskStamp,
+      expiresAt: nowMs + SUMMARY_LOOKUP_CACHE_TTL_MS,
+      record: missRecord
+    });
+  }
   return {
     found: false,
     title: inlineTitle,
@@ -1695,6 +1852,64 @@ export function lookupConversationSummary(conversationId, options = {}) {
 
 export function lookupConversationTitle(conversationId, options = {}) {
   return lookupConversationSummary(conversationId, options).title;
+}
+
+const SUMMARY_RECENT_TIME_COLUMNS = [
+  "last_modified_time",
+  "updated_at",
+  "modified_at",
+  "last_updated_ms",
+  "updated_ms",
+  "last_step_time",
+  "created_at"
+];
+
+/**
+ * Bounded O(1) lookup of the most recently active conversation IDs from a sibling
+ * `conversation_summaries.db` alongside a `brain/` directory (used to avoid O(N)
+ * `brain/` scans under unlimited history while keeping `cache-analyzer.js` SQLite-free).
+ */
+export function listRecentConversationIdsFromSummaryDb(brainRoot, maxCandidates = 32) {
+  if (!brainRoot || typeof brainRoot !== "string") return [];
+  const resolvedRoot = path.resolve(brainRoot);
+  if (path.basename(resolvedRoot).toLowerCase() !== "brain") return [];
+  const agRoot = path.dirname(resolvedRoot);
+  if (!agRoot || agRoot === resolvedRoot) return [];
+  const summaryDbPath = path.join(agRoot, "conversation_summaries.db");
+  const limit = Number.isFinite(Number(maxCandidates)) && Number(maxCandidates) >= 1
+    ? Math.min(200, Math.floor(Number(maxCandidates)))
+    : 32;
+  let db = null;
+  try {
+    if (!fs.existsSync(summaryDbPath)) return [];
+    const DatabaseSync = getLazyDatabaseSync();
+    try {
+      db = new DatabaseSync(summaryDbPath, { readOnly: true, timeout: 150 });
+    } catch {
+      db = new DatabaseSync(summaryDbPath, { readOnly: true });
+    }
+    const cols = db.prepare("PRAGMA table_info(conversation_summaries)").all();
+    const colNames = new Set((cols || []).map((c) => String(c?.name || "").toLowerCase()));
+    if (!colNames.has("conversation_id")) return [];
+    const orderCol = SUMMARY_RECENT_TIME_COLUMNS.find((c) => colNames.has(c)) || "rowid";
+    const rows = db
+      .prepare(`SELECT conversation_id FROM conversation_summaries ORDER BY ${orderCol} DESC LIMIT ?`)
+      .all(limit);
+    const out = [];
+    for (const row of rows || []) {
+      const cid = sanitizeConversationId(row?.conversation_id);
+      if (cid) out.push(cid);
+    }
+    return out;
+  } catch {
+    return [];
+  } finally {
+    if (db) {
+      try {
+        db.close();
+      } catch {}
+    }
+  }
 }
 
 function firstNonEmptyString(...values) {
@@ -1766,6 +1981,7 @@ export function isHighReasoningModel(model) {
   if (typeof model !== "string") return false;
   const trimmed = model.trim();
   if (!trimmed) return false;
+  if (LOW_OR_MEDIUM_EFFORT_RE.test(trimmed)) return false;
   return HIGH_REASONING_MODEL_RE.test(trimmed);
 }
 
