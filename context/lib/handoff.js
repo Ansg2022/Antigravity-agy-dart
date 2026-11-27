@@ -21,7 +21,9 @@ import {
   resolveConversationOwnedFile
 } from "./cache-analyzer.js";
 import { isSecretRedactionEnabled, redactSecrets } from "./security.js";
+import { truncateUtf8Safe } from "./stable-json.js";
 import { isHeadlessWorkerPrompt, isTtlKeepalivePrompt } from "./watchdog-lease.js";
+export { truncateUtf8Safe };
 import { isFailureAnchorLine } from "../../hooks/filter-rules.mjs";
 
 const DEFAULT_MAX_BYTES = 5800;
@@ -60,45 +62,6 @@ const CONTROL_COMMAND_RE =
   /^\/(?:compact|clear|reset|help|status|model|exit|quit|new|undo|redo|branch|effort|resume|stop|cancel|continue|keepalive|grill-me|plan|goal|boost|run-workflow|swarm|browser|generative_ui)(?:\s|$)/i;
 const BARE_SLASH_CMD_RE = /^\/[a-z][a-z0-9_-]*$/i;
 const BRAIN_ARTIFACT_NAMES = Object.freeze(["task.md", "implementation_plan.md", "walkthrough.md"]);
-
-/** Strictly truncate a string to <= maxBytes UTF-8 bytes without splitting multi-byte chars or surrogate pairs */
-export function truncateUtf8Safe(text, maxBytes) {
-  if (!text) return "";
-  const limit = Number.isFinite(maxBytes) ? Math.max(0, Math.floor(maxBytes)) : 0;
-  if (limit === 0) return "";
-  const str = String(text);
-  const buf = Buffer.from(str, "utf8");
-  if (buf.length <= limit) return str;
-  let cut = limit;
-  // Back up if landing in the middle of a multi-byte UTF-8 sequence (continuation bytes: 10xxxxxx)
-  while (cut > 0 && (buf[cut] & 0xc0) === 0x80) {
-    cut -= 1;
-  }
-  // Verify the final UTF-8 code point ending at `cut` is complete by inspecting its lead byte length
-  // (avoids stripping legitimate user-typed U+FFFD characters encoded as EF BF BD)
-  if (cut > 0) {
-    let lastLead = cut - 1;
-    while (lastLead > 0 && (buf[lastLead] & 0xc0) === 0x80) {
-      lastLead -= 1;
-    }
-    const lead = buf[lastLead];
-    let expectedLen = 1;
-    if ((lead & 0xe0) === 0xc0) expectedLen = 2;
-    else if ((lead & 0xf0) === 0xe0) expectedLen = 3;
-    else if ((lead & 0xf8) === 0xf0) expectedLen = 4;
-    if (cut - lastLead < expectedLen) {
-      cut = lastLead;
-    }
-  }
-  let out = buf.subarray(0, cut).toString("utf8");
-  if (out.length > 0) {
-    const lastCode = out.charCodeAt(out.length - 1);
-    if (lastCode >= 0xd800 && lastCode <= 0xdbff) {
-      out = out.slice(0, -1);
-    }
-  }
-  return out;
-}
 
 function formatBytesCompact(bytes) {
   const b = Number(bytes || 0);

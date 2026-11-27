@@ -15,7 +15,6 @@ const WARN_WINDOW_RATIO = 0.65;
 const CRITICAL_WINDOW_RATIO = 0.80;
 const COLD_COMPACT_WINDOW_RATIO = 0.30;
 const DELAY_HOT_WINDOW_RATIO = 0.15;
-const EMPIRICAL_TTL_TRIGGER_RATIO = 1.1;
 
 /**
  * Lightweight model-aware KV-cache profile table (ordered most-specific first).

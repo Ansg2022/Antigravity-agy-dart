@@ -1,4 +1,4 @@
-import { suppressSqliteExperimentalWarning } from "../../hooks/compile-cache.mjs";
+import { isSameFilePath, suppressSqliteExperimentalWarning } from "../../hooks/compile-cache.mjs";
 import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
@@ -2780,18 +2780,7 @@ function handleWatchdogActionMutation(data = {}, defaultConvId = "default") {
   };
 }
 
-export function isSameFilePath(a, b) {
-  if (!a || !b) return false;
-  const norm = (p) => {
-    const resolved = path.resolve(String(p));
-    let real = resolved;
-    try {
-      real = fs.realpathSync(resolved);
-    } catch {}
-    return process.platform === "win32" ? real.toLowerCase() : real;
-  };
-  return norm(a) === norm(b);
-}
+export { isSameFilePath };
 
 /**
  * Only allow SidecarApp mode when ANTIGRAVITY_SIDECAR_UI_TOKEN is explicitly non-empty

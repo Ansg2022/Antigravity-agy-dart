@@ -13,6 +13,8 @@ import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { redactSecrets } from "./security.js";
+import { truncateUtf8Safe } from "./stable-json.js";
+export { truncateUtf8Safe };
 
 export const WATCHDOG_LEASE_PREFIX = "watchdog_lease:";
 export const WATCHDOG_PHASES = Object.freeze({
@@ -1020,23 +1022,6 @@ export function getToolTimeoutTier(toolKind = "", phase = "") {
   if (toolKind === "mcp") return 2;
   if (toolKind === "read" || toolKind === "host") return 1;
   return 0;
-}
-
-export function truncateUtf8Safe(text, maxBytes) {
-  if (!text) return "";
-  const limit = Number.isFinite(maxBytes) ? Math.max(0, Math.floor(maxBytes)) : 0;
-  if (limit === 0) return "";
-  const str = String(text);
-  const buf = Buffer.from(str, "utf8");
-  if (buf.length <= limit) return str;
-  let cut = limit;
-  while (cut > 0 && (buf[cut] & 0xc0) === 0x80) cut -= 1;
-  let out = buf.subarray(0, cut).toString("utf8").replace(/\uFFFD+$/, "");
-  if (out.length > 0) {
-    const code = out.charCodeAt(out.length - 1);
-    if (code >= 0xd800 && code <= 0xdbff) out = out.slice(0, -1);
-  }
-  return out;
 }
 
 export function sanitizeConversationId(raw) {

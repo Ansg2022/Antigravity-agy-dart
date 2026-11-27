@@ -345,27 +345,6 @@ function computeColdUpperBound(coldList) {
   return gaps[idx];
 }
 
-function calibrateEmpiricalTtl(profile, maxWarmHitGapSec, hasExplicit1hWrite = false) {
-  const profileTtl = profile?.ttlSec || DEFAULT_CACHE_TTL_SEC;
-  const isExtended1hTierModel = isExtended1hTierProfile(profile);
-
-  if (hasExplicit1hWrite) {
-    const floor =
-      maxWarmHitGapSec !== null && maxWarmHitGapSec > 3600
-        ? ceilTo60(maxWarmHitGapSec)
-        : 3600;
-    return Math.max(profileTtl, floor);
-  }
-  if (maxWarmHitGapSec === null || !(maxWarmHitGapSec > profileTtl * EMPIRICAL_TTL_TRIGGER_RATIO)) {
-    return null;
-  }
-  const roundedFloor = ceilTo60(maxWarmHitGapSec);
-  if (isExtended1hTierModel) {
-    return maxWarmHitGapSec <= 3600 ? 3600 : roundedFloor;
-  }
-  return Math.min(TTL_IMPLICIT_MAX_CAP_SEC, roundedFloor);
-}
-
 /**
  * Cross-session & in-session interval-bounded empirical TTL estimator (pure function, zero DB I/O).
  * Preserves backward-compatible `ttlSource` ("explicit" | "empirical" | "profile") while exposing
@@ -1589,14 +1568,6 @@ function clauseHasFilterStage(clause) {
   return false;
 }
 
-function isAllReadOnlyOrSetupCommand(commandText) {
-  const { clauses } = splitShellClauses(commandText);
-  if (clauses.length === 0) return false;
-  const nonSetup = clauses.filter((c) => !isPureSetupClause(c));
-  if (nonSetup.length === 0) return true;
-  return nonSetup.every((c) => isReadOnlyClause(c));
-}
-
 function isNonConvergingPassCommand(commandText) {
   if (!commandText || typeof commandText !== "string" || !commandText.trim()) return false;
   const { clauses, operators } = getTrailingSemicolonSegment(commandText);
@@ -1752,10 +1723,6 @@ function analyzeDiagnosticFilePaths(bodyText) {
     }
   }
   return { paths: out, hasUnattributedDiagnostic };
-}
-
-function extractDiagnosticFilePaths(bodyText) {
-  return analyzeDiagnosticFilePaths(bodyText).paths;
 }
 
 function normalizedPathsOverlap(diagPath, candidatePath) {

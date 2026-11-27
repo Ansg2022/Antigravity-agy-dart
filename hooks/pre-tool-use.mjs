@@ -3,7 +3,13 @@ import { createHash } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { enableVersionedCompileCache } from "./compile-cache.mjs";
+import {
+  enableVersionedCompileCache,
+  isSameFilePath,
+  readStdin,
+  resolveDirectConversationId,
+  resolveSessionId as resolveSharedSessionId
+} from "./compile-cache.mjs";
 import { getConfigSnapshot, getEffectiveConfig } from "../context/lib/config.js";
 
 const __filename = fileURLToPath(import.meta.url);
@@ -11,20 +17,7 @@ const __dirname = path.dirname(__filename);
 const CLI_FILTER_SCRIPT = path.resolve(__dirname, "cli-filter.mjs");
 const PLUGIN_ROOT_POSIX = path.resolve(__dirname, "..").replace(/\\/g, "/");
 
-function isMainModule() {
-  if (!process.argv[1]) return false;
-  const norm = (p) => {
-    const resolved = path.resolve(p);
-    let real = resolved;
-    try {
-      real = fs.realpathSync(resolved);
-    } catch {}
-    return process.platform === "win32" ? real.toLowerCase() : real;
-  };
-  return norm(process.argv[1]) === norm(__filename);
-}
-
-const isDirectRun = isMainModule();
+const isDirectRun = Boolean(process.argv[1] && isSameFilePath(process.argv[1], __filename));
 
 // Dynamically loaded AFTER enableVersionedCompileCache() in CLI runs so Node's V8 compile cache
 // actually caches store.js & filter-rules.mjs AND 0-SQLite fast paths skip loading them entirely.
@@ -651,41 +644,7 @@ function isBinaryFile(absPath, ext, readCtx = null) {
   return false;
 }
 
-export function resolveSharedSessionId(payload = {}) {
-  return (
-    payload.rootConversationId ||
-    payload.root_conversation_id ||
-    payload.common?.rootConversationId ||
-    payload.common?.root_conversation_id ||
-    payload.parentConversationId ||
-    payload.parent_conversation_id ||
-    payload.common?.parentConversationId ||
-    payload.common?.parent_conversation_id ||
-    payload.conversationId ||
-    payload.conversation_id ||
-    payload.common?.conversationId ||
-    payload.common?.conversation_id ||
-    payload.sessionId ||
-    payload.session_id ||
-    process.env.ANTIGRAVITY_ROOT_CONVERSATION_ID ||
-    process.env.ANTIGRAVITY_PARENT_CONVERSATION_ID ||
-    process.env.ANTIGRAVITY_CONVERSATION_ID ||
-    "default"
-  );
-}
-
-export function resolveDirectConversationId(payload = {}, env = process.env) {
-  return (
-    payload.conversationId ||
-    payload.conversation_id ||
-    payload.common?.conversationId ||
-    payload.common?.conversation_id ||
-    payload.sessionId ||
-    payload.session_id ||
-    env?.ANTIGRAVITY_CONVERSATION_ID ||
-    "default"
-  );
-}
+export { resolveSharedSessionId, resolveDirectConversationId };
 
 export function hasExplicitConversationId(payload = {}, env = process.env) {
   const raw =
@@ -1246,35 +1205,6 @@ export function buildCliFilterRewrite(commandLine, sessionId = "default", cwd = 
     rewrittenCommand: `node "${scriptPosix}" --rule ${matched.rule.id} --b64 ${b64} --orig-b64 ${origB64} --session ${sessB64}${noteFlag}`,
     note: matched.note
   };
-}
-
-function readStdin(timeoutMs = 1500) {
-  return new Promise((resolve) => {
-    let data = "";
-    let settled = false;
-    const onData = (chunk) => {
-      data += chunk;
-    };
-    const done = () => {
-      if (settled) return;
-      settled = true;
-      clearTimeout(timer);
-      process.stdin.off("data", onData);
-      process.stdin.off("end", done);
-      process.stdin.off("error", done);
-      try {
-        process.stdin.pause();
-        process.stdin.unref?.();
-      } catch {}
-      resolve(data);
-    };
-    const timer = setTimeout(done, timeoutMs);
-    timer.unref();
-    process.stdin.setEncoding("utf8");
-    process.stdin.on("data", onData);
-    process.stdin.on("end", done);
-    process.stdin.on("error", done);
-  });
 }
 
 function extractFileDumpTargets(cmdAfterVerb) {

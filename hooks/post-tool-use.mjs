@@ -11,7 +11,13 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { enableVersionedCompileCache } from "./compile-cache.mjs";
+import {
+  enableVersionedCompileCache,
+  isSameFilePath,
+  readStdin,
+  resolveDirectConversationId,
+  resolveSessionId
+} from "./compile-cache.mjs";
 import { getEffectiveConfig } from "../context/lib/config.js";
 import {
   executionReceiptFromText,
@@ -19,71 +25,6 @@ import {
   fastToolFingerprint,
   isContextExecution
 } from "../context/lib/execution-receipts.js";
-
-function readStdin(timeoutMs = 1500) {
-  return new Promise((resolve) => {
-    let data = "";
-    let settled = false;
-    const onData = (chunk) => {
-      data += chunk;
-    };
-    const done = () => {
-      if (settled) return;
-      settled = true;
-      clearTimeout(timer);
-      process.stdin.off("data", onData);
-      process.stdin.off("end", done);
-      process.stdin.off("error", done);
-      try {
-        process.stdin.pause();
-        process.stdin.unref?.();
-      } catch {}
-      resolve(data);
-    };
-    const timer = setTimeout(done, timeoutMs);
-    timer.unref();
-    process.stdin.setEncoding("utf8");
-    process.stdin.on("data", onData);
-    process.stdin.on("end", done);
-    process.stdin.on("error", done);
-  });
-}
-
-function resolveSessionId(payload = {}) {
-  return (
-    payload.rootConversationId ||
-    payload.root_conversation_id ||
-    payload.common?.rootConversationId ||
-    payload.common?.root_conversation_id ||
-    payload.parentConversationId ||
-    payload.parent_conversation_id ||
-    payload.common?.parentConversationId ||
-    payload.common?.parent_conversation_id ||
-    payload.conversationId ||
-    payload.conversation_id ||
-    payload.common?.conversationId ||
-    payload.common?.conversation_id ||
-    payload.sessionId ||
-    payload.session_id ||
-    process.env.ANTIGRAVITY_ROOT_CONVERSATION_ID ||
-    process.env.ANTIGRAVITY_PARENT_CONVERSATION_ID ||
-    process.env.ANTIGRAVITY_CONVERSATION_ID ||
-    "default"
-  );
-}
-
-function resolveDirectConversationId(payload = {}) {
-  return (
-    payload.conversationId ||
-    payload.conversation_id ||
-    payload.common?.conversationId ||
-    payload.common?.conversation_id ||
-    payload.sessionId ||
-    payload.session_id ||
-    process.env.ANTIGRAVITY_CONVERSATION_ID ||
-    "default"
-  );
-}
 
 function cleanPath(val) {
   if (!val) return "";
@@ -1525,18 +1466,6 @@ async function main() {
 }
 
 const __selfPath = path.resolve(fileURLToPath(import.meta.url));
-function isSameFilePath(a, b) {
-  if (!a || !b) return false;
-  const norm = (p) => {
-    const resolved = path.resolve(p);
-    let real = resolved;
-    try {
-      real = fs.realpathSync(resolved);
-    } catch {}
-    return process.platform === "win32" ? real.toLowerCase() : real;
-  };
-  return norm(a) === norm(b);
-}
 const isDirectRun = Boolean(process.argv[1] && isSameFilePath(process.argv[1], __selfPath));
 if (isDirectRun) {
   main().catch(() => {

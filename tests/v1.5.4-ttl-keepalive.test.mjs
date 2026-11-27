@@ -4447,6 +4447,25 @@ test("v1.5.4-ka-13: Global keepalive maxCount (0..20), per-window override vs fo
     const scriptMatch = htmlSrc.match(/<script>([\s\S]*?)<\/script>/);
     assert.ok(scriptMatch && scriptMatch[1]);
 
+    const createFetchTracker = (fetchImpl) => {
+      const pending = new Set();
+      const trackedFetch = (url, opts = {}) => {
+        const p = fetchImpl(url, opts);
+        let entry;
+        entry = Promise.resolve(p).catch(() => {}).finally(() => pending.delete(entry));
+        pending.add(entry);
+        return p;
+      };
+      const drainFetches = async () => {
+        await new Promise((resolve) => setImmediate(resolve));
+        while (pending.size > 0) {
+          await Promise.all([...pending]);
+          await new Promise((resolve) => setImmediate(resolve));
+        }
+      };
+      return { trackedFetch, drainFetches };
+    };
+
     const runVmForSearch = async (searchQuery, initLang = "zh") => {
       const elements = new Map();
       let lang = initLang;
@@ -4486,6 +4505,7 @@ test("v1.5.4-ka-13: Global keepalive maxCount (0..20), per-window override vs fo
           json: async () => res.json || {}
         };
       };
+      const { trackedFetch, drainFetches } = createFetchTracker(vmFetch);
       const vmCtx = vm.createContext({
         window: {
           location: { search: searchQuery, href: `http://127.0.0.1:${port}/${searchQuery}` },
@@ -4502,7 +4522,7 @@ test("v1.5.4-ka-13: Global keepalive maxCount (0..20), per-window override vs fo
         },
         localStorage: { getItem: () => lang, setItem(_k, v) { lang = v; } },
         navigator: { language: initLang === "en" ? "en-US" : "zh-CN", clipboard: { writeText: async () => {} } },
-        fetch: vmFetch,
+        fetch: trackedFetch,
         Headers,
         URLSearchParams,
         setInterval: () => 1,
@@ -4531,13 +4551,12 @@ test("v1.5.4-ka-13: Global keepalive maxCount (0..20), per-window override vs fo
         console: { error() {}, log() {}, warn() {} }
       });
       vm.runInContext(scriptMatch[1], vmCtx);
-      await flushMicrotasks();
-      await flushMicrotasks();
-      return { vmCtx, getEl };
+      await drainFetches();
+      return { vmCtx, getEl, drainFetches };
     };
 
     // VM Case A: Custom Window B (`?conversationId=conv-http-b`) shows `本窗续温：2/6`, `随全局` visible, global `全局加热：×` + `5`
-    const { vmCtx: vmB, getEl: elB } = await runVmForSearch("?conversationId=conv-http-b", "zh");
+    const { vmCtx: vmB, getEl: elB, drainFetches: drainB } = await runVmForSearch("?conversationId=conv-http-b", "zh");
     assert.equal(elB("kv-global-keepalive-btn").innerText, "全局加热：×");
     assert.equal(elB("kv-global-keepalive-max").value, "5");
     assert.equal(elB("kv-keepalive-btn").innerText, "本窗续温：2/6");
@@ -4546,38 +4565,38 @@ test("v1.5.4-ka-13: Global keepalive maxCount (0..20), per-window override vs fo
 
     // Switch to English and verify EN labels
     vmB.setLanguage("en", true);
-    await flushMicrotasks();
+    await drainB();
     assert.equal(elB("kv-global-keepalive-btn").innerText, "Global Warm: ×");
     assert.equal(elB("kv-keepalive-btn").innerText, "Window Warm: 2/6");
     assert.equal(elB("kv-keepalive-follow-btn").textContent, "Global");
 
     // Switch back to ZH, clear per-window input (`""`) -> triggers resetTtlKeepaliveOverride(), hides `随全局`, keeps used=2, follows global=5!
     vmB.setLanguage("zh", true);
-    await flushMicrotasks();
+    await drainB();
     await vmB.changeTtlKeepaliveMax("");
-    await flushMicrotasks();
+    await drainB();
     assert.equal(elB("kv-keepalive-btn").innerText, "自动续温：2/5");
     assert.equal(elB("kv-keepalive-follow-btn").className, "keepalive-follow-btn hidden");
 
     // Toggle global button OFF -> `全局加热：关` + `0`, and uncustomized Window B turns OFF (`自动续温：关`)
     await vmB.toggleGlobalTtlKeepalive();
-    await flushMicrotasks();
+    await drainB();
     assert.equal(elB("kv-global-keepalive-btn").innerText, "全局加热：关");
     assert.equal(elB("kv-global-keepalive-max").value, "0");
     assert.equal(elB("kv-keepalive-btn").innerText, "自动续温：关");
 
     // Toggle global button back ON -> restores fallback `5` (`全局加热：×` + `5`)
     await vmB.toggleGlobalTtlKeepalive();
-    await flushMicrotasks();
+    await drainB();
     assert.equal(elB("kv-global-keepalive-btn").innerText, "全局加热：×");
     assert.equal(elB("kv-global-keepalive-max").value, "5");
     assert.equal(elB("kv-keepalive-btn").innerText, "自动续温：2/5");
 
     // VM Case B: Unbound empty tab (`__unbound__`) tracks global count (`0/5` -> changeGlobalTtlKeepaliveMax("9") -> `0/9`)
-    const { vmCtx: vmUnbound, getEl: elU } = await runVmForSearch("?conversationId=__unbound__", "zh");
+    const { vmCtx: vmUnbound, getEl: elU, drainFetches: drainU } = await runVmForSearch("?conversationId=__unbound__", "zh");
     assert.equal(elU("kv-global-keepalive-max").value, "5");
     await vmUnbound.changeGlobalTtlKeepaliveMax("9");
-    await flushMicrotasks();
+    await drainU();
     assert.equal(elU("kv-global-keepalive-max").value, "9");
     assert.equal(elU("kv-keepalive-max").value, "9");
 
@@ -4585,7 +4604,7 @@ test("v1.5.4-ka-13: Global keepalive maxCount (0..20), per-window override vs fo
     // AND out-of-order rapid `toggle -> followGlobal -> setGlobal` reconciles deterministically!
     const hostActionBodies = [];
     let delayResetOverrideResolve = null;
-    const { vmCtx: vmHostRace, getEl: elR } = await (async () => {
+    const { vmCtx: vmHostRace, getEl: elR, drainFetches: drainHostRace } = await (async () => {
       const elements = new Map();
       const makeEl = (id) => ({
         id,
@@ -4632,6 +4651,7 @@ test("v1.5.4-ka-13: Global keepalive maxCount (0..20), per-window override vs fo
           json: async () => res.json || {}
         };
       };
+      const { trackedFetch, drainFetches } = createFetchTracker(raceFetch);
       const vmCtx = vm.createContext({
         window: {
           sidecar: {
@@ -4641,7 +4661,7 @@ test("v1.5.4-ka-13: Global keepalive maxCount (0..20), per-window override vs fo
             set conversationId(v) {
               sidecarConvId = v;
             },
-            fetch: raceFetch,
+            fetch: trackedFetch,
             ui: { toggleConversation() {} }
           },
           location: { search: "", href: `http://127.0.0.1:${port}/` },
@@ -4658,7 +4678,7 @@ test("v1.5.4-ka-13: Global keepalive maxCount (0..20), per-window override vs fo
         },
         localStorage: { getItem: () => "zh", setItem() {} },
         navigator: { language: "zh-CN", clipboard: { writeText: async () => {} } },
-        fetch: raceFetch,
+        fetch: trackedFetch,
         Headers,
         URLSearchParams,
         setInterval: () => 1,
@@ -4687,9 +4707,8 @@ test("v1.5.4-ka-13: Global keepalive maxCount (0..20), per-window override vs fo
         console: { error() {}, log() {}, warn() {} }
       });
       vm.runInContext(scriptMatch[1], vmCtx);
-      await flushMicrotasks();
-      await flushMicrotasks();
-      return { vmCtx, getEl };
+      await drainFetches();
+      return { vmCtx, getEl, drainFetches };
     })();
 
     // Unbound `window.sidecar` tab: `toggleTtlNotify` + `changeGlobalTtlKeepaliveMax` must pass `fromSidecarHost: true` and `conversationId: ""`
@@ -4715,8 +4734,7 @@ test("v1.5.4-ka-13: Global keepalive maxCount (0..20), per-window override vs fo
     await pGlobal; // Server ran setGlobalTtlKeepalive(11) BEFORE resetTtlKeepaliveOverride()!
     delayResetOverrideResolve(); // Now let resetTtlKeepaliveOverride() hit server and finish!
     await pFollow;
-    await flushMicrotasks();
-    await flushMicrotasks();
+    await drainHostRace();
     assert.equal(
       elR("kv-keepalive-btn").innerText,
       "自动续温：2/11",
@@ -4790,8 +4808,7 @@ test("v1.5.4-ka-13: Global keepalive maxCount (0..20), per-window override vs fo
       holdSetKaResolve();
       holdSetKaResolve = null;
       await pDoubleWin;
-      await flushMicrotasks();
-      await flushMicrotasks();
+      await drainHostRace();
       assert.equal(elR("kv-keepalive-btn").innerText, "自动续温：2/11", "Overlapping double HTTP 500 failure must reconcile window back to server 2/11");
       assert.equal(elR("kv-keepalive-btn").dataset.custom, "0");
       assert.equal(elR("kv-keepalive-max").value, "11");
@@ -4828,6 +4845,7 @@ test("v1.5.4-ka-13: Global keepalive maxCount (0..20), per-window override vs fo
 
     // 5. Env `AGY_DART_TTL_KEEPALIVE_MAX_COUNT` (`0` and `5`) vs per-window overrides & hard kill-switches across Store, WatchdogMonitor & Hooks
     if (srv) {
+      srv.closeAllConnections?.();
       await new Promise((resolve) => srv.close(resolve));
       srv = null;
     }
@@ -4996,7 +5014,10 @@ test("v1.5.4-ka-13: Global keepalive maxCount (0..20), per-window override vs fo
       resetConfigCache();
     }
   } finally {
-    if (srv) await new Promise((resolve) => srv.close(resolve));
+    if (srv) {
+      srv.closeAllConnections?.();
+      await new Promise((resolve) => srv.close(resolve));
+    }
     closeRuntimeStore();
     if (prevDbEnv === undefined) delete process.env.AGY_DART_DB_PATH;
     else process.env.AGY_DART_DB_PATH = prevDbEnv;

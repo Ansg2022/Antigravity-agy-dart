@@ -38,9 +38,7 @@ const FALLBACK_RUNTIME_ROOT_FILES = new Set([
   "package.json",
   "LICENSE",
   "SECURITY.md",
-  "THIRD_PARTY_NOTICES.md",
-  "README.md",
-  "README.zh-CN.md"
+  "THIRD_PARTY_NOTICES.md"
 ]);
 const FALLBACK_RUNTIME_DIRS = new Set([
   "agents",

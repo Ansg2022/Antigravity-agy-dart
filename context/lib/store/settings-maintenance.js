@@ -224,15 +224,6 @@ export function createSummaryDbReader(
   };
 }
 
-function inspectSummaryDbForSubagent(DatabaseSyncCtor, cid, { transcriptPath = "", allowDefaultDb = false } = {}) {
-  const reader = createSummaryDbReader(DatabaseSyncCtor, { allowDefaultDb, maxLookups: 1 });
-  try {
-    return reader.lookup(cid, { transcriptPath });
-  } finally {
-    reader.close();
-  }
-}
-
 function inspectTranscriptGenesisFileForSubagent(transcriptPath) {
   if (typeof transcriptPath !== "string" || !transcriptPath.trim()) return false;
   let fd = null;

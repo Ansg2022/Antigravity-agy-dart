@@ -294,7 +294,7 @@ const tools = createTools({
 const RAW_TOOL_DEFINITIONS = [
   {
     name: "ctx_batch",
-    description: "Run shell commands in order. Index output and return a preview or query hits.",
+    description: "Run shell commands in order; index output and return preview or query hits.",
     inputSchema: {
       type: "object",
       properties: {
@@ -307,7 +307,7 @@ const RAW_TOOL_DEFINITIONS = [
   },
   {
     name: "ctx_doctor",
-    description: "Check database, settings and runtime health.",
+    description: "Check DB, config and runtime health.",
     inputSchema: {
       type: "object",
       properties: {
@@ -317,7 +317,7 @@ const RAW_TOOL_DEFINITIONS = [
   },
   {
     name: "ctx_execute",
-    description: "Filter large data with code. Return a preview and index the output. Give intent first. For >5 lines use a conversation scratch dir (or OS temp) and pass file + args.",
+    description: "Filter large data locally; preview & index output. Give intent first; >5 lines use scratch dir (or OS temp) with file + args.",
     inputSchema: {
       type: "object",
       properties: {
@@ -334,7 +334,7 @@ const RAW_TOOL_DEFINITIONS = [
   },
   {
     name: "ctx_index",
-    description: "Index a file, URL or text for ctx_search.",
+    description: "Index file, URL or text for ctx_search.",
     inputSchema: {
       type: "object",
       properties: {
@@ -348,7 +348,7 @@ const RAW_TOOL_DEFINITIONS = [
   },
   {
     name: "ctx_purge",
-    description: "Delete indexed data in scope (default: session).",
+    description: "Delete indexed data by scope (default: session).",
     inputSchema: {
       type: "object",
       properties: {
@@ -362,7 +362,7 @@ const RAW_TOOL_DEFINITIONS = [
   },
   {
     name: "ctx_resume",
-    description: "Recover session state after /compact or fetch an event by seq.",
+    description: "Restore post-/compact state or fetch event by seq.",
     inputSchema: {
       type: "object",
       properties: {
@@ -374,7 +374,7 @@ const RAW_TOOL_DEFINITIONS = [
   },
   {
     name: "ctx_search",
-    description: "Find ranked snippets in indexed sources.",
+    description: "Search ranked snippets in indexed sources.",
     inputSchema: {
       type: "object",
       properties: {
@@ -390,7 +390,7 @@ const RAW_TOOL_DEFINITIONS = [
   },
   {
     name: "ctx_stats",
-    description: "Report context savings. reset purges session data.",
+    description: "Report context savings (reset purges session).",
     inputSchema: {
       type: "object",
       properties: {
@@ -410,7 +410,7 @@ const SUPPORTED_PROTOCOL_VERSIONS = new Set([
 ]);
 const DEFAULT_PROTOCOL_VERSION = "2025-03-26";
 const SERVER_INSTRUCTIONS =
-  "Use ctx_execute with a short intent to filter >16 KB logs/JSON/CSV/API output locally (<=5 inline lines, else write a script under the conversation scratch dir or OS temp and pass file + args). Use ctx_index + ctx_search for long docs/URLs. After /compact call ctx_resume (pass sessionId on shared hosts).";
+  "Use ctx_execute (short intent) to filter >16 KB logs/JSON/CSV/API locally (<=5 inline lines, else scratch/OS temp file + args). Use ctx_index + ctx_search for long docs/URLs. After /compact call ctx_resume (sessionId on shared hosts).";
 
 export const MCP_APP_EXTENSION_ID = "io.modelcontextprotocol/ui";
 export const MCP_APP_MIME_TYPE = "text/html;profile=mcp-app";

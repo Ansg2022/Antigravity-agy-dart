@@ -106,10 +106,6 @@
       font-variant-numeric: tabular-nums;
     }
 
-    .tabular {
-      font-variant-numeric: tabular-nums;
-    }
-
     .truncate {
       overflow: hidden;
       text-overflow: ellipsis;
@@ -3181,7 +3177,6 @@
         metricFilteredDesc: 'Raw → Returned',
         metricChunksTip: 'Searchable content segments indexed locally so the model can retrieve exact details on demand',
         metricChunksTitle: 'Search Index Chunks',
-        metricChunksDesc: 'Local FTS5 retrieval',
         inSourcesOne: 'in 1 source',
         inSourcesMany: 'in {n} sources',
         kvCardTitle: 'KV-Cache & Context Watermark',
@@ -3724,7 +3719,6 @@
         metricFilteredDesc: '原始拦截 → 实际注入',
         metricChunksTip: '已写入本地 SQLite FTS5 索引的分块数，支持按需精准检索',
         metricChunksTitle: '本地索引分块',
-        metricChunksDesc: '本地 FTS5 检索',
         inSourcesOne: '共 1 个来源',
         inSourcesMany: '共 {n} 个来源',
         kvCardTitle: '本次对话上下文总览',
@@ -5145,7 +5139,6 @@
 
         const res = await apiFetch('/api/toggle-active', {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ scope: mutScope, conversationId: convId, paused: nextPaused })
         });
         if (!res.ok) throw new Error(`HTTP ${res.status}`);
@@ -5362,7 +5355,6 @@
 
         const res = await apiFetch('/api/cutoff', {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ cutoff: cutoffBytes, scope: mutScope, conversationId: convId })
         });
         if (!res.ok) throw new Error(`HTTP ${res.status}`);
@@ -5514,7 +5506,6 @@
       try {
         const res = await apiFetch('/api/exemptions', {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ action: 'toggleCategory', category: categoryId, enabled: nextEnabled, scope: mutScope, conversationId: convId })
         });
         if (!res.ok) throw new Error(`HTTP ${res.status}`);
@@ -5548,7 +5539,6 @@
       try {
         const res = await apiFetch('/api/exemptions', {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ action: 'add', ext: cleanExt, scope: currentScope, conversationId: convId })
         });
         if (!res.ok) throw new Error(`HTTP ${res.status}`);
@@ -5566,7 +5556,6 @@
       try {
         const res = await apiFetch('/api/exemptions', {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ action: 'remove', ext, scope: currentScope, conversationId: convId })
         });
         if (!res.ok) throw new Error(`HTTP ${res.status}`);
@@ -5584,7 +5573,6 @@
       try {
         const res = await apiFetch('/api/exemptions', {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ action: 'reset', scope: currentScope, conversationId: convId })
         });
         if (!res.ok) throw new Error(`HTTP ${res.status}`);
@@ -6438,7 +6426,6 @@
         const convId = getActiveConversationId();
         const res = await apiFetch('/api/search', {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ query: q, scope: currentScope, conversationId: convId })
         });
         if (!res.ok) throw new Error(`HTTP ${res.status}`);
@@ -6482,7 +6469,6 @@
       try {
         const res = await apiFetch('/api/cli-filter', {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ enabled: next, scope: mutScope, conversationId: convId })
         });
         if (!res.ok) throw new Error(`HTTP ${res.status}`);
@@ -6504,7 +6490,6 @@
       try {
         const res = await apiFetch('/api/read-dedup', {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ enabled: next, scope: mutScope, conversationId: convId })
         });
         if (!res.ok) throw new Error(`HTTP ${res.status}`);
@@ -9789,7 +9774,6 @@
         await apiFetch('/api/watchdog/action', {
           method: 'POST',
           keepalive: true,
-          headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
             scope: currentScope,
             conversationId: getActiveConversationId(),
@@ -9915,7 +9899,6 @@
         }
         const res = await apiFetch('/api/watchdog/action', {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify(bodyPayload)
         });
         if (res.ok) {
@@ -10357,7 +10340,6 @@
       try {
         const res = await apiFetch('/api/watchdog/action', {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
             scope: reqScope,
             conversationId: convId,
@@ -10568,8 +10550,7 @@
       try {
         const data = await sendWatchdogAction({
           action: 'setTtlKeepaliveMinContextPct',
-          minContextPct: parsed,
-          ...(window.sidecar ? { fromSidecarHost: true } : {})
+          minContextPct: parsed
         });
         const effPct = data?.globalTtlKeepaliveMinContextPct ?? data?.status?.globalTtlKeepaliveMinContextPct;
         if (myMinCtxSeq === minCtxActionSeq && Number.isFinite(Number(effPct))) {
@@ -10733,8 +10714,7 @@
       try {
         const data = await sendWatchdogAction({
           action: 'setGlobalTtlKeepalive',
-          maxCount: parsed,
-          ...(window.sidecar ? { fromSidecarHost: true } : {})
+          maxCount: parsed
         });
         if (
           watchdogActionSeq === expectedSeq &&
@@ -10786,8 +10766,7 @@
       try {
         const data = await sendWatchdogAction({
           action: 'setGlobalTtlKeepaliveInterval',
-          intervalSec: parsed,
-          ...(window.sidecar ? { fromSidecarHost: true } : {})
+          intervalSec: parsed
         });
         const effInterval = data?.globalTtlKeepaliveIntervalSec ?? data?.status?.globalTtlKeepaliveIntervalSec;
         if (watchdogActionSeq === expectedSeq && Number.isFinite(Number(effInterval))) {
@@ -11411,8 +11390,7 @@
         }
         const data = await sendWatchdogAction({
           action: 'manualTtlKeepalive',
-          conversationId: reqConvId,
-          ...(window.sidecar ? { fromSidecarHost: true } : {})
+          conversationId: reqConvId
         });
         const isStale =
           manualWarmState.clickSeq !== myClickSeq ||
@@ -11502,8 +11480,7 @@
         await sendWatchdogAction({
           action: 'setTtlKeepalive',
           enabled: next,
-          ...(targetId ? { conversationId: targetId } : {}),
-          ...(window.sidecar ? { fromSidecarHost: true } : {})
+          ...(targetId ? { conversationId: targetId } : {})
         });
       } catch (e) {
         console.error(e);
@@ -11544,8 +11521,7 @@
         const data = await sendWatchdogAction({
           action: 'setTtlKeepalive',
           maxCount: parsed,
-          ...(targetId ? { conversationId: targetId } : {}),
-          ...(window.sidecar ? { fromSidecarHost: true } : {})
+          ...(targetId ? { conversationId: targetId } : {})
         });
         const effMax = data?.ttlKeepaliveMaxCount ?? data?.status?.ttlKeepalive?.maxCount;
         if (
@@ -11593,8 +11569,7 @@
         const data = await sendWatchdogAction({
           action: 'setTtlKeepalive',
           intervalSec: parsed,
-          ...(targetId ? { conversationId: targetId } : {}),
-          ...(window.sidecar ? { fromSidecarHost: true } : {})
+          ...(targetId ? { conversationId: targetId } : {})
         });
         const effInterval = data?.ttlKeepaliveIntervalSec ?? data?.status?.ttlKeepalive?.intervalSec;
         if (
@@ -11680,8 +11655,7 @@
       try {
         await sendWatchdogAction({
           action: 'resetTtlKeepaliveOverride',
-          ...(targetId ? { conversationId: targetId } : {}),
-          ...(window.sidecar ? { fromSidecarHost: true } : {})
+          ...(targetId ? { conversationId: targetId } : {})
         });
       } catch (e) {
         console.error(e);
@@ -11708,8 +11682,7 @@
       try {
         await sendWatchdogAction({
           action: 'resetTtlKeepalive',
-          ...(targetId ? { conversationId: targetId } : {}),
-          ...(window.sidecar ? { fromSidecarHost: true } : {})
+          ...(targetId ? { conversationId: targetId } : {})
         });
       } catch (e) {
         console.error(e);
@@ -11738,7 +11711,6 @@
       try {
         const res = await apiFetch('/api/maintenance', {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ action: 'vacuum', maxAgeDays: 14 })
         });
         if (!res.ok) throw new Error(`HTTP ${res.status}`);
@@ -11768,7 +11740,6 @@
       try {
         const res = await apiFetch('/api/purge', {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ scope: currentScope, conversationId: convId })
         });
         if (!res.ok) throw new Error(`HTTP ${res.status}`);
