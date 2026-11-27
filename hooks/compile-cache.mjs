@@ -258,21 +258,22 @@ export function isSameFilePath(a, b) {
 }
 
 export function resolveSessionId(payload = {}, env = process.env) {
+  const p = payload && typeof payload === "object" ? payload : {};
   return (
-    payload.rootConversationId ||
-    payload.root_conversation_id ||
-    payload.common?.rootConversationId ||
-    payload.common?.root_conversation_id ||
-    payload.parentConversationId ||
-    payload.parent_conversation_id ||
-    payload.common?.parentConversationId ||
-    payload.common?.parent_conversation_id ||
-    payload.conversationId ||
-    payload.conversation_id ||
-    payload.common?.conversationId ||
-    payload.common?.conversation_id ||
-    payload.sessionId ||
-    payload.session_id ||
+    p.rootConversationId ||
+    p.root_conversation_id ||
+    p.common?.rootConversationId ||
+    p.common?.root_conversation_id ||
+    p.parentConversationId ||
+    p.parent_conversation_id ||
+    p.common?.parentConversationId ||
+    p.common?.parent_conversation_id ||
+    p.conversationId ||
+    p.conversation_id ||
+    p.common?.conversationId ||
+    p.common?.conversation_id ||
+    p.sessionId ||
+    p.session_id ||
     env?.ANTIGRAVITY_ROOT_CONVERSATION_ID ||
     env?.ANTIGRAVITY_PARENT_CONVERSATION_ID ||
     env?.ANTIGRAVITY_CONVERSATION_ID ||
@@ -281,13 +282,14 @@ export function resolveSessionId(payload = {}, env = process.env) {
 }
 
 export function resolveDirectConversationId(payload = {}, env = process.env) {
+  const p = payload && typeof payload === "object" ? payload : {};
   return (
-    payload.conversationId ||
-    payload.conversation_id ||
-    payload.common?.conversationId ||
-    payload.common?.conversation_id ||
-    payload.sessionId ||
-    payload.session_id ||
+    p.conversationId ||
+    p.conversation_id ||
+    p.common?.conversationId ||
+    p.common?.conversation_id ||
+    p.sessionId ||
+    p.session_id ||
     env?.ANTIGRAVITY_CONVERSATION_ID ||
     "default"
   );

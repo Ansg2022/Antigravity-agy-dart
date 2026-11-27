@@ -912,25 +912,30 @@ function sha256Text(text) {
   return createHash("sha256").update(text, "utf8").digest("hex");
 }
 
-/** Measure UTF-8 byte length of 1-based inclusive line range [startLine..endLine] (bounded <=2 MB streaming for huge files) */
-function measureLineRangeBytes(absPath, startLine, endLine, fileSize, fallbackBytes, readCtx = null) {
-  if (endLine === null || endLine === undefined) return fallbackBytes;
+/** Measure UTF-8 byte length of 1-based inclusive line range [startLine..endLine] with exactness metadata */
+function measureLineRangeDetailed(absPath, startLine, endLine, fileSize, fallbackBytes, readCtx = null) {
+  if (endLine === null || endLine === undefined) {
+    return { bytes: fallbackBytes, exact: false, kind: "fallback" };
+  }
   const sLine = Math.max(1, Number(startLine) || 1);
   const eLine = Number(endLine);
-  if (!Number.isFinite(eLine) || eLine < sLine) return 0;
+  if (!Number.isFinite(eLine) || eLine < sLine) {
+    return { bytes: 0, exact: false, kind: "fallback" };
+  }
   const cacheKey = `${sLine}:${eLine}`;
   if (readCtx && readCtx._rangeBytesCache.has(cacheKey)) {
-    return readCtx._rangeBytesCache.get(cacheKey);
+    const cached = readCtx._rangeBytesCache.get(cacheKey);
+    if (cached && typeof cached === "object") return cached;
   }
-  const memo = (val) => {
-    if (readCtx) readCtx._rangeBytesCache.set(cacheKey, val);
-    return val;
+  const memo = (res) => {
+    if (readCtx) readCtx._rangeBytesCache.set(cacheKey, res);
+    return res;
   };
   try {
     if (fileSize <= MAX_SLICE_MEASURE_BYTES) {
       const buf = readCtx ? readCtx.getBuffer() : fs.readFileSync(absPath);
-      if (!buf) return fallbackBytes;
-      if (buf.length === 0) return memo(0);
+      if (!buf) return { bytes: fallbackBytes, exact: false, kind: "fallback" };
+      if (buf.length === 0) return memo({ bytes: 0, exact: true, kind: "exact" });
       let lineNum = 1;
       let rangeStart = sLine === 1 ? 0 : null;
       let rangeEnd = buf.length;
@@ -946,8 +951,8 @@ function measureLineRangeBytes(absPath, startLine, endLine, fileSize, fallbackBy
           }
         }
       }
-      if (rangeStart === null) return memo(0);
-      return memo(Math.max(0, rangeEnd - rangeStart));
+      if (rangeStart === null) return memo({ bytes: 0, exact: true, kind: "exact" });
+      return memo({ bytes: Math.max(0, rangeEnd - rangeStart), exact: true, kind: "exact" });
     }
 
     // Bounded streaming scan (<= 2 MB) eliminates the >2 MB && sLine > 1 blind spot without risking OOM
@@ -959,6 +964,7 @@ function measureLineRangeBytes(absPath, startLine, endLine, fileSize, fallbackBy
     let lineNum = 1;
     let rangeStart = sLine === 1 ? 0 : null;
     let rangeEnd = null;
+    let hitCap = false;
     try {
       while (scannedBytes < MAX_SLICE_MEASURE_BYTES) {
         const toRead = Math.min(CHUNK_SIZE, MAX_SLICE_MEASURE_BYTES - scannedBytes);
@@ -981,6 +987,7 @@ function measureLineRangeBytes(absPath, startLine, endLine, fileSize, fallbackBy
         if (rangeEnd !== null) break;
         if (rangeStart !== null && scannedBytes - rangeStart > 262144) {
           rangeEnd = scannedBytes;
+          hitCap = true;
           break;
         }
       }
@@ -988,17 +995,39 @@ function measureLineRangeBytes(absPath, startLine, endLine, fileSize, fallbackBy
       fs.closeSync(fd);
     }
     if (rangeStart !== null) {
-      return memo(Math.max(0, (rangeEnd !== null ? rangeEnd : scannedBytes) - rangeStart));
+      if (rangeEnd !== null && !hitCap) {
+        return memo({ bytes: Math.max(0, rangeEnd - rangeStart), exact: true, kind: "exact" });
+      }
+      if (scannedBytes >= fileSize && !hitCap) {
+        return memo({ bytes: Math.max(0, scannedBytes - rangeStart), exact: true, kind: "exact" });
+      }
+      const partialBytes = Math.max(0, (rangeEnd !== null ? rangeEnd : scannedBytes) - rangeStart);
+      if (hitCap) {
+        return memo({ bytes: partialBytes, exact: false, kind: "lower_bound" });
+      }
+      const avgLineBytes = scannedBytes / Math.max(1, scannedNewlines + 1);
+      const remainingLines = Math.max(1, eLine - lineNum + 1);
+      const estTotal = Math.min(fileSize, Math.round(partialBytes + avgLineBytes * remainingLines));
+      return memo({ bytes: Math.max(partialBytes, estTotal), exact: false, kind: "lower_bound" });
     }
     if (scannedBytes >= fileSize) {
-      return memo(0);
+      return memo({ bytes: 0, exact: true, kind: "exact" });
     }
     const avgLineBytes = scannedBytes / Math.max(1, scannedNewlines + 1);
     const span = Math.max(1, eLine - sLine + 1);
-    return memo(Math.max(fallbackBytes, Math.min(fileSize, Math.round(avgLineBytes * span))));
+    return memo({
+      bytes: Math.max(fallbackBytes, Math.min(fileSize, Math.round(avgLineBytes * span))),
+      exact: false,
+      kind: "estimated"
+    });
   } catch {
-    return fallbackBytes;
+    return { bytes: fallbackBytes, exact: false, kind: "fallback" };
   }
+}
+
+/** Measure UTF-8 byte length of 1-based inclusive line range [startLine..endLine] (bounded <=2 MB streaming for huge files) */
+function measureLineRangeBytes(absPath, startLine, endLine, fileSize, fallbackBytes, readCtx = null) {
+  return measureLineRangeDetailed(absPath, startLine, endLine, fileSize, fallbackBytes, readCtx).bytes;
 }
 
 /** Measure remaining UTF-8 bytes from 1-based startLine to EOF (used for open-ended StartLine continuations) */
@@ -2766,22 +2795,24 @@ export async function evaluatePreToolPayload(rawPayload) {
               const rawWideRange =
                 tierMaxLineRange > 0 && (!isBoundedSlice || requestedLineSpan > tierMaxLineRange);
               const maxPagedSliceBytes = Math.max(HOST_READ_MAX_BYTES, tierCutoffBytes * 2);
-              const slicedRangeBytes =
+              const sliceMeasure =
                 isLargeFile && isBoundedSlice
-                  ? measureLineRangeBytes(absPath, startLine, endLine, stat.size, 0, readCtx)
-                  : 0;
+                  ? measureLineRangeDetailed(absPath, startLine, endLine, stat.size, remainingBytes, readCtx)
+                  : { bytes: 0, exact: false, kind: "fallback" };
+              const slicedRangeBytes = sliceMeasure.bytes;
               const avgSliceLineBytes = slicedRangeBytes / requestedLineSpan;
               const isMinifiedDenseSlice =
-                slicedRangeBytes > tierCutoffBytes && avgSliceLineBytes > 512;
+                sliceMeasure.kind !== "fallback" && slicedRangeBytes > tierCutoffBytes && avgSliceLineBytes > 512;
               const isOversizedMultiLineSlice =
-                !isMinifiedDenseSlice && slicedRangeBytes > maxPagedSliceBytes;
-              // Allow bounded non-minified line slices whose actual UTF-8 byte length fits within tierCutoffBytes
-              // (e.g., requesting lines 651-1520 on a 54 KB / 1,517-line file whose slice is only ~25 KB).
+                sliceMeasure.kind !== "fallback" && !isMinifiedDenseSlice && slicedRangeBytes > maxPagedSliceBytes;
+              // Allow bounded non-minified line slices ONLY when an exact full measurement confirms
+              // the UTF-8 byte length fits within tierCutoffBytes (never unlock on fallback/lower-bound/estimates).
               const isSmallVerifiedSlice =
                 isBoundedSlice &&
                 byteOffset === 0 &&
                 !isMinifiedContent &&
                 !isMinifiedDenseSlice &&
+                sliceMeasure.exact === true &&
                 slicedRangeBytes <= tierCutoffBytes;
               const isWideRange = rawWideRange && !isSmallVerifiedSlice;
 
@@ -2829,7 +2860,9 @@ export async function evaluatePreToolPayload(rawPayload) {
                       ? `, ${lineInfo.exact ? "" : "~"}${lineInfo.lines.toLocaleString()} lines`
                       : "";
                   const reportedBytes =
-                    isMinifiedDenseSlice || isOversizedMultiLineSlice || (isBoundedSlice && slicedRangeBytes > 0)
+                    isMinifiedDenseSlice ||
+                    isOversizedMultiLineSlice ||
+                    (isBoundedSlice && sliceMeasure.kind !== "fallback" && slicedRangeBytes > 0)
                       ? slicedRangeBytes
                       : remainingBytes;
                   const subjectLabel = isBoundedSlice

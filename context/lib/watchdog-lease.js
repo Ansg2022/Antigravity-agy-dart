@@ -1540,21 +1540,35 @@ function readConversationAnnotationArchived(agRoot, conversationId) {
   }
 }
 
-function readConversationFtsArchived(db, conversationId) {
+function isSqliteMissingColumnError(err) {
+  const msg = String(err?.message || err || "");
+  return /no such column/i.test(msg);
+}
+
+function isSqliteBusyOrLockError(err) {
+  const msg = String(err?.message || err || "");
+  const code = String(err?.code || err?.errstr || "");
+  return /SQLITE_BUSY|SQLITE_LOCKED|database is locked|database table is locked/i.test(`${code} ${msg}`);
+}
+
+function readConversationFtsArchived(db, conversationId, errorState = null) {
   if (!db || !conversationId) return null;
   try {
-    const row = db
-      .prepare("SELECT MAX(archived) AS archived FROM (SELECT archived FROM conversations_fts WHERE conversation_id = ? LIMIT 32)")
+    const archivedRow = db
+      .prepare(
+        "SELECT 1 AS archived FROM conversations_fts WHERE conversation_id = ? AND (archived = 1 OR archived = '1' OR lower(CAST(archived AS TEXT)) = 'true') LIMIT 1"
+      )
       .get(conversationId);
-    if (!row || row.archived === null || row.archived === undefined) return null;
-    if (row.archived === true) return true;
-    const rawStr = typeof row.archived === "string" ? row.archived.trim().toLowerCase() : "";
-    if (rawStr === "true") return true;
-    if (rawStr === "false") return false;
-    const n = Number(row.archived);
-    if (Number.isFinite(n)) return n > 0;
-    return null;
-  } catch {
+    if (archivedRow) return true;
+    const anyRow = db
+      .prepare("SELECT archived FROM conversations_fts WHERE conversation_id = ? LIMIT 1")
+      .get(conversationId);
+    if (!anyRow || anyRow.archived === null || anyRow.archived === undefined) return null;
+    return parseSummaryArchivedColumn(anyRow.archived);
+  } catch (err) {
+    if (errorState && isSqliteBusyOrLockError(err)) {
+      errorState.hadError = true;
+    }
     return null;
   }
 }
@@ -1689,50 +1703,63 @@ export function lookupConversationSummary(conversationId, options = {}) {
     }
   }
 
+  const SUMMARY_SELECT_VARIANTS = [
+    "SELECT title, workspace_uris, parent_conversation_id, nesting_depth, agent_name, killed, archived FROM conversation_summaries WHERE conversation_id = ? LIMIT 1",
+    "SELECT title, workspace_uris, parent_conversation_id, nesting_depth, agent_name, killed FROM conversation_summaries WHERE conversation_id = ? LIMIT 1",
+    "SELECT title, workspace_uris, parent_conversation_id, nesting_depth, agent_name FROM conversation_summaries WHERE conversation_id = ? LIMIT 1",
+    "SELECT title, workspace_uris FROM conversation_summaries WHERE conversation_id = ? LIMIT 1"
+  ];
+  const lookupDeadlineMs =
+    Number.isFinite(Number(safeOpts.maxWaitMs)) && Number(safeOpts.maxWaitMs) >= 10
+      ? Math.min(5000, Math.floor(Number(safeOpts.maxWaitMs)))
+      : 250;
+  const lookupStartedAt = Date.now();
+  let hadDbError = false;
   let fallbackArchived = false;
   for (const dbPath of dbCandidates) {
     const agRoot = path.dirname(dbPath);
     const annArchived = readConversationAnnotationArchived(agRoot, safeId);
     if (annArchived === true) fallbackArchived = true;
+    const remainingMs = lookupDeadlineMs - (Date.now() - lookupStartedAt);
+    if (remainingMs <= 0) {
+      hadDbError = true;
+      break;
+    }
     let db = null;
     try {
       if (!fs.existsSync(dbPath)) continue;
       const DatabaseSync = getLazyDatabaseSync();
+      const timeoutBudget = Math.max(10, Math.min(remainingMs, 50));
       try {
-        db = new DatabaseSync(dbPath, { readOnly: true, timeout: 250 });
+        db = new DatabaseSync(dbPath, { readOnly: true, timeout: timeoutBudget });
       } catch {
         db = new DatabaseSync(dbPath, { readOnly: true });
         try {
-          db.exec("PRAGMA busy_timeout = 250;");
+          db.exec(`PRAGMA busy_timeout = ${timeoutBudget};`);
         } catch {}
       }
       let row = null;
-      try {
-        row = db
-          .prepare(
-            "SELECT title, workspace_uris, parent_conversation_id, nesting_depth, agent_name, killed, archived FROM conversation_summaries WHERE conversation_id = ? LIMIT 1"
-          )
-          .get(safeId);
-      } catch {
+      let lastQueryErr = null;
+      for (let i = 0; i < SUMMARY_SELECT_VARIANTS.length; i += 1) {
+        const remBeforeQuery = lookupDeadlineMs - (Date.now() - lookupStartedAt);
+        if (i > 0 && remBeforeQuery <= 0) {
+          hadDbError = true;
+          lastQueryErr = new Error("SQLITE_BUSY: lookup deadline exceeded");
+          break;
+        }
         try {
-          row = db
-            .prepare(
-              "SELECT title, workspace_uris, parent_conversation_id, nesting_depth, agent_name, killed FROM conversation_summaries WHERE conversation_id = ? LIMIT 1"
-            )
-            .get(safeId);
-        } catch {
-          try {
-            row = db
-              .prepare(
-                "SELECT title, workspace_uris, parent_conversation_id, nesting_depth, agent_name FROM conversation_summaries WHERE conversation_id = ? LIMIT 1"
-              )
-              .get(safeId);
-          } catch {
-            row = db
-              .prepare("SELECT title, workspace_uris FROM conversation_summaries WHERE conversation_id = ? LIMIT 1")
-              .get(safeId);
+          row = db.prepare(SUMMARY_SELECT_VARIANTS[i]).get(safeId);
+          lastQueryErr = null;
+          break;
+        } catch (qErr) {
+          lastQueryErr = qErr;
+          if (!isSqliteMissingColumnError(qErr)) {
+            break;
           }
         }
+      }
+      if (lastQueryErr) {
+        throw lastQueryErr;
       }
       const dbParent = readConversationParentId(db, safeId, row?.parent_conversation_id);
       if (row || dbParent) {
@@ -1746,12 +1773,14 @@ export function lookupConversationSummary(conversationId, options = {}) {
         const dbAgent = typeof row.agent_name === "string" ? row.agent_name.trim().slice(0, 96) : "";
         const dbKilled = Boolean(row.killed === true || (Number.isFinite(Number(row.killed)) && Number(row.killed) > 0));
         const rowArchived = parseSummaryArchivedColumn(row.archived);
+        const ftsErrState = { hadError: false };
         const dbArchived =
           annArchived !== null
             ? annArchived
             : rowArchived !== null
               ? rowArchived
-              : readConversationFtsArchived(db, safeId) === true;
+              : readConversationFtsArchived(db, safeId, ftsErrState) === true;
+        if (ftsErrState.hadError) hadDbError = true;
         const dbSubagent = isSummaryMetadataSubagent({
           conversationId: safeId,
           parentConversationId: dbParent,
@@ -1771,7 +1800,7 @@ export function lookupConversationSummary(conversationId, options = {}) {
           nestingDepth: dbDepth,
           agentName: dbAgent
         };
-        if (useCache) {
+        if (useCache && !hadDbError) {
           rememberSummaryLookupCache(cacheKey, {
             diskStamp,
             expiresAt: nowMs + SUMMARY_LOOKUP_CACHE_TTL_MS,
@@ -1790,11 +1819,14 @@ export function lookupConversationSummary(conversationId, options = {}) {
           agentName: dbAgent
         };
       }
-      if (annArchived === null && readConversationFtsArchived(db, safeId) === true) {
+      const ftsErrState = { hadError: false };
+      if (annArchived === null && readConversationFtsArchived(db, safeId, ftsErrState) === true) {
         fallbackArchived = true;
       }
+      if (ftsErrState.hadError) hadDbError = true;
     } catch {
-      // Fail-open on locked/corrupt/unreadable summary DB
+      // Fail-open on locked/corrupt/unreadable summary DB; never negatively cache transient errors
+      hadDbError = true;
     } finally {
       if (db) {
         try {
@@ -1815,7 +1847,7 @@ export function lookupConversationSummary(conversationId, options = {}) {
     nestingDepth: 0,
     agentName: ""
   };
-  if (useCache) {
+  if (useCache && !hadDbError) {
     rememberSummaryLookupCache(cacheKey, {
       diskStamp,
       expiresAt: nowMs + SUMMARY_LOOKUP_CACHE_TTL_MS,
@@ -1876,10 +1908,49 @@ export function listRecentConversationIdsFromSummaryDb(brainRoot, maxCandidates 
     const cols = db.prepare("PRAGMA table_info(conversation_summaries)").all();
     const colNames = new Set((cols || []).map((c) => String(c?.name || "").toLowerCase()));
     if (!colNames.has("conversation_id")) return [];
-    const orderCol = SUMMARY_RECENT_TIME_COLUMNS.find((c) => colNames.has(c)) || "rowid";
-    const rows = db
-      .prepare(`SELECT conversation_id FROM conversation_summaries ORDER BY ${orderCol} DESC LIMIT ?`)
-      .all(limit);
+    const indexedLeadingCols = new Set();
+    try {
+      const idxList = db.prepare("PRAGMA index_list(conversation_summaries)").all();
+      for (const idx of idxList || []) {
+        const idxName = typeof idx?.name === "string" ? idx.name : "";
+        if (!idxName) continue;
+        try {
+          const escapedIdx = idxName.replace(/"/g, '""');
+          const idxCols = db.prepare(`PRAGMA index_info("${escapedIdx}")`).all();
+          const first = (idxCols || []).find((c) => Number(c?.seqno) === 0);
+          if (first && typeof first.name === "string") {
+            indexedLeadingCols.add(first.name.toLowerCase());
+          }
+        } catch {}
+      }
+    } catch {}
+    const indexedTimeCol = SUMMARY_RECENT_TIME_COLUMNS.find(
+      (c) => colNames.has(c) && indexedLeadingCols.has(c)
+    );
+    let orderCol = indexedTimeCol || "rowid";
+    if (!indexedTimeCol) {
+      const plainTimeCol = SUMMARY_RECENT_TIME_COLUMNS.find((c) => colNames.has(c));
+      if (plainTimeCol) {
+        // Allow unindexed ORDER BY only on small tables (<= 256 rows); large unindexed tables
+        // stay O(log N) via `rowid DESC` without triggering a full-table temp B-tree sort.
+        const isLargeTable = Boolean(
+          db.prepare("SELECT 1 AS hit FROM conversation_summaries LIMIT 1 OFFSET 256").get()
+        );
+        if (!isLargeTable) {
+          orderCol = plainTimeCol;
+        }
+      }
+    }
+    let rows;
+    try {
+      rows = db
+        .prepare(`SELECT conversation_id FROM conversation_summaries ORDER BY ${orderCol} DESC LIMIT ?`)
+        .all(limit);
+    } catch {
+      rows = db
+        .prepare("SELECT conversation_id FROM conversation_summaries LIMIT ?")
+        .all(limit);
+    }
     const out = [];
     for (const row of rows || []) {
       const cid = sanitizeConversationId(row?.conversation_id);
@@ -2351,6 +2422,37 @@ export function writeWatchdogLeaseIfUnchanged(store, expectedUpdatedTs, expected
     }
     store.setMeta(key, JSON.stringify(normalized));
     return { written: true, lease: normalized, current: normalized };
+  };
+
+  if (typeof store._withWriteTx === "function") {
+    if (typeof store.open === "function") store.open();
+    return store._withWriteTx(execCas);
+  }
+  return execCas();
+}
+
+/**
+ * Atomic compare-and-swap lease deletion preventing TOCTOU races when periodic
+ * IDLE lease pruning runs concurrently with hooks resuming the same conversation.
+ */
+export function deleteWatchdogLeaseIfUnchanged(store, conversationId, expectedUpdatedTs, expectedPhase) {
+  if (!store) return { deleted: false, current: null };
+  const cleanId = sanitizeConversationId(conversationId);
+  const key = getWatchdogLeaseKey(cleanId);
+  if (!cleanId || !key) return { deleted: false, current: null };
+
+  const execCas = () => {
+    const current = readWatchdogLease(store, cleanId);
+    if (!current) return { deleted: true, current: null };
+    if (
+      current.updatedTs !== expectedUpdatedTs ||
+      current.phase !== expectedPhase ||
+      current.subphase === "stopped_bg_pending"
+    ) {
+      return { deleted: false, current };
+    }
+    store.deleteMeta?.(key);
+    return { deleted: true, current: null };
   };
 
   if (typeof store._withWriteTx === "function") {

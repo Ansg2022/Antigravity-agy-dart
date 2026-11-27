@@ -422,12 +422,10 @@ const MAX_MCP_APP_HTML_BYTES = 2 * 1024 * 1024;
 function detectClientMcpUiSupport(capabilities) {
   const uiExt = capabilities?.extensions?.[MCP_APP_EXTENSION_ID];
   if (!uiExt || typeof uiExt !== "object" || Array.isArray(uiExt)) return false;
-  if (Array.isArray(uiExt.mimeTypes) && uiExt.mimeTypes.length > 0) {
-    return uiExt.mimeTypes.some(
-      (m) => typeof m === "string" && m.trim().toLowerCase() === MCP_APP_MIME_TYPE
-    );
-  }
-  return true;
+  if (!Array.isArray(uiExt.mimeTypes) || uiExt.mimeTypes.length === 0) return false;
+  return uiExt.mimeTypes.some(
+    (m) => typeof m === "string" && m.trim().toLowerCase() === MCP_APP_MIME_TYPE
+  );
 }
 
 function readMcpAppDiagnosticsHtml() {

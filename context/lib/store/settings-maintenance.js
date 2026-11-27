@@ -104,25 +104,34 @@ function collectSummaryDbCandidates({ transcriptPath = "", allowDefaultDb = fals
   return unique;
 }
 
-function querySummaryDbRow(sdb, cid) {
+const SUMMARY_READER_SELECTS = [
+  "SELECT title, parent_conversation_id, nesting_depth, agent_name, killed FROM conversation_summaries WHERE conversation_id = ? LIMIT 1",
+  "SELECT title, parent_conversation_id, nesting_depth, agent_name FROM conversation_summaries WHERE conversation_id = ? LIMIT 1",
+  "SELECT title FROM conversation_summaries WHERE conversation_id = ? LIMIT 1"
+];
+
+function isSummaryMissingColumnError(err) {
+  return /no such column/i.test(String(err?.message || err || ""));
+}
+
+function querySummaryDbRow(sdb, cid, schemaState = null) {
   let row = null;
-  try {
-    row = sdb
-      .prepare(
-        "SELECT title, parent_conversation_id, nesting_depth, agent_name, killed FROM conversation_summaries WHERE conversation_id = ? LIMIT 1"
-      )
-      .get(cid);
-  } catch {
+  let startTier = Number.isInteger(schemaState?.tier) ? schemaState.tier : 0;
+  let lastErr = null;
+  for (let i = startTier; i < SUMMARY_READER_SELECTS.length; i += 1) {
     try {
-      row = sdb
-        .prepare(
-          "SELECT title, parent_conversation_id, nesting_depth, agent_name FROM conversation_summaries WHERE conversation_id = ? LIMIT 1"
-        )
-        .get(cid);
-    } catch {
-      row = sdb.prepare("SELECT title FROM conversation_summaries WHERE conversation_id = ? LIMIT 1").get(cid);
+      row = sdb.prepare(SUMMARY_READER_SELECTS[i]).get(cid);
+      if (schemaState) schemaState.tier = i;
+      lastErr = null;
+      break;
+    } catch (err) {
+      lastErr = err;
+      if (!isSummaryMissingColumnError(err)) {
+        throw err;
+      }
     }
   }
+  if (lastErr) throw lastErr;
   const parentId = readConversationParentId(sdb, cid, row?.parent_conversation_id);
   if (!row && !parentId) return null;
   row ??= {};
@@ -149,21 +158,30 @@ export function createSummaryDbReader(
   { allowDefaultDb = false, maxLookups = MAX_MAINTENANCE_SUMMARY_LOOKUPS, maxScanMs = MAX_MAINTENANCE_SCAN_MS } = {}
 ) {
   const handles = new Map();
+  const schemaStates = new Map();
   const rowCache = new Map();
   const startedAt = Date.now();
   let lookups = 0;
   let openCount = 0;
 
+  const remainingBudgetMs = () => Math.max(0, maxScanMs - (Date.now() - startedAt));
+
   const getHandle = (dbPath) => {
     const key = process.platform === "win32" ? dbPath.toLowerCase() : dbPath;
     if (handles.has(key)) return handles.get(key);
+    const remMs = remainingBudgetMs();
+    if (remMs <= 0) return null;
+    const initTimeout = Math.max(10, Math.min(remMs, 25));
     let sdb = null;
     try {
       if (fs.existsSync(dbPath)) {
         try {
-          sdb = new DatabaseSyncCtor(dbPath, { readOnly: true, timeout: 200 });
+          sdb = new DatabaseSyncCtor(dbPath, { readOnly: true, timeout: initTimeout });
         } catch {
           sdb = new DatabaseSyncCtor(dbPath, { readOnly: true });
+          try {
+            sdb.exec(`PRAGMA busy_timeout = ${initTimeout};`);
+          } catch {}
         }
         openCount += 1;
       }
@@ -192,22 +210,40 @@ export function createSummaryDbReader(
         return { isSubagent: false, killed: false, parentId: "", title: "", budgetExhausted: true };
       }
       lookups += 1;
+      let hadError = false;
       const candidates = collectSummaryDbCandidates({ transcriptPath, allowDefaultDb });
       for (const dbPath of candidates) {
+        const remMs = remainingBudgetMs();
+        if (remMs <= 0) {
+          return { isSubagent: false, killed: false, parentId: "", title: "", budgetExhausted: true };
+        }
         const sdb = getHandle(dbPath);
         if (!sdb) continue;
+        const key = process.platform === "win32" ? dbPath.toLowerCase() : dbPath;
+        let st = schemaStates.get(key);
+        if (!st) {
+          st = { tier: 0 };
+          schemaStates.set(key, st);
+        }
         try {
-          const hit = querySummaryDbRow(sdb, cid);
+          const perQueryTimeout = Math.max(10, Math.min(remMs, 25));
+          try {
+            sdb.exec(`PRAGMA busy_timeout = ${perQueryTimeout};`);
+          } catch {}
+          const hit = querySummaryDbRow(sdb, cid, st);
           if (hit) {
             rowCache.set(cacheKey, hit);
             return hit;
           }
         } catch {
-          // Fail-open
+          // Fail-open without poisoning cache on transient lock/read errors
+          hadError = true;
         }
       }
       const miss = { isSubagent: false, killed: false, parentId: "", title: "" };
-      rowCache.set(cacheKey, miss);
+      if (!hadError) {
+        rowCache.set(cacheKey, miss);
+      }
       return miss;
     },
     close() {
@@ -219,6 +255,7 @@ export function createSummaryDbReader(
         }
       }
       handles.clear();
+      schemaStates.clear();
       rowCache.clear();
     }
   };

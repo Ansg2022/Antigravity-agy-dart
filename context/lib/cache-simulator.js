@@ -326,6 +326,7 @@ function extractSessionTrace(steps, parsedOpts) {
     totalCacheCreation1hTokens += usage.cacheCreation1hTokens;
 
     const activeTurnProfile = resolveModelProfile(model || prevModel || currentModel);
+    const activeMinCacheable = activeTurnProfile.minCacheableTokens ?? MIN_CACHEABLE_CONTEXT_TOKENS;
     if (usage.cacheCreation1hTokens > 0) {
       seen1hWriteByProfile.set(activeTurnProfile.id, true);
     }
@@ -334,14 +335,30 @@ function extractSessionTrace(steps, parsedOpts) {
       hasSeenPlanner && tMs !== null && prevPlannerMs !== null && tMs >= prevPlannerMs
         ? Math.round((tMs - prevPlannerMs) / 1000)
         : null;
+    const deltaTokens = hasSeenPlanner ? ctxTokens - prevCtxTokens : ctxTokens;
 
     let obsWasBust = false;
     let obsBustCause = null;
 
-    if (hasSeenPlanner && prevCtxTokens >= MIN_CACHEABLE_CONTEXT_TOKENS) {
+    if (hasSeenPlanner && prevCtxTokens >= activeMinCacheable) {
       const retainedRatio = prevCtxTokens > 0 ? usage.cacheReadTokens / prevCtxTokens : 1;
-      const isBust = retainedRatio < BUST_DROP_RATIO || (prevCtxTokens >= 10000 && usage.cacheReadTokens === 0);
       const sameModel = !prevModel || !model || prevModel === model;
+      // Align with cache-analyzer.js: Gemini 4 implicit caching re-processes the trailing
+      // 2,050 tokens when a turn adds < 2,050 tokens; do not misclassify that as a cache bust.
+      const tailReprocessThreshold = activeTurnProfile.minTurnDeltaForFullCache || 0;
+      const isExpectedSmallDeltaTailReprocess =
+        tailReprocessThreshold > 0 &&
+        sameModel &&
+        !mediaLoadedSincePrev &&
+        !systemMsgSincePrev &&
+        ctxTokens >= prevCtxTokens &&
+        deltaTokens > 0 &&
+        deltaTokens < tailReprocessThreshold &&
+        usage.cacheReadTokens > 0 &&
+        prevCtxTokens - usage.cacheReadTokens <= tailReprocessThreshold + 256;
+      const isBust =
+        !isExpectedSmallDeltaTailReprocess &&
+        (retainedRatio < BUST_DROP_RATIO || (prevCtxTokens >= 10000 && usage.cacheReadTokens === 0));
 
       if (!isBust) {
         if (retainedRatio >= BUST_DROP_RATIO && usage.cacheReadTokens > 0 && gapSec !== null && sameModel) {
@@ -383,6 +400,7 @@ function extractSessionTrace(steps, parsedOpts) {
       model: model || prevModel || "",
       prevModel,
       turnProfile: activeTurnProfile,
+      minCacheableTokens: activeMinCacheable,
       gapSec,
       ctxTokens,
       cacheReadTokens: usage.cacheReadTokens,
@@ -474,6 +492,7 @@ function extractSessionTrace(steps, parsedOpts) {
 
   return {
     profile: matchedProfile,
+    minCacheableTokens: matchedProfile.minCacheableTokens ?? MIN_CACHEABLE_CONTEXT_TOKENS,
     model: currentModel || null,
     windowTokens,
     effectiveTtlSec,
@@ -570,11 +589,12 @@ function replayTtlPolicy(traces, parsedOpts, observedCostUsd, { id, label, ttlSe
     for (let idx = 0; idx < trace.turns.length; idx++) {
       const turn = trace.turns[idx];
       const simCtx = turn.ctxTokens;
+      const turnMinCacheable = turn.minCacheableTokens ?? trace.minCacheableTokens ?? MIN_CACHEABLE_CONTEXT_TOKENS;
       let simRead = 0;
       let simWrite = 0;
       let simUncached = 0;
 
-      if (idx === 0 || prevSimCtx < MIN_CACHEABLE_CONTEXT_TOKENS) {
+      if (idx === 0 || prevSimCtx < turnMinCacheable) {
         const isSmallGapExpired = idx > 0 && turn.gapSec !== null && turn.gapSec >= ttlSec;
         if (turn.cacheReadTokens > 0 && !isSmallGapExpired) {
           // Mid-conversation snippet or small-prefix warm read
@@ -593,7 +613,7 @@ function replayTtlPolicy(traces, parsedOpts, observedCostUsd, { id, label, ttlSe
           // Cold start
           simRead = 0;
           const newTokens = simCtx;
-          if (isExplicitWriteModel && simCtx >= MIN_CACHEABLE_CONTEXT_TOKENS) {
+          if (isExplicitWriteModel && simCtx >= turnMinCacheable) {
             if (trace.hasExplicitCacheCreation && turn.cacheCreationTokens > 0) {
               const tail = Math.min(turn.uncachedTokens, newTokens);
               simWrite = Math.max(0, newTokens - tail);
@@ -634,7 +654,7 @@ function replayTtlPolicy(traces, parsedOpts, observedCostUsd, { id, label, ttlSe
           totalWasted += Math.max(0, expectedReusable - simRead);
 
           const newTokens = Math.max(0, simCtx - simRead);
-          if (isExplicitWriteModel && simCtx >= MIN_CACHEABLE_CONTEXT_TOKENS) {
+          if (isExplicitWriteModel && simCtx >= turnMinCacheable) {
             if (turn.obsWasBust && turn.cacheCreationTokens > 0) {
               const tail = Math.min(turn.uncachedTokens, newTokens);
               simWrite = Math.max(0, newTokens - tail);
@@ -832,7 +852,8 @@ function replayColdBoundaryCompactPolicy(traces, observedCostUsd) {
       } else {
         // Carry reduced context forward across subsequent turns in this episode
         simCtx = Math.max(0, turn.ctxTokens - episodeReduction);
-        if (idx > 0 && prevSimCtx >= MIN_CACHEABLE_CONTEXT_TOKENS) {
+        const turnMinCacheable = turn.minCacheableTokens ?? trace.minCacheableTokens ?? MIN_CACHEABLE_CONTEXT_TOKENS;
+        if (idx > 0 && prevSimCtx >= turnMinCacheable) {
           const retentionRatio =
             turn.prevCtxTokens > 0 ? Math.min(1, turn.cacheReadTokens / turn.prevCtxTokens) : 0;
           if (turn.obsWasBust) {

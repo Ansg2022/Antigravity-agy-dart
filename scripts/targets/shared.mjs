@@ -23,14 +23,47 @@ export function writeFileAtomicSync(file, data) {
     fs.renameSync(tmp, file);
   } finally { fs.rmSync(tmp, { force: true }); }
 }
-export function syncSharedRuntime(srcRoot, homeDir, manifest) {
+export function syncSharedRuntime(srcRoot, homeDir, manifest, { preserveFiles = [] } = {}) {
   const dir = path.join(homeDir, ".agy-dart", "runtime");
   const marker = path.join(dir, ".installed-files.json");
   if (fs.existsSync(dir) && read(marker) === null && fs.readdirSync(dir).length) throw Error("Unmanaged runtime: " + dir);
+  const normRel = (rel) => {
+    const clean = String(rel || "").replace(/\\/g, "/");
+    return process.platform === "win32" ? clean.toLowerCase() : clean;
+  };
   const prior = JSON.parse(read(marker) ?? "[]");
   const files = manifest.map(rel => [rel, fs.readFileSync(path.join(srcRoot, rel))]);
+  // Record union before modifying files so an interrupted sync remains cleanable.
   writeFileAtomicSync(marker, JSON.stringify([...new Set([...prior, ...manifest])]));
   for (const [rel, bytes] of files) writeFileAtomicSync(path.join(dir, rel), bytes);
+
+  const manifestKeys = new Set(manifest.map(normRel));
+  const preserveKeys = new Set(preserveFiles.map(normRel));
+  const preservedPrior = [];
+  const obsolete = [];
+  for (const rel of prior) {
+    if (typeof rel !== "string" || !rel) continue;
+    const key = normRel(rel);
+    if (manifestKeys.has(key)) continue;
+    const abs = path.resolve(dir, rel);
+    if (!abs.startsWith(dir + path.sep)) continue;
+    if (preserveKeys.has(key) && fs.existsSync(abs)) {
+      preservedPrior.push(rel);
+    } else {
+      obsolete.push(rel);
+    }
+  }
+  const parents = new Set();
+  for (const rel of obsolete) {
+    const abs = path.resolve(dir, rel);
+    guardPath(abs);
+    fs.rmSync(abs, { force: true });
+    for (let p = path.dirname(abs); p !== dir; p = path.dirname(p)) parents.add(p);
+  }
+  for (const p of [...parents].sort((a, b) => b.length - a.length)) {
+    if (fs.existsSync(p) && !fs.readdirSync(p).length) fs.rmdirSync(p);
+  }
+  writeFileAtomicSync(marker, JSON.stringify([...new Set([...manifest, ...preservedPrior])]));
   return dir;
 }
 export function serverCommands(runtime, executable = process.execPath) {

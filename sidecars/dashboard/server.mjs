@@ -15,7 +15,14 @@ import {
   hasActiveUpdateMarker
 } from "./version-update.mjs";
 import { getConfigSnapshot, getEffectiveConfig } from "../../context/lib/config.js";
-import { getConversationViaApi, isConversationServiceConfigured } from "../../context/lib/conversation-api.js";
+import {
+  clearConversationApiBackoff,
+  getConversationViaApi,
+  isConversationApiUnsupportedBackedOff,
+  isConversationServiceConfigured,
+  markConversationApiUnsupported,
+  resolveConversationApiEndpointKey
+} from "../../context/lib/conversation-api.js";
 import { executionReceiptsFromSteps, fastToolClaimsFromSteps } from "../../context/lib/execution-receipts.js";
 import { buildHandoffBrief, inferWorkspaceFromStore } from "../../context/lib/handoff.js";
 import {
@@ -243,13 +250,19 @@ export async function sendSidecarKeepaliveMessage(
     typeof getConversationFn === "function" ||
     Boolean(lsAddress && csrfToken) ||
     (execFn === runAgentApiAsync && isConversationServiceConfigured(process.env));
+  const convApiEndpointKey = shouldTryConvApi
+    ? resolveConversationApiEndpointKey({ lsAddress, customFn: getConversationFn })
+    : null;
 
-  if (shouldTryConvApi) {
+  if (shouldTryConvApi && !isConversationApiUnsupportedBackedOff(convApiEndpointKey)) {
     try {
       const apiRes =
         typeof getConversationFn === "function"
           ? await getConversationFn(conversationId)
           : await getConversationViaApi(conversationId, { lsAddress, csrfToken });
+      if (apiRes?.unsupported) {
+        markConversationApiUnsupported(convApiEndpointKey);
+      }
       if (apiRes && apiRes.ok && apiRes.found) {
         hasMetadata = true;
         apiHandledMetadata = true;
@@ -392,6 +405,7 @@ export function closeRuntimeStore() {
   claimedTranscriptStatCache.clear();
   clearConversationSummaryCache();
   clearTranscriptScanCache();
+  clearConversationApiBackoff();
   cachedSafetyAudit = { ts: 0, report: null };
   resetSafetyAuditCache();
   _updateInFlight = false;

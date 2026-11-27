@@ -38,12 +38,13 @@ const FALLBACK_RUNTIME_ROOT_FILES = new Set([
   "package.json",
   "LICENSE",
   "SECURITY.md",
-  "THIRD_PARTY_NOTICES.md"
+  "THIRD_PARTY_NOTICES.md",
+  "assets/logo.svg"
 ]);
 const FALLBACK_RUNTIME_DIRS = new Set([
   "agents",
-  "assets",
   "context",
+  "dsh",
   "fast",
   "hooks",
   "rules",
@@ -350,7 +351,7 @@ function extractDevtoolsFilesFromInstallScript(scriptSource, archiveFiles) {
   return list;
 }
 
-function selectFallbackRuntimeFiles(archiveFiles) {
+export function selectFallbackRuntimeFiles(archiveFiles) {
   const selected = [];
   for (const [relPath, bytes] of archiveFiles) {
     if (!bytes?.length) continue;

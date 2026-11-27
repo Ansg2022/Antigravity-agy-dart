@@ -10344,8 +10344,8 @@
             scope: reqScope,
             conversationId: convId,
             conversationConfirmed: confirmed,
-            ...(window.sidecar ? { fromSidecarHost: true } : {}),
-            ...payload
+            ...payload,
+            ...(window.sidecar ? { fromSidecarHost: true } : {})
           })
         });
         if (!res.ok) throw new Error(`HTTP ${res.status}`);

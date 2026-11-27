@@ -6402,7 +6402,7 @@ export function findTranscriptForConversation(conversationId = null, optionsOrEx
 
   if (exactOnly) return null;
 
-  // Bounded cache keyed by root directory mtime + sibling summary DB mtime
+  // Bounded cache keyed by root directory mtime + sibling summary DB & WAL signatures
   const nowMs = Date.now();
   const rootStampParts = [];
   for (const root of roots) {
@@ -6411,13 +6411,23 @@ export function findTranscriptForConversation(conversationId = null, optionsOrEx
     try {
       rMtime = Math.round(fs.statSync(root).mtimeMs);
     } catch {}
-    let dbMtime = 0;
+    let dbSig = "-";
+    let walSig = "-";
     try {
-      if (path.basename(path.resolve(root)).toLowerCase() === "brain") {
-        dbMtime = Math.round(fs.statSync(path.join(path.dirname(path.resolve(root)), "conversation_summaries.db")).mtimeMs);
+      const resolvedRoot = path.resolve(root);
+      if (path.basename(resolvedRoot).toLowerCase() === "brain") {
+        const dbPath = path.join(path.dirname(resolvedRoot), "conversation_summaries.db");
+        try {
+          const st = fs.statSync(dbPath);
+          dbSig = `${Math.round(st.mtimeMs)}:${st.size}`;
+        } catch {}
+        try {
+          const wst = fs.statSync(`${dbPath}-wal`);
+          walSig = `${Math.round(wst.mtimeMs)}:${wst.size}`;
+        } catch {}
       }
     } catch {}
-    rootStampParts.push(`${root}:${rMtime}:${dbMtime}`);
+    rootStampParts.push(`${root}:${rMtime}:${dbSig}:${walSig}`);
   }
   const cacheKey = `${maxEntries}:${maxScanMs}:${roots.join("\0")}`;
   const rootStamp = rootStampParts.join("|");
@@ -6447,35 +6457,39 @@ export function findTranscriptForConversation(conversationId = null, optionsOrEx
     }
   }
 
-  // Tier 2: Bounded brain directory scan fallback (entry cap + wall-clock budget)
+  // Tier 2: Streaming bounded brain directory scan fallback (all-entry cap + pre-read wall-clock budget)
   if (rootsNeedingDirScan.length > 0) {
     const scanStartMs = Date.now();
-    let scannedDirs = 0;
+    let scannedEntries = 0;
     let budgetHit = false;
     for (const root of rootsNeedingDirScan) {
       if (budgetHit) break;
-      let entries;
+      let dir = null;
       try {
-        entries = fs.readdirSync(root, { withFileTypes: true });
+        dir = fs.opendirSync(root);
       } catch {
         continue;
       }
-      for (const entry of entries) {
-        if (!entry.isDirectory()) continue;
-        if (scannedDirs >= maxEntries) {
-          budgetHit = true;
-          break;
+      try {
+        while (true) {
+          if (scannedEntries >= maxEntries || Date.now() - scanStartMs >= maxScanMs) {
+            budgetHit = true;
+            break;
+          }
+          const entry = dir.readSync();
+          if (!entry) break;
+          scannedEntries += 1;
+          if (!entry.isDirectory()) continue;
+          const hit = probeConversationTranscriptInRoot(root, entry.name);
+          if (hit && hit.mtimeMs > bestMtime) {
+            bestMtime = hit.mtimeMs;
+            bestPath = hit.path;
+          }
         }
-        scannedDirs += 1;
-        if ((scannedDirs & 31) === 0 && Date.now() - scanStartMs >= maxScanMs) {
-          budgetHit = true;
-          break;
-        }
-        const hit = probeConversationTranscriptInRoot(root, entry.name);
-        if (hit && hit.mtimeMs > bestMtime) {
-          bestMtime = hit.mtimeMs;
-          bestPath = hit.path;
-        }
+      } finally {
+        try {
+          dir.closeSync();
+        } catch {}
       }
     }
   }

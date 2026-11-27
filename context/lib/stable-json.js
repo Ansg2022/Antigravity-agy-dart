@@ -61,7 +61,8 @@ export function truncateUtf8Safe(text, maxBytes) {
   if (!text) return "";
   const limit = Number.isFinite(Number(maxBytes)) ? Math.max(0, Math.floor(Number(maxBytes))) : 0;
   if (limit === 0) return "";
-  const str = String(text);
+  const raw = String(text);
+  const str = typeof raw.toWellFormed === "function" ? raw.toWellFormed() : raw;
   const buf = Buffer.from(str, "utf8");
   if (buf.length <= limit) return str;
   let cut = limit;

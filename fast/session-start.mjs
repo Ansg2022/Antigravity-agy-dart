@@ -4,7 +4,6 @@
 import fsSync, { promises as fs } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { readStdin } from "../hooks/compile-cache.mjs";
 
 // src/utils/exec-utils.ts
 import { spawn } from "node:child_process";
@@ -655,6 +654,34 @@ function firstNonEmptyPath(list) {
     }
   }
   return "";
+}
+function readStdin(timeoutMs = 1500) {
+  return new Promise((resolve) => {
+    const chunks = [];
+    let settled = false;
+    const onData = (chunk) => {
+      chunks.push(typeof chunk === "string" ? Buffer.from(chunk, "utf8") : chunk);
+    };
+    const finish = () => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      process.stdin.off("data", onData);
+      process.stdin.off("end", finish);
+      process.stdin.off("error", finish);
+      try {
+        process.stdin.pause();
+        process.stdin.unref?.();
+      } catch {
+      }
+      resolve(Buffer.concat(chunks).toString("utf8"));
+    };
+    const timer = setTimeout(finish, timeoutMs);
+    timer.unref();
+    process.stdin.on("data", onData);
+    process.stdin.on("end", finish);
+    process.stdin.on("error", finish);
+  });
 }
 async function main() {
   try {
