@@ -79,13 +79,13 @@ Requires **Node.js 22.16+ (22.x) or Node.js 24+**. Zero third-party packages —
 **Windows (PowerShell):**
 
 ```powershell
-irm https://raw.githubusercontent.com/zou172866/Antigravity-agy-dart/v1.9.1/install.ps1 | iex
+irm https://raw.githubusercontent.com/zou172866/Antigravity-agy-dart/v1.9.2/install.ps1 | iex
 ```
 
 **macOS / Linux:**
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/zou172866/Antigravity-agy-dart/v1.9.1/install.sh | sh
+curl -fsSL https://raw.githubusercontent.com/zou172866/Antigravity-agy-dart/v1.9.2/install.sh | sh
 ```
 
 ### Option 2: Let Antigravity install it
@@ -93,13 +93,13 @@ curl -fsSL https://raw.githubusercontent.com/zou172866/Antigravity-agy-dart/v1.9
 Send this to Antigravity:
 
 ```text
-Clone tag v1.9.1 of https://github.com/zou172866/Antigravity-agy-dart.git to a temp folder, run `node scripts/install.mjs install` (add `--install-rg` on Windows if `rg` is missing), and confirm `doctor` passes.
+Clone tag v1.9.2 of https://github.com/zou172866/Antigravity-agy-dart.git to a temp folder, run `node scripts/install.mjs install` (add `--install-rg` on Windows if `rg` is missing), and confirm `doctor` passes.
 ```
 
 ### Option 3: Clone & install with custom flags
 
 ```powershell
-git clone --branch v1.9.1 --depth 1 https://github.com/zou172866/Antigravity-agy-dart.git
+git clone --branch v1.9.2 --depth 1 https://github.com/zou172866/Antigravity-agy-dart.git
 cd Antigravity-agy-dart
 
 # Windows PowerShell (optional -InstallRg auto-installs ripgrep)
@@ -164,6 +164,11 @@ node ~/.gemini/config/plugins/agy-dart/scripts/install.mjs tool-loading lazy
 ---
 
 ## Changelog
+
+### v1.9.2
+- **MCP Apps diagnostics card safety & UX hardening**: Fixed `ctx_stats` Refresh button to stay strictly read-only (`reset: false`, never replaying `reset: true`), wired `ctx_doctor` Safety Monitor alerts to display real `diagnosis` + `recommendedAction` text, enforced `event.source === window.parent`, strict host CSS variable allowlist + `background-color` (blocking `url(...)` / internal overrides), `ui/resource-teardown` cleanup, and strict SEP-1865 `mimeTypes` negotiation in `context/server.js`.
+- **Loopback `ConversationService` & unlimited-history SQLite hardening**: Added loopback IP verification on `localhost` DNS lookups, a hard wall-clock total request deadline (preventing slow-drip bypass), strict HTTP 200 contract/ID validation, and shared 60s unsupported-endpoint backoff on Sidecar keepalive sends. Fixed `conversations_fts` archive detection past row 32, enforced shared lock deadlines without negative-cache poisoning on transient `SQLITE_BUSY`, added atomic CAS lease deletion (`deleteWatchdogLeaseIfUnchanged`), WAL-aware transcript scan invalidation, index-aware recent-ID SQL, and streaming `opendirSync` directory scans.
+- **Read-guard, batch-edit checkpoints, simulator & multi-host upgrade fixes**: Required exact full measurements before unlocking wide line ranges on >2 MiB files, passed structured `apply_edits(verify)` results directly so failure checkpoints persist even when 50-file outputs truncate at 8.8 KB, aligned `cache-simulator.js` with Gemini 4's 2,050-token tail-reprocess rule, pruned retired README/SVG files when upgrading shared DSH/Claude/Codex runtimes, updated self-update fallback manifests (`dsh/` + `assets/logo.svg` only), restored standalone single-file `fast/session-start.mjs`, normalized lone UTF-16 surrogates consistently in `truncateUtf8Safe`, and aligned `cache-audit` Markdown totals. _(Watchdog policy note: un-suffixed `gemini-4-carbon`/`neon` intentionally remain in the protective 600s high-reasoning tier to prevent false stall alerts during extended thinking; explicit `-low`/`-medium` suffixes stay on the standard tier.)_
 
 ### v1.9.1
 - **Leaner startup prompt & on-demand skill docs (zero feature cuts)**: Trimmed `rules/AGENTS.md` and `agy-dart_context` tool descriptions to cut default Turn-0 startup overhead (`~1,344 → ~1,287` tokens; full catalog `1,956 → 1,883` tokens), and tightened `SKILL.md` + `error-playbook.md` to save **~3,278 tokens (-36%)** whenever troubleshooting docs are loaded on demand.
