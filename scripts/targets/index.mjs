@@ -6,7 +6,7 @@ import * as codex from "./codex.mjs";
 import * as dsh from "./dsh.mjs";
 import * as agy from "./antigravity.mjs";
 import { cleanupRuntime, guardPath, manageFiles, read, serverCommands, syncSharedRuntime } from "./shared.mjs";
-import { RUNTIME_FILES, FILES_TO_COPY, checkNodeAndSqlite, verifyMcpServer } from "../install.mjs";
+import { RUNTIME_FILES, DEVTOOLS_FILES, FILES_TO_COPY, checkNodeAndSqlite, verifyMcpServer } from "../install.mjs";
 export async function runTargets(src, argv, home=os.homedir()) {
   const args=[...argv], at=args.indexOf("--target");
   const names=at<0?["agy"]:String(args.splice(at,2)[1]).split(",");
@@ -37,7 +37,8 @@ export async function runTargets(src, argv, home=os.homedir()) {
     const runtime=path.join(home,".agy-dart/runtime");
     const specs=adapters[name].specs(home,src,runtime,{profile,mcpOnly});
     if(action==="install") {
-      syncSharedRuntime(src,home,args.includes("--with-devtools")?FILES_TO_COPY:RUNTIME_FILES);
+      const withDevtools = args.includes("--with-devtools");
+      syncSharedRuntime(src,home,withDevtools?FILES_TO_COPY:RUNTIME_FILES,{preserveFiles:withDevtools?[]:DEVTOOLS_FILES});
       manageFiles(home,name,specs,action);
     } else if(action==="uninstall") {
       manageFiles(home,name,specs,action);

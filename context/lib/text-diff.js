@@ -5,21 +5,11 @@
  * memory even on multi-thousand-line files.
  */
 
+import { truncateUtf8Safe } from "./stable-json.js";
+
 export const DEFAULT_MAX_DIFF_BYTES = 6500;
 export const DEFAULT_CONTEXT_LINES = 3;
-
-/** Truncate text strictly by UTF-8 byte length without splitting multi-byte chars */
-export function truncateUtf8Safe(text, maxBytes) {
-  if (!text || maxBytes <= 0) return "";
-  const buf = Buffer.from(text, "utf8");
-  if (buf.length <= maxBytes) return text;
-  let cut = maxBytes;
-  // Back up past any UTF-8 continuation bytes (10xxxxxx) to land cleanly before an incomplete sequence
-  while (cut > 0 && (buf[cut] & 0xc0) === 0x80) {
-    cut -= 1;
-  }
-  return buf.subarray(0, cut).toString("utf8").replace(/\uFFFD+$/, "");
-}
+export { truncateUtf8Safe };
 
 /**
  * Split text into canonical lines (normalizing CRLF -> LF and stripping a single

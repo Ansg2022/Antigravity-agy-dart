@@ -1,9 +1,94 @@
+import dns from "node:dns";
 import http from "node:http";
+import net from "node:net";
 
 const CONVERSATION_API_METHOD_GET = "/product.v1.ConversationService/GetConversation";
 const DEFAULT_CONVERSATION_API_TIMEOUT_MS = 1500;
 const MAX_CONVERSATION_API_RESPONSE_BYTES = 256 * 1024;
+const DEFAULT_UNSUPPORTED_BACKOFF_MS = 60_000;
 const LOOPBACK_HOSTS = new Set(["127.0.0.1", "localhost", "::1"]);
+const _unsupportedEndpointUntil = new Map();
+
+export function resolveConversationApiEndpointKey({ lsAddress = "", env = process.env, customFn = null } = {}) {
+  if (typeof customFn === "function") return customFn;
+  const raw =
+    typeof lsAddress === "string" && lsAddress.trim()
+      ? lsAddress.trim()
+      : typeof env?.ANTIGRAVITY_LS_ADDRESS === "string"
+        ? env.ANTIGRAVITY_LS_ADDRESS.trim()
+        : "";
+  const parsed = parseLoopbackLsAddress(raw);
+  return parsed ? parsed.hostHeader.toLowerCase() : raw.toLowerCase() || "default";
+}
+
+export function isConversationApiUnsupportedBackedOff(endpointKey, nowMs = Date.now()) {
+  if (!endpointKey) return false;
+  const until = _unsupportedEndpointUntil.get(endpointKey) || 0;
+  if (until > nowMs) return true;
+  if (until > 0) _unsupportedEndpointUntil.delete(endpointKey);
+  return false;
+}
+
+export function markConversationApiUnsupported(
+  endpointKey,
+  { nowMs = Date.now(), backoffMs = DEFAULT_UNSUPPORTED_BACKOFF_MS } = {}
+) {
+  if (!endpointKey) return;
+  if (_unsupportedEndpointUntil.size >= 64 && !_unsupportedEndpointUntil.has(endpointKey)) {
+    const oldest = _unsupportedEndpointUntil.keys().next().value;
+    if (oldest !== undefined) _unsupportedEndpointUntil.delete(oldest);
+  }
+  const safeBackoff = Number.isFinite(Number(backoffMs)) && Number(backoffMs) > 0 ? Number(backoffMs) : DEFAULT_UNSUPPORTED_BACKOFF_MS;
+  _unsupportedEndpointUntil.set(endpointKey, nowMs + safeBackoff);
+}
+
+export function clearConversationApiBackoff() {
+  _unsupportedEndpointUntil.clear();
+}
+
+function isStrictLoopbackIp(ip) {
+  if (typeof ip !== "string") return false;
+  const trimmed = ip.trim().toLowerCase();
+  const ver = net.isIP(trimmed);
+  if (ver === 4) {
+    return trimmed.startsWith("127.");
+  }
+  if (ver === 6) {
+    if (trimmed === "::1") return true;
+    const parts = trimmed.split(":");
+    return (
+      parts.length === 8 &&
+      parts.slice(0, 7).every((p) => /^0{1,4}$/.test(p)) &&
+      /^0{0,3}1$/.test(parts[7])
+    );
+  }
+  return false;
+}
+
+function createLoopbackLookup(lookupFn = dns.lookup) {
+  return (hostname, lookupOpts, cb) => {
+    const callback = typeof lookupOpts === "function" ? lookupOpts : cb;
+    const opts = typeof lookupOpts === "object" && lookupOpts !== null ? lookupOpts : {};
+    lookupFn(hostname, { ...opts, all: true }, (err, results) => {
+      if (err) return callback(err);
+      const list = Array.isArray(results)
+        ? results
+        : typeof results === "string"
+          ? [{ address: results, family: net.isIP(results) }]
+          : [];
+      if (list.length === 0 || list.some((item) => !isStrictLoopbackIp(item?.address))) {
+        const blockedErr = new Error("non_loopback_dns_rejected");
+        blockedErr.code = "ENONLOOPBACK";
+        return callback(blockedErr);
+      }
+      if (opts.all) {
+        return callback(null, list);
+      }
+      const first = list[0];
+      return callback(null, first.address, first.family || net.isIP(first.address));
+    });
+  };
+}
 
 function isSafeApiConversationId(raw) {
   if (typeof raw !== "string") return false;
@@ -158,30 +243,54 @@ export function getConversationViaApi(conversationId, options = {}) {
 
   return new Promise((resolve) => {
     let settled = false;
+    let deadlineTimer = null;
+    let activeRes = null;
+    let req = null;
     const finish = (payload) => {
       if (settled) return;
       settled = true;
+      if (deadlineTimer) {
+        clearTimeout(deadlineTimer);
+        deadlineTimer = null;
+      }
       resolve(payload);
     };
 
-    let req;
     try {
+      const reqOpts = {
+        hostname: parsedAddr.hostname,
+        port: parsedAddr.port,
+        path: CONVERSATION_API_METHOD_GET,
+        method: "POST",
+        agent: false,
+        headers: {
+          Host: parsedAddr.hostHeader,
+          "Content-Type": "application/json",
+          "Connect-Protocol-Version": "1",
+          "x-antigravity-csrf-token": rawToken,
+          "Content-Length": Buffer.byteLength(body)
+        }
+      };
+      if (parsedAddr.hostname === "localhost" || typeof options.lookupFn === "function") {
+        reqOpts.lookup = createLoopbackLookup(
+          typeof options.lookupFn === "function" ? options.lookupFn : dns.lookup
+        );
+      }
+      deadlineTimer = setTimeout(() => {
+        try {
+          activeRes?.destroy();
+        } catch {}
+        try {
+          req?.destroy();
+        } catch {}
+        finish({ ok: false, error: "timeout" });
+      }, timeoutMs);
+      deadlineTimer.unref?.();
+
       req = http.request(
-        {
-          hostname: parsedAddr.hostname,
-          port: parsedAddr.port,
-          path: CONVERSATION_API_METHOD_GET,
-          method: "POST",
-          agent: false,
-          headers: {
-            Host: parsedAddr.hostHeader,
-            "Content-Type": "application/json",
-            "Connect-Protocol-Version": "1",
-            "x-antigravity-csrf-token": rawToken,
-            "Content-Length": Buffer.byteLength(body)
-          }
-        },
+        reqOpts,
         (res) => {
+          activeRes = res;
           const statusCode = Number(res.statusCode || 0);
           const chunks = [];
           let totalBytes = 0;
@@ -192,7 +301,12 @@ export function getConversationViaApi(conversationId, options = {}) {
             totalBytes += chunk.length;
             if (totalBytes > MAX_CONVERSATION_API_RESPONSE_BYTES) {
               oversized = true;
-              res.destroy();
+              try {
+                res.destroy();
+              } catch {}
+              try {
+                req?.destroy();
+              } catch {}
               finish({ ok: false, statusCode, error: "response_too_large" });
               return;
             }
@@ -214,10 +328,33 @@ export function getConversationViaApi(conversationId, options = {}) {
                 finish({ ok: false, statusCode, error: "invalid_json_response" });
                 return;
               }
+              const conv =
+                parsed.conversation &&
+                typeof parsed.conversation === "object" &&
+                !Array.isArray(parsed.conversation)
+                  ? parsed.conversation
+                  : parsed;
+              const explicitId = cleanStr(conv.id, 128);
+              if (explicitId && explicitId !== safeId) {
+                finish({ ok: false, statusCode, error: "conversation_id_mismatch" });
+                return;
+              }
+              const hasNonEmptyObj = (obj) =>
+                Boolean(obj && typeof obj === "object" && !Array.isArray(obj) && Object.keys(obj).length > 0);
+              const hasContractRecord = Boolean(
+                explicitId ||
+                  hasNonEmptyObj(conv.metadata) ||
+                  hasNonEmptyObj(conv.annotations) ||
+                  hasNonEmptyObj(conv.state)
+              );
+              if (!hasContractRecord) {
+                finish({ ok: false, statusCode, error: "incomplete_conversation_response" });
+                return;
+              }
               const norm = normalizeConversationApiRecord(parsed, safeId);
               finish({
                 ok: true,
-                found: Boolean(norm.id),
+                found: true,
                 statusCode,
                 ...norm
               });
@@ -254,10 +391,19 @@ export function getConversationViaApi(conversationId, options = {}) {
           res.on("error", (err) => {
             finish({ ok: false, statusCode, error: err?.code || err?.message || "response_error" });
           });
+
+          res.on("close", () => {
+            if (!settled && !res.complete) {
+              finish({ ok: false, statusCode, error: "response_closed_prematurely" });
+            }
+          });
         }
       );
 
       req.setTimeout(timeoutMs, () => {
+        try {
+          activeRes?.destroy();
+        } catch {}
         try {
           req.destroy();
         } catch {}
@@ -265,6 +411,15 @@ export function getConversationViaApi(conversationId, options = {}) {
       });
 
       req.on("error", (err) => {
+        if (err?.code === "ENONLOOPBACK") {
+          finish({
+            ok: false,
+            unavailable: true,
+            blockedNonLoopback: true,
+            error: "non_loopback_dns_rejected"
+          });
+          return;
+        }
         finish({ ok: false, error: err?.code || err?.message || "request_error" });
       });
 

@@ -3690,12 +3690,19 @@ export async function auditEnvironmentCache(options = {}) {
 
 export function formatCacheAuditMarkdown(report) {
   const sb = report.scoreBreakdown;
+  const eagerMcpTok = Number.isFinite(report.totals.eagerMcpSchemaTokens)
+    ? report.totals.eagerMcpSchemaTokens
+    : report.totals.mcpSchemaTokens;
+  const lazyMcpTok = Number.isFinite(report.totals.lazyMcpCatalogTokens)
+    ? report.totals.lazyMcpCatalogTokens
+    : 0;
+  const lazyNote = lazyMcpTok > 0 ? `; lazy MCP catalog: ${lazyMcpTok.toLocaleString("en-US")} tok` : "";
   const lines = [
     "# Prompt Cache Environment Audit",
     "",
     `- **Health Score**: **${report.score}/100 (Grade ${report.grade})**`,
     `- **Findings**: ${sb.criticalCount} critical, ${sb.warnCount} warn, ${sb.infoCount} info`,
-    `- **Estimated Turn-0 Prefix**: **~${report.totals.estimatedTurn0Tokens.toLocaleString("en-US")} tokens** (rules & skills frontmatter: ${report.totals.rulesAndSkillsTokens.toLocaleString("en-US")} tok + MCP schemas: ${report.totals.mcpSchemaTokens.toLocaleString("en-US")} tok)`,
+    `- **Estimated Turn-0 Prefix**: **~${report.totals.estimatedTurn0Tokens.toLocaleString("en-US")} tokens** (rules & skills frontmatter: ${report.totals.rulesAndSkillsTokens.toLocaleString("en-US")} tok + eager MCP schemas: ${eagerMcpTok.toLocaleString("en-US")} tok${lazyNote})`,
     `- **Scope**: workspace=\`${toPosixDisplay(report.options.workspace)}\` · configDir=\`${toPosixDisplay(report.options.configDir)}\` · liveMCP=${report.options.live ? "on" : "off"}`,
     ""
   ];

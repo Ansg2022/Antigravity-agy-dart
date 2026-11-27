@@ -79,13 +79,13 @@ Antigravity 偶尔会在后台反复重审长对话，悄悄把 5 小时额度�
 **Windows（PowerShell）：**
 
 ```powershell
-irm https://raw.githubusercontent.com/zou172866/Antigravity-agy-dart/v1.9.0/install.ps1 | iex
+irm https://raw.githubusercontent.com/zou172866/Antigravity-agy-dart/v1.9.2/install.ps1 | iex
 ```
 
 **macOS / Linux：**
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/zou172866/Antigravity-agy-dart/v1.9.0/install.sh | sh
+curl -fsSL https://raw.githubusercontent.com/zou172866/Antigravity-agy-dart/v1.9.2/install.sh | sh
 ```
 
 ### 方法二：直接发给 Antigravity 帮你装
@@ -93,13 +93,13 @@ curl -fsSL https://raw.githubusercontent.com/zou172866/Antigravity-agy-dart/v1.9
 复制下面这句发给 Antigravity 就行：
 
 ```text
-请将 https://github.com/zou172866/Antigravity-agy-dart.git 的 v1.9.0 标签克隆到临时目录，运行其中的 scripts/install.mjs install 完成全局安装并跑 doctor 自检（Windows 如未安装 rg 请同时传 --install-rg）。
+请将 https://github.com/zou172866/Antigravity-agy-dart.git 的 v1.9.2 标签克隆到临时目录，运行其中的 scripts/install.mjs install 完成全局安装并跑 doctor 自检（Windows 如未安装 rg 请同时传 --install-rg）。
 ```
 
 ### 方法三：克隆仓库自定义安装
 
 ```powershell
-git clone --branch v1.9.0 --depth 1 https://github.com/zou172866/Antigravity-agy-dart.git
+git clone --branch v1.9.2 --depth 1 https://github.com/zou172866/Antigravity-agy-dart.git
 cd Antigravity-agy-dart
 
 # Windows PowerShell（加 -InstallRg 可顺手自动安装快速搜索工具 rg）
@@ -164,6 +164,16 @@ node ~/.gemini/config/plugins/agy-dart/scripts/install.mjs tool-loading lazy
 ---
 
 ## 更新日志
+
+### v1.9.2
+- **内联诊断卡片安全与体验加固**：修复 `ctx_stats` 卡片点击刷新时不再重放 `reset: true`（强制只读刷新，避免二次清空当前会话数据）；修复 `ctx_doctor` 卡片 Safety Monitor 告警显示真实 `diagnosis` 与处置建议；加固 `event.source === window.parent` 校验、宿主 CSS 变量白名单与 `background-color`（阻断 `url(...)` 与内部变量覆盖）、补齐 `ui/resource-teardown` 清理响应，并收严 `context/server.js` 的 SEP-1865 `mimeTypes` 协商。
+- **`ConversationService` 回环边界与无上限历史 SQLite 加固**：为 `localhost` 补齐解析后回环 IP 校验、独立墙钟总超时（防慢速滴水绕过）、HTTP 200 响应契约/ID 一致性校验，以及 Sidecar 发送路径共享 60 秒退避；修复 `conversations_fts` 超过 32 行时的归档漏判、独占锁下的共享截止时间与不污染负缓存、原子 CAS 清理过期租约（`deleteWatchdogLeaseIfUnchanged`）、扫描缓存 WAL 失效、索引感知最近会话查询及 `opendirSync` 流式目录遍历。
+- **读守卫、批量编辑恢复点、模拟器与跨宿主升级修复**：大文件跨 2 MiB 探测边界不再误放行宽行读取；`apply_edits(verify)` 改传结构化验证结果，50 文件长路径触发 8.8 KB 截断时仍准确写入失败恢复点；`cache-simulator.js` 对齐 Gemini 4 的 2,050 token 尾部重算免误报；DSH/Claude/Codex 升级同步清理 8 个退役文档/SVG；自更新备用清单补齐 `dsh/` 并排除退役 SVG；恢复 `fast/session-start.mjs` 单文件独立运行能力、统一 `truncateUtf8Safe` 孤立代理项处理并修正 `cache-audit` Markdown 总数明细。_（看门狗策略说明：无档位后缀的 `gemini-4-carbon`/`neon` 刻意保留 600s 保护性高推理阈值以防长思考误报卡死，显式 `-low`/`-medium` 走常规阈值。）_
+
+### v1.9.1
+- **开场规则与排错文档进一步瘦身（零减功能）**：精简 `rules/AGENTS.md` 与 `agy-dart_context` 工具描述，默认首轮开场占用从 `~1,344` 降至 `~1,287` token（全量目录 `1,956 → 1,883` token）；压缩 `SKILL.md` 与排错手册冗余表述，按需读取排错文档一次直省约 **3,278 token（-36%）**。
+- **安装目录体积更轻**：不再把仅用于 GitHub 主页展示的双语 README 和 6 张宣传图 SVG 复制进本机插件运行目录（`RUNTIME_FILES` 从 `72` 降至 `64` 文件 / 省 `112 KB`，仓库主页、合规声明与图标 `logo.svg` 完整保留）。
+- **清理死代码并收口跨文件重复样板**：移除未引用的内部函数/常量与面板残留样式/词条，把 6 份重复的钩子基础逻辑直接并入必载的 `hooks/compile-cache.mjs`（零新增文件），把 5 份 `truncateUtf8Safe` 统一为 `context/lib/stable-json.js` 的完整 UTF-8 码点边界实现（核心代码净减 `429` 行，行为零漂移）。
 
 ### v1.9.0
 - **对齐 Gemini 4 95% 缓存折扣与分档计价**：更新了 Gemini 4（含 Carbon/Argon、Neon、Hydrogen 变体）的 95% 缓存折扣、4,096 token 起步门槛和 2,050 token 增量判断，账本和成本估算更准、不再误报缓存失效；同步识别 Carbon/Neon 默认高推理档位，并提高自动续温的划算门槛。

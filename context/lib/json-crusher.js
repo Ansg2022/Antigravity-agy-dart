@@ -6,6 +6,8 @@
  * with original indices while strictly honoring UTF-8 byte budgets (CJK-safe).
  */
 
+import { truncateUtf8Safe } from "./stable-json.js";
+
 const MAX_PARSE_CHARS = 20 * 1024 * 1024; // 20 MB defensive guard
 const MIN_JSONL_LINES = 5;
 
@@ -22,21 +24,6 @@ const BENIGN_ERR_RE =
 
 function utf8Bytes(str) {
   return Buffer.byteLength(str, "utf8");
-}
-
-/** Truncate string strictly to <= maxBytes UTF-8 bytes without splitting multi-byte chars or surrogates */
-function truncateUtf8Safe(text, maxBytes) {
-  if (!text || maxBytes <= 0) return "";
-  if (Buffer.byteLength(text, "utf8") <= maxBytes) return text;
-  let sliced = Buffer.from(text, "utf8").subarray(0, maxBytes).toString("utf8");
-  sliced = sliced.replace(/\uFFFD+$/, "");
-  if (sliced.length > 0) {
-    const last = sliced.charCodeAt(sliced.length - 1);
-    if (last >= 0xd800 && last <= 0xdbff) {
-      sliced = sliced.slice(0, -1);
-    }
-  }
-  return sliced;
 }
 
 function valueType(v) {

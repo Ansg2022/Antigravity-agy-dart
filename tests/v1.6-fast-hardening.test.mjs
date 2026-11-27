@@ -1039,7 +1039,8 @@ test("v1.6-5: Phase 3 installer --tool-loading persistence, rules/*.local.md pre
     assert.equal(mcp1.mcpServers.fast.tools.apply_edits.eager, true);
     assert.equal(mcp1.mcpServers.context.tools, undefined);
     assert.equal(fs.existsSync(path.join(installDir, "SECURITY.md")), true);
-    assert.equal(fs.existsSync(path.join(installDir, "assets", "architecture-dark.svg")), true);
+    assert.equal(fs.existsSync(path.join(installDir, "assets", "logo.svg")), true);
+    assert.equal(fs.existsSync(path.join(installDir, "assets", "architecture-dark.svg")), false);
 
     // Create user local rule + obsolete file, then re-install with --tool-loading eager
     const localRulePath = path.join(installDir, "rules", "my-team.local.md");

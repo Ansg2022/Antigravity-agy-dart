@@ -18,7 +18,13 @@ import crypto from "node:crypto";
 import fs from "node:fs";
 import { spawn } from "node:child_process";
 import { getEffectiveConfig, parseUiLang } from "./config.js";
-import { getConversationViaApi, isConversationServiceConfigured } from "./conversation-api.js";
+import {
+  getConversationViaApi,
+  isConversationApiUnsupportedBackedOff,
+  isConversationServiceConfigured,
+  markConversationApiUnsupported,
+  resolveConversationApiEndpointKey
+} from "./conversation-api.js";
 import { buildHandoffBrief, inferWorkspaceFromStore, isSafeWorkspaceDir } from "./handoff.js";
 import { isSecretRedactionEnabled } from "./security.js";
 import {
@@ -46,6 +52,7 @@ import {
   classifyTranscriptGenesisSteps,
   clearConversationSummaryCache,
   decodeFileUriOrPath,
+  deleteWatchdogLeaseIfUnchanged,
   deriveLlmSubphase,
   detectSubagentFromTranscriptFile,
   detectSubagentFromTranscriptSteps,
@@ -97,6 +104,7 @@ export {
   classifyTranscriptGenesisSteps,
   clearConversationSummaryCache,
   decodeFileUriOrPath,
+  deleteWatchdogLeaseIfUnchanged,
   deriveLlmSubphase,
   detectSubagentFromTranscriptFile,
   detectSubagentFromTranscriptSteps,
@@ -2050,7 +2058,16 @@ export class WatchdogMonitor {
     const activeStore = store || this.getStore?.() || null;
     if (!this._canUseConversationApi(activeStore)) return null;
     const nowMs = this.nowFn();
-    if (!force && nowMs < this._convApiUnsupportedUntilTs) return null;
+    const sharedEndpointKey = !this.fetchConversationFn
+      ? resolveConversationApiEndpointKey({ env: process.env })
+      : null;
+    if (
+      !force &&
+      (nowMs < this._convApiUnsupportedUntilTs ||
+        (sharedEndpointKey && isConversationApiUnsupportedBackedOff(sharedEndpointKey, nowMs)))
+    ) {
+      return null;
+    }
     if (!force) {
       const cached = this._getCachedConversationApiRecord(cleanId, nowMs);
       if (cached) return cached;
@@ -2064,6 +2081,9 @@ export class WatchdogMonitor {
       const doneNow = this.nowFn();
       if (res?.unsupported) {
         this._convApiUnsupportedUntilTs = doneNow + 60_000;
+        if (sharedEndpointKey) {
+          markConversationApiUnsupported(sharedEndpointKey, { nowMs: doneNow, backoffMs: 60_000 });
+        }
         return null;
       }
       if (res && res.ok && res.found) {
@@ -2104,9 +2124,15 @@ export class WatchdogMonitor {
         (lease.updatedTs <= 0 || nowWallMs - lease.updatedTs > MAX_IDLE_LEASE_RETENTION_MS)
       ) {
         try {
-          store.deleteMeta?.(getWatchdogLeaseKey(lease.conversationId));
+          const cas = deleteWatchdogLeaseIfUnchanged(store, lease.conversationId, lease.updatedTs, lease.phase);
+          if (cas.deleted) {
+            continue;
+          }
+          if (cas.current) {
+            kept.push(cas.current);
+            continue;
+          }
         } catch {}
-        continue;
       }
       kept.push(lease);
     }

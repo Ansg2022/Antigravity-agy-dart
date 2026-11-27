@@ -526,6 +526,7 @@ var McpStdioServer = class {
               toolName: name,
               args,
               finalText,
+              verifyResult: res.verifyResult || null,
               worktree:
                 res.telemetry?.worktree ||
                 res.verifyWorktree ||
@@ -2417,6 +2418,7 @@ ${summaryLines.join("\n")}`,
   const header = input.dryRun ? `Dry run validated ${plans.length} file(s) (0 files modified):` : `Applied edits to ${plans.length} file(s):`;
   const parts = [`${header}
 ${summaryLines.join("\n")}`];
+  let verifyResult = null;
   if (!input.dryRun && verifySpec) {
     const verifyCwd = verifySpec.cwd ? resolvePath(verifySpec.cwd, baseCwd) : baseCwd;
     const requestedTimeoutMs =
@@ -2457,6 +2459,23 @@ ${summaryLines.join("\n")}`];
         maxBytes: Math.max(0, verifyBytes),
         passingTest: res.exitCode === 0 && isRecognizedTestCheck(verifySpec.command, verifyCwd)
       });
+      const combinedVerifyOutput = [
+        normalizeTerminalOutput(res.stdout),
+        normalizeTerminalOutput(res.stderr),
+        res.error ? `spawn error: ${res.error}` : ""
+      ]
+        .filter(Boolean)
+        .join("\n");
+      verifyResult = {
+        command: verifySpec.command,
+        exitCode: res.exitCode,
+        timedOut: Boolean(res.timedOut),
+        error: res.error || "",
+        durationMs: res.durationMs || 0,
+        status,
+        summaryLine: `Verify [${status} in ${res.durationMs}ms] \`${verifySpec.command}\`:`,
+        output: combinedVerifyOutput || formatted
+      };
       parts.push(verifyHeader + formatted);
     }
   }
@@ -2465,7 +2484,7 @@ ${summaryLines.join("\n")}`];
   return {
     text: finalText,
     isError: false,
-    ...(verifySpec && !input.dryRun ? { verifyWorktree: baseCwd } : {})
+    ...(verifySpec && !input.dryRun ? { verifyWorktree: baseCwd, ...(verifyResult ? { verifyResult } : {}) } : {})
   };
 }
 
@@ -4447,13 +4466,18 @@ async function recordFastVerificationCheckpoint({
   toolName,
   args = {},
   finalText = "",
+  verifyResult = null,
   worktree = process.cwd(),
   hostSessionId = null
 }) {
-  if (!finalText || typeof finalText !== "string") return;
+  const signalSourceText =
+    verifyResult && typeof verifyResult === "object" && typeof verifyResult.summaryLine === "string"
+      ? `${verifyResult.summaryLine}\n${String(verifyResult.output || "")}`
+      : finalText;
+  if (!signalSourceText || typeof signalSourceText !== "string") return;
   const postMod = await loadFastPostToolVerifyMod();
   if (typeof postMod?.extractVerificationSignal !== "function") return;
-  const verifySignal = postMod.extractVerificationSignal(toolName, args, finalText);
+  const verifySignal = postMod.extractVerificationSignal(toolName, args, signalSourceText);
   if (!verifySignal) return;
   const store = await getFastTelemetryStore();
   if (!store || typeof store.recordVerificationResult !== "function") return;

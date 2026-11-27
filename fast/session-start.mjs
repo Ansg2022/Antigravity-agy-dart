@@ -655,7 +655,7 @@ function firstNonEmptyPath(list) {
   }
   return "";
 }
-async function readStdin(timeoutMs = 1500) {
+function readStdin(timeoutMs = 1500) {
   return new Promise((resolve) => {
     const chunks = [];
     let settled = false;
