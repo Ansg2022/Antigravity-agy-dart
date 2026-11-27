@@ -9331,7 +9331,7 @@ test("v1.7.3-16: Wrap-up Item 1 — Aggregate alert card Copy Rescue Brief / Vie
 
       await new Promise((r) => setTimeout(r, 30));
       vm.runInContext(`setScope(${JSON.stringify(aggScope)});`, ctx);
-      await new Promise((r) => setTimeout(r, 50));
+      await waitForWatchdogCurrent(ctx, convA);
 
       // Open A's View Brief -> shows A (Claude 150k), Copy enabled
       hoBodies.length = 0;

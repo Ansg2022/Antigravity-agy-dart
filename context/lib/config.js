@@ -78,6 +78,7 @@ export const CONFIG_DEFAULTS = Object.freeze({
   autoUpdateCheck: true,
   autoUpdateInstall: false,
   safetyAudit: true,
+  safetyDesktopNotify: false,
   safetyLogPaths: Object.freeze([]),
   safetyStatePath: null,
   safetyWindowHours: 5,
@@ -673,6 +674,15 @@ export function getConfigSnapshot(options = {}) {
       parseDisableEnvFlag(env?.AGY_DART_DISABLE_SAFETY_AUDIT);
   }
   pick("safetyAudit", safetyAuditEnv, cfgBool("safetyAudit"));
+  let safetyDesktopNotifyEnv;
+  if (parseEnvBool(env?.AGY_DART_DISABLE_SAFETY_DESKTOP_NOTIFY) === true) {
+    safetyDesktopNotifyEnv = false;
+  } else {
+    safetyDesktopNotifyEnv =
+      parseEnvBool(env?.AGY_DART_SAFETY_DESKTOP_NOTIFY) ??
+      parseDisableEnvFlag(env?.AGY_DART_DISABLE_SAFETY_DESKTOP_NOTIFY);
+  }
+  pick("safetyDesktopNotify", safetyDesktopNotifyEnv, cfgBool("safetyDesktopNotify"));
   pick(
     "safetyLogPaths",
     parseSafetyLogPaths(env?.AGY_DART_SAFETY_LOG_PATHS),

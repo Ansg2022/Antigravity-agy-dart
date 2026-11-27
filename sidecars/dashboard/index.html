@@ -1824,6 +1824,17 @@
       color: var(--ok-text);
     }
 
+    .safety-synergy-tip {
+      margin: 6px 0 0;
+      padding: 6px 9px;
+      border-radius: var(--radius-md);
+      background: var(--warn-soft);
+      border: 1px solid var(--warn-border);
+      font-size: 11.5px;
+      line-height: 1.45;
+      color: var(--warn-text);
+    }
+
     .wd-jump-pill.is-clickable:hover {
       filter: brightness(0.96);
       transform: translateY(-0.5px);
@@ -2676,6 +2687,7 @@
             <div id="kv-ctx-bar-fill" class="ctx-usage-fill" style="width: 0%;"></div>
           </div>
           <div id="kv-ctx-synth-note" class="ctx-synth-note">--</div>
+          <p id="kv-safety-synergy-tip" class="safety-synergy-tip hidden"></p>
           <div class="ctx-meta-row meta-strip">
             <span id="kv-model-badge" class="meta-tag hidden">--</span>
             <span id="kv-temp-badge" class="meta-tag">COLD</span>
@@ -2854,6 +2866,7 @@
         <div class="safety-actions-row">
           <button id="safety-handoff-btn" type="button" onclick="openSafetyHandoffBrief()" class="btn btn-primary btn-sm hidden" data-i18n="safetyHandoffBtn" data-i18n-title="safetyHandoffTip" title="Pack current progress into a short summary so you can continue in a fresh chat">Pack Progress &amp; New Chat</button>
           <button id="safety-copy-report-btn" type="button" onclick="copySafetyAuditReport()" class="btn btn-secondary btn-sm" data-i18n="safetyCopyReportBtn" data-i18n-title="safetyCopyReportTip" title="Copy privacy-scrubbed audit evidence (for bug reports)">Copy Evidence (Redacted)</button>
+          <button id="safety-notify-btn" type="button" onclick="toggleSafetyDesktopNotify()" class="toggle-chip" data-enabled="0" data-i18n-title="safetyNotifyTip" title="Opt-in OS desktop alert when background safety actively bursts or hits 429 (15m cooldown, OFF by default)">Burn Alert: OFF</button>
           <span id="safety-action-feedback" class="safety-feedback hidden"></span>
         </div>
       </div>
@@ -3655,7 +3668,13 @@
         safetyReqsFmt: '{hidden} hidden / {total} total',
         safetyWaitWith429Fmt: '{dur} · 429: {c429}',
         safetyEstTokFmt: 'est. ~{low}–{high} tok',
-        safetyRestartNote: 'Note: Desktop cleared logs on {count} restart(s); agy-dart kept the {h}h totals intact.'
+        safetyRestartNote: 'Note: Desktop cleared logs on {count} restart(s); agy-dart kept the {h}h totals intact.',
+        safetyNotifyOff: 'Burn Alert: OFF',
+        safetyNotifyOn: 'Burn Alert: ON',
+        safetyNotifyTip: 'Opt-in OS desktop alert when background safety actively bursts or hits 429 (15m cooldown, OFF by default)',
+        safetySynergyTip: 'Quota tip: This chat is already {curK}k tokens while background safety is active (~200–300K chars/review). Start a fresh chat after this milestone to save ~80% review burn.',
+        safetyHandoffStepCopied: 'Step 1 done: progress brief auto-copied! Step 2: open a fresh chat and press Ctrl+V to leave heavy background reviews behind.',
+        safetyHandoffStepManual: 'Step 1: click "Copy Fact Brief" below. Step 2: open a fresh chat and paste it to leave heavy background reviews behind.'
       },
       zh: {
         pageTitle: 'agy-dart 上下文检查器',
@@ -4192,7 +4211,13 @@
         safetyReqsFmt: '后台 {hidden} / 总共 {total} 次',
         safetyWaitWith429Fmt: '{dur} · 429: {c429}次',
         safetyEstTokFmt: '约消耗 {low}–{high} tok',
-        safetyRestartNote: '提示：桌面端重启曾清空过 {count} 次日志，以上 {h} 小时账本已由 agy-dart 自动留底未丢失。'
+        safetyRestartNote: '提示：桌面端重启曾清空过 {count} 次日志，以上 {h} 小时账本已由 agy-dart 自动留底未丢失。',
+        safetyNotifyOff: '偷烧弹窗提醒：关',
+        safetyNotifyOn: '偷烧弹窗提醒：开',
+        safetyNotifyTip: '开启后，一旦后台安检此刻正在狂烧额度或撞上 429，立刻弹一次桌面通知提醒换新窗（默认关闭，15 分钟防刷屏冷却）',
+        safetySynergyTip: '省额提示：当前对话已达 {curK}k，叠加后台安检单次重审可达 20–30 万字；建议阶段收尾后点「整理进度，换新对话」，可省下约 80% 审查消耗。',
+        safetyHandoffStepCopied: '① 已自动帮你复制好交接进度！ → ② 点右上角开一个新对话，直接 Ctrl+V 粘贴发送，就能甩掉旧对话的后台白审。',
+        safetyHandoffStepManual: '① 点下方「复制交接简报」 → ② 点右上角开一个新对话粘贴发送，就能甩掉旧对话的后台白审。'
       }
     };
 
@@ -4269,6 +4294,8 @@
     let cachedDoctor = null;
     let cachedSafetyAudit = null;
     let safetyUserExpanded = null;
+    let safetyHandoffGuided = false;
+    let safetyHandoffAutoCopied = false;
     let safetyAuditTimer = null;
     let safetyAuditInitDone = false;
     let lastSafetyAuditFetchMs = 0;
@@ -6215,6 +6242,64 @@
         if (isAlerting) handoffBtn.classList.remove('hidden');
         else handoffBtn.classList.add('hidden');
       }
+
+      renderSafetyDesktopNotifyChip(data.desktopNotify);
+      renderSafetyContextSynergyTip();
+    }
+
+    function renderSafetyDesktopNotifyChip(info) {
+      const btn = document.getElementById('safety-notify-btn');
+      if (!btn) return;
+      const enabled = Boolean(info && info.enabled === true);
+      btn.dataset.enabled = enabled ? '1' : '0';
+      btn.textContent = enabled ? t('safetyNotifyOn') : t('safetyNotifyOff');
+      btn.classList.remove('is-on');
+      if (enabled) btn.classList.add('is-on');
+      const isEnvLocked = info && info.source === 'env';
+      btn.disabled = Boolean(isEnvLocked);
+    }
+
+    async function toggleSafetyDesktopNotify() {
+      const btn = document.getElementById('safety-notify-btn');
+      const curEnabled = btn ? btn.dataset.enabled === '1' : Boolean(cachedSafetyAudit?.desktopNotify?.enabled);
+      try {
+        const res = await apiFetch('/api/safety-audit', {
+          method: 'POST',
+          body: JSON.stringify({ setDesktopNotify: !curEnabled })
+        });
+        if (!res.ok) return;
+        const sa = await res.json();
+        cachedSafetyAudit = sa;
+        renderSafetyAuditCard(sa);
+      } catch {}
+    }
+
+    function renderSafetyContextSynergyTip() {
+      const tipEl = document.getElementById('kv-safety-synergy-tip');
+      if (!tipEl || !tipEl.classList) return;
+      const curTokens = Number(cachedKv?.currentContextTokens || 0);
+      const winTokens = Number(cachedKv?.modelProfile?.windowTokens || 200000);
+      const pct = winTokens > 0 ? (curTokens / winTokens) * 100 : 0;
+      const isLongChat = Boolean(cachedKv && cachedKv.transcriptFound && (curTokens >= 120000 || pct >= 60));
+
+      const sa = cachedSafetyAudit;
+      const heavyCnt = Number(sa?.window?.heavyReviewCount || 0);
+      const hiddenPct = Number(sa?.streamRequests?.hiddenSharePct || 0);
+      const isSafetyHeavy = Boolean(
+        sa &&
+          (sa.status === '429_avalanche' ||
+            sa.status === 'heavy_burst_or_sticky' ||
+            heavyCnt >= 3 ||
+            hiddenPct >= 40)
+      );
+
+      if (isLongChat && isSafetyHeavy) {
+        tipEl.textContent = t('safetySynergyTip', { curK: Math.round(curTokens / 1000) });
+        tipEl.classList.remove('hidden');
+      } else {
+        tipEl.textContent = '';
+        tipEl.classList.add('hidden');
+      }
     }
 
     function toggleSafetyAuditDetails() {
@@ -6256,9 +6341,20 @@
       } catch {}
     }
 
-    function openSafetyHandoffBrief() {
+    async function openSafetyHandoffBrief() {
+      safetyHandoffGuided = true;
+      safetyHandoffAutoCopied = false;
       toggleHandoffDrawer(true);
-      loadHandoffBrief({ forceRefresh: true });
+      await loadHandoffBrief({ forceRefresh: true });
+      const md = cachedHandoffSnapshot?.markdown || '';
+      if (md) {
+        try {
+          safetyHandoffAutoCopied = Boolean(await copyTextToClipboard(md));
+        } catch {
+          safetyHandoffAutoCopied = false;
+        }
+      }
+      renderHandoffWarmthHint();
     }
 
     async function copySafetyAuditReport() {
@@ -7030,6 +7126,9 @@
       if (isStalled) {
         hintEl.className = 'handoff-warmth-hint is-danger';
         hintEl.textContent = t('handoffWarmthStall');
+      } else if (safetyHandoffGuided) {
+        hintEl.className = 'handoff-warmth-hint is-warn';
+        hintEl.textContent = safetyHandoffAutoCopied ? t('safetyHandoffStepCopied') : t('safetyHandoffStepManual');
       } else if (!isConfirmed) {
         hintEl.className = 'handoff-warmth-hint is-warn';
         hintEl.textContent = t('handoffWarmthOverview');
@@ -7922,6 +8021,8 @@
         }
       } else {
         drawer.classList.add('hidden');
+        safetyHandoffGuided = false;
+        safetyHandoffAutoCopied = false;
         const wasLoading = handoffLoading;
         ++handoffFetchSeq;
         handoffLoading = false;
@@ -8734,6 +8835,7 @@
         syncKvTtlState(null);
         updateHandoffButtonStyle('none');
         renderPanelGuidance(kv);
+        renderSafetyContextSynergyTip();
         return;
       }
 
@@ -8881,6 +8983,7 @@
 
       const lw = kv.loopWatch;
       const guidanceState = renderPanelGuidance(kv);
+      renderSafetyContextSynergyTip();
       const showRepeatLoopRow = Boolean(
         lw &&
           (lw.status === 'warn' || lw.status === 'critical') &&

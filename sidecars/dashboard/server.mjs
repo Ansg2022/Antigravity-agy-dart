@@ -14,7 +14,7 @@ import {
   evaluateAutoInstallEligibility,
   hasActiveUpdateMarker
 } from "./version-update.mjs";
-import { getEffectiveConfig } from "../../context/lib/config.js";
+import { getConfigSnapshot, getEffectiveConfig } from "../../context/lib/config.js";
 import { executionReceiptsFromSteps, fastToolClaimsFromSteps } from "../../context/lib/execution-receipts.js";
 import { buildHandoffBrief, inferWorkspaceFromStore } from "../../context/lib/handoff.js";
 import {
@@ -41,6 +41,7 @@ import {
   readWatchdogTranscriptTail,
   resolveCandidateTranscriptPath,
   resolveTrustedCheckpointSessionId,
+  sendDesktopNotification,
   WATCHDOG_PHASES,
   writeWatchdogLeaseIfUnchanged
 } from "../../context/lib/watchdog.js";
@@ -1976,30 +1977,132 @@ function getSourceChunksPayload(data = {}) {
 }
 
 const SAFETY_AUDIT_CACHE_TTL_MS = 15_000;
+const SAFETY_DESKTOP_NOTIFY_COOLDOWN_MS = 15 * 60 * 1000;
+const SAFETY_DESKTOP_NOTIFY_META_KEY = "safety_desktop_notify";
+const SAFETY_DESKTOP_NOTIFY_LAST_TS_KEY = "safety_desktop_notify_last_ts";
 let cachedSafetyAudit = { ts: 0, report: null };
+let lastSafetyDesktopNotifyMs = 0;
 
 export function resetSidecarSafetyAuditCache() {
   cachedSafetyAudit = { ts: 0, report: null };
+  lastSafetyDesktopNotifyMs = 0;
   resetSafetyAuditCache();
 }
 
+function getSafetyDesktopNotifyInfo(store, options = {}) {
+  const snap = getConfigSnapshot(options.env ? { env: options.env } : {});
+  if (snap.sources.safetyDesktopNotify === "env") {
+    return { enabled: Boolean(snap.values.safetyDesktopNotify), source: "env" };
+  }
+  try {
+    const raw = store && typeof store.getMeta === "function" ? store.getMeta(SAFETY_DESKTOP_NOTIFY_META_KEY, "") : "";
+    if (raw === "1" || raw === "true") return { enabled: true, source: "sqlite" };
+    if (raw === "0" || raw === "false") return { enabled: false, source: "sqlite" };
+  } catch {}
+  if (snap.sources.safetyDesktopNotify === "config") {
+    return { enabled: Boolean(snap.values.safetyDesktopNotify), source: "config" };
+  }
+  return { enabled: Boolean(snap.values.safetyDesktopNotify), source: "default" };
+}
+
+function setSafetyDesktopNotifyEnabled(store, enabled) {
+  try {
+    if (store && typeof store.setMeta === "function") {
+      store.setMeta(SAFETY_DESKTOP_NOTIFY_META_KEY, enabled ? "1" : "0");
+    }
+  } catch {}
+  return getSafetyDesktopNotifyInfo(store);
+}
+
+function maybeEmitSafetyDesktopAlert(report, store, options = {}) {
+  if (!report || typeof report !== "object" || options.disableDesktopNotify === true) return false;
+  const info = getSafetyDesktopNotifyInfo(store, options);
+  if (!info.enabled) return false;
+
+  const status = String(report.status || "");
+  const w = report.window || {};
+  const recent5m = Number(w.recentHeavyBurst5m || 0);
+  const cfg = getEffectiveConfig(options.env ? { env: options.env } : {});
+  const burstThreshold = Math.max(2, Number(cfg.safetyHeavyBurstCount || 3));
+  const isActiveUrgent =
+    status === "429_avalanche" ||
+    (status === "heavy_burst_or_sticky" && recent5m >= burstThreshold);
+  if (!isActiveUrgent) return false;
+
+  const nowMs = Number.isFinite(options.nowMs) ? options.nowMs : Date.now();
+  const cooldownMs = Number.isFinite(options.cooldownMs) ? options.cooldownMs : SAFETY_DESKTOP_NOTIFY_COOLDOWN_MS;
+  let lastTs = lastSafetyDesktopNotifyMs;
+  try {
+    const rawTs = store && typeof store.getMeta === "function" ? store.getMeta(SAFETY_DESKTOP_NOTIFY_LAST_TS_KEY, "") : "";
+    const parsedTs = Number(rawTs);
+    if (Number.isFinite(parsedTs) && parsedTs > lastTs) lastTs = parsedTs;
+  } catch {}
+  if (lastTs > 0 && nowMs - lastTs < cooldownMs) return false;
+
+  let uiLang = cfg.uiLang === "zh" ? "zh" : "en";
+  try {
+    const storedLang = store && typeof store.getMeta === "function" ? store.getMeta("ui_lang", "") : "";
+    if (storedLang === "zh" || storedLang === "en") uiLang = storedLang;
+  } catch {}
+
+  const title = uiLang === "zh" ? "agy-dart 省额提醒：后台安检正在偷烧额度" : "agy-dart Quota Alert: Background Safety Burning";
+  const body =
+    status === "429_avalanche"
+      ? uiLang === "zh"
+        ? `后台安检触发 429 限流，正用大模型硬审（近 ${report.windowHours || 5}h 共 ${Number(w.heavyReviewCount || 0)} 次）。请暂停并发并点面板「整理进度，换新对话」止血。`
+        : `Safety monitor hit HTTP 429 and escalated ${Number(w.heavyReviewCount || 0)} call(s) to heavy reviews. Pause parallel runs and switch to a fresh chat.`
+      : uiLang === "zh"
+        ? `近 5 分钟已触发 ${recent5m} 次大模型重审（近 ${report.windowHours || 5}h 共 ${Number(w.heavyReviewCount || 0)} 次）。建议立刻点面板「整理进度，换新对话」截断长记录省额。`
+        : `${recent5m} heavy safety review(s) fired in the last 5m (${Number(w.heavyReviewCount || 0)} in ${report.windowHours || 5}h). Open a fresh chat via Handoff to cut burn.`;
+
+  const notifyFn = typeof options.notifyFn === "function" ? options.notifyFn : sendDesktopNotification;
+  try {
+    notifyFn({ title, body });
+    lastSafetyDesktopNotifyMs = nowMs;
+    if (store && typeof store.setMeta === "function") {
+      store.setMeta(SAFETY_DESKTOP_NOTIFY_LAST_TS_KEY, String(nowMs));
+    }
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 function getSafetyAuditPayload(data = {}, safetyAuditOptions = null) {
+  const store = getRuntimeStore();
+  if (typeof data?.setDesktopNotify === "boolean") {
+    setSafetyDesktopNotifyEnabled(store, data.setDesktopNotify);
+  }
   const forceRefresh = data?.forceRefresh === true;
   const includeMarkdown = data?.includeMarkdown === true;
-  const now = Date.now();
+  const now = Number.isFinite(safetyAuditOptions?.nowMs) ? safetyAuditOptions.nowMs : Date.now();
   let report = cachedSafetyAudit.report;
   const isCustomOpts = Boolean(safetyAuditOptions && Object.keys(safetyAuditOptions).length > 0);
+  let ranFreshScan = false;
   if (forceRefresh || isCustomOpts || !report || now - cachedSafetyAudit.ts >= SAFETY_AUDIT_CACHE_TTL_MS) {
     report = auditSafetyMonitor({
       ...(safetyAuditOptions || {})
     });
+    ranFreshScan = true;
     if (!isCustomOpts) {
       cachedSafetyAudit = { ts: now, report };
     }
   }
+  const desktopNotify = getSafetyDesktopNotifyInfo(store, safetyAuditOptions || {});
+  let desktopNotifiedNow = false;
+  if (ranFreshScan) {
+    desktopNotifiedNow = maybeEmitSafetyDesktopAlert(report, store, {
+      ...(safetyAuditOptions || {}),
+      nowMs: now
+    });
+  }
   return {
     ok: true,
     ...report,
+    desktopNotify: {
+      ...desktopNotify,
+      notifiedNow: desktopNotifiedNow
+    },
     ...(includeMarkdown ? { markdown: formatSafetyAuditMarkdown(report) } : {})
   };
 }
@@ -3298,7 +3401,7 @@ export function createStandaloneServer({
           return;
         }
         if (url.pathname === "/api/safety-audit") {
-          for (const bf of ["forceRefresh", "includeMarkdown"]) {
+          for (const bf of ["forceRefresh", "includeMarkdown", "setDesktopNotify"]) {
             const bCheck = validateOptionalBooleanField(data, bf);
             if (!bCheck.ok) {
               sendJson(res, 400, { error: bCheck.error });
@@ -3783,7 +3886,7 @@ export function registerSidecarRoutes(
   app.api("/api/safety-audit", (rawData) => {
     const data = normalizeSidecarBody(rawData);
     if (!data) return makeBadRequest("Request body must be a JSON object");
-    for (const bf of ["forceRefresh", "includeMarkdown"]) {
+    for (const bf of ["forceRefresh", "includeMarkdown", "setDesktopNotify"]) {
       const bCheck = validateOptionalBooleanField(data, bf);
       if (!bCheck.ok) return makeBadRequest(bCheck.error);
     }

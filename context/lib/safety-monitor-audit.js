@@ -846,6 +846,7 @@ function scanFileIncremental(fileMeta, state, options) {
   let startOffset = 0;
   let truncatedRestart = false;
   let carry = "";
+  let prevInFlight = null;
 
   if (cursor) {
     const inodeChanged = cursor.ino > 0 && fileMeta.ino > 0 && cursor.ino !== fileMeta.ino;
@@ -854,10 +855,12 @@ function scanFileIncremental(fileMeta, state, options) {
       truncatedRestart = true;
       startOffset = 0;
       carry = "";
+      prevInFlight = null;
       state.restartTruncationsDetected = (state.restartTruncationsDetected || 0) + 1;
     } else {
       startOffset = cursor.offset;
       carry = typeof cursor.carryTail === "string" ? cursor.carryTail : "";
+      prevInFlight = cursor.inFlight && typeof cursor.inFlight === "object" ? cursor.inFlight : null;
     }
   }
 
@@ -866,6 +869,7 @@ function scanFileIncremental(fileMeta, state, options) {
     startOffset = fileMeta.size - maxColdScanBytes;
     skipFirstPartial = true;
     carry = "";
+    prevInFlight = null;
   }
 
   const totalToRead = Math.max(0, fileMeta.size - startOffset);
@@ -875,21 +879,66 @@ function scanFileIncremental(fileMeta, state, options) {
       size: fileMeta.size,
       mtimeMs: fileMeta.mtimeMs,
       ino: fileMeta.ino,
-      carryTail: carry.slice(0, 4096)
+      carryTail: carry.slice(0, 4096),
+      ...(prevInFlight ? { inFlight: prevInFlight } : {})
     };
     return { bytesScanned: 0, cacheHit: false, truncatedRestart };
+  }
+
+  const refNowMs = Math.max(Number(options.nowMs) || 0, Number(fileMeta.mtimeMs) || 0);
+  const tidStaleMs = DEFAULT_SAFETY_CONFIG.tidStaleMs;
+  const activeMonitorByTid = new Map();
+  const pendingByTid = new Map();
+  let lastTrigger = null;
+
+  if (prevInFlight) {
+    if (
+      prevInFlight.lastTrigger &&
+      typeof prevInFlight.lastTrigger === "object" &&
+      Number.isFinite(prevInFlight.lastTrigger.ts) &&
+      refNowMs - prevInFlight.lastTrigger.ts <= tidStaleMs
+    ) {
+      lastTrigger = {
+        reason: String(prevInFlight.lastTrigger.reason || "unknown"),
+        ts: prevInFlight.lastTrigger.ts
+      };
+    }
+    if (Array.isArray(prevInFlight.activeMonitorByTid)) {
+      for (const item of prevInFlight.activeMonitorByTid) {
+        if (!item || typeof item.tid !== "string" || !Number.isFinite(item.ts)) continue;
+        if (refNowMs - item.ts <= tidStaleMs) {
+          activeMonitorByTid.set(item.tid, {
+            monitor: String(item.monitor || ""),
+            ts: item.ts
+          });
+        }
+      }
+    }
+    if (Array.isArray(prevInFlight.pendingByTid)) {
+      for (const item of prevInFlight.pendingByTid) {
+        if (!item || typeof item.tid !== "string" || !Number.isFinite(item.ts)) continue;
+        if (refNowMs - item.ts <= tidStaleMs) {
+          pendingByTid.set(item.tid, {
+            monitor: String(item.monitor || ""),
+            chars: Number(item.chars) || 0,
+            ts: item.ts,
+            model: typeof item.model === "string" ? item.model : ""
+          });
+        }
+      }
+    }
   }
 
   const ctx = {
     fileMtimeMs: fileMeta.mtimeMs,
     nowMs: options.nowMs,
-    lastTsMs: null,
-    lastTrigger: null,
-    activeMonitorByTid: new Map(),
-    pendingByTid: new Map(),
+    lastTsMs: Number.isFinite(prevInFlight?.lastTsMs) ? prevInFlight.lastTsMs : null,
+    lastTrigger,
+    activeMonitorByTid,
+    pendingByTid,
     stickyCharThreshold: options.stickyCharThreshold,
     maxRecentHeavyEvents: DEFAULT_SAFETY_CONFIG.maxRecentHeavyEvents,
-    tidStaleMs: DEFAULT_SAFETY_CONFIG.tidStaleMs
+    tidStaleMs
   };
 
   let fd = null;
@@ -939,12 +988,48 @@ function scanFileIncremental(fileMeta, state, options) {
       carry = "";
     }
 
+    const persistRefMs = Math.max(refNowMs, Number(ctx.lastTsMs) || 0);
+    const savedActive = [];
+    for (const [tidKey, val] of ctx.activeMonitorByTid.entries()) {
+      if (val && Number.isFinite(val.ts) && persistRefMs - val.ts <= tidStaleMs) {
+        savedActive.push({ tid: tidKey, monitor: val.monitor, ts: val.ts });
+      }
+    }
+    savedActive.sort((a, b) => b.ts - a.ts);
+    const savedPending = [];
+    for (const [tidKey, val] of ctx.pendingByTid.entries()) {
+      if (val && Number.isFinite(val.ts) && persistRefMs - val.ts <= tidStaleMs) {
+        savedPending.push({
+          tid: tidKey,
+          monitor: val.monitor,
+          chars: Number(val.chars) || 0,
+          ts: val.ts,
+          model: typeof val.model === "string" ? val.model : ""
+        });
+      }
+    }
+    savedPending.sort((a, b) => b.ts - a.ts);
+    const savedLastTrigger =
+      ctx.lastTrigger && Number.isFinite(ctx.lastTrigger.ts) && persistRefMs - ctx.lastTrigger.ts <= tidStaleMs
+        ? { reason: String(ctx.lastTrigger.reason || "unknown"), ts: ctx.lastTrigger.ts }
+        : null;
+    const inFlight =
+      savedLastTrigger || savedActive.length > 0 || savedPending.length > 0
+        ? {
+            lastTsMs: Number.isFinite(ctx.lastTsMs) ? ctx.lastTsMs : null,
+            lastTrigger: savedLastTrigger,
+            activeMonitorByTid: savedActive.slice(0, 16),
+            pendingByTid: savedPending.slice(0, 16)
+          }
+        : undefined;
+
     state.files[fileMeta.key] = {
       offset: pos,
       size: fileMeta.size,
       mtimeMs: fileMeta.mtimeMs,
       ino: fileMeta.ino,
-      carryTail: carry.slice(0, 4096)
+      carryTail: carry.slice(0, 4096),
+      ...(inFlight ? { inFlight } : {})
     };
   } catch {
     // Fail-open on locked/disappeared files

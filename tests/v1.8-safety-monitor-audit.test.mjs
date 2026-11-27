@@ -895,3 +895,306 @@ test("7. Dashboard Safety Monitor plain-language UX: narrow-header CSS, calm-rec
   assert.equal(els.get("safety-inline-summary").classList.contains("hidden"), false, "Collapsed card must show 1-line summary");
   assert.equal(els.get("safety-kpi-429").textContent, "14m 15s");
 });
+
+test("8. v1.8.2 quota-saving optimizations: in-workspace zero-check inline outline, cross-poll inFlight tid/chars carry-over, opt-in safetyDesktopNotify cooldown & synergy/2-step handoff UI", async () => {
+  const vm = await import("node:vm");
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "agy-v182-opt-"));
+  const dbPath = path.join(tmpDir, "context.db");
+  const prevDbEnv = process.env.AGY_DART_DB_PATH;
+  let srv = null;
+  try {
+    process.env.AGY_DART_DB_PATH = dbPath;
+    closeRuntimeStore();
+    resetSidecarSafetyAuditCache();
+
+    // 8a. PreToolUse in-workspace large source file attaches free outline and guides native read_file (0 cloud review) without extra read_slices/call_mcp_tool detour
+    const wsDir = path.join(tmpDir, "ws");
+    fs.mkdirSync(wsDir, { recursive: true });
+    const bigSrc = path.join(wsDir, "engine.js");
+    const lines = [];
+    for (let i = 0; i < 1200; i++) {
+      lines.push(`export function step_${i}(x) { return x + ${i}; } // padding_${"a".repeat(25)}`);
+    }
+    fs.writeFileSync(bigSrc, lines.join("\n") + "\n", "utf8");
+    const hookRes = spawnSync(process.execPath, [path.join(ROOT, "hooks", "pre-tool-use.mjs")], {
+      input: JSON.stringify({
+        conversationId: "v182-inws",
+        cwd: wsDir,
+        workspacePaths: [wsDir],
+        toolCall: { name: "read_file", args: { Path: bigSrc } }
+      }),
+      encoding: "utf8",
+      windowsHide: true,
+      env: { ...process.env, AGY_DART_DB_PATH: dbPath, AGY_DART_DISABLE_COMPILE_CACHE: "1" }
+    });
+    assert.equal(hookRes.status, 0, hookRes.stderr);
+    const parsedHook = JSON.parse(hookRes.stdout.trim());
+    assert.equal(parsedHook.decision, "deny");
+    assert.ok(parsedHook.reason.includes("allowed_tool, 0 cloud safety review"), parsedHook.reason);
+    assert.ok(parsedHook.reason.includes("without extra read_slices MCP calls"), parsedHook.reason);
+    assert.ok(!parsedHook.reason.includes("call_mcp_tool"), "Inline-outlined source file must not nudge call_mcp_tool");
+
+    // 8b. Cross-poll incremental scan preserves inFlight pendingByTid chars, trigger reason & activeMonitorByTid stream attribution
+    const logPath = path.join(tmpDir, "language_server.log");
+    const statePath = path.join(tmpDir, "safety-state.json");
+    const poll1Ms = new Date(2026, 10, 27, 8, 10, 0, 0).getTime();
+    fs.writeFileSync(
+      logPath,
+      [
+        'ERROR: logging before google.Init: I1127 08:09:50.100000  777001 runner.go:957] Monitor agy_tool_safety FINISHED: triggered=true, reason="unknown_command", duration=18µs',
+        "ERROR: logging before google.Init: I1127 08:09:51.000000  777002 llm_monitor.go:349] LLM Monitor severe_internal_risks_agy: Starting evaluation",
+        "ERROR: logging before google.Init: I1127 08:09:51.100000  777002 llm_monitor.go:636] LLM Monitor severe_internal_risks_agy: Trajectory formatted, length: 288760",
+        "ERROR: logging before google.Init: I1127 08:09:51.200000  777002 llm_monitor.go:650] LLM Monitor severe_internal_risks_agy: Calling LLM (model: gemini-4-hydrogen-sonar)"
+      ].join("\n") + "\n",
+      "utf8"
+    );
+    fs.utimesSync(logPath, poll1Ms / 1000, poll1Ms / 1000);
+    const r1 = auditSafetyMonitor({
+      logPaths: [logPath],
+      disableDefaultDiscovery: true,
+      statePath,
+      nowMs: poll1Ms
+    });
+    assert.equal(r1.window.heavyReviewCount, 1);
+    assert.equal(r1.window.heavyTriggeredFalse, 0);
+    assert.equal(r1.recentHeavyEvents.length, 0);
+
+    // Poll 2 arrives 5 seconds later with streamGenerateContent + Evaluation complete
+    const poll2Ms = poll1Ms + 6000;
+    fs.appendFileSync(
+      logPath,
+      [
+        "ERROR: logging before google.Init: I1127 08:09:52.000000  777002 http_helpers.go:108] URL: https://daily-cloudcode-pa.googleapis.com/v1internal:streamGenerateContent?alt=sse",
+        "ERROR: logging before google.Init: I1127 08:09:56.500000  777002 llm_monitor.go:690] LLM Monitor severe_internal_risks_agy: Evaluation complete. Triggered: false, Severity: 0, Confidence: 10"
+      ].join("\n") + "\n",
+      "utf8"
+    );
+    fs.utimesSync(logPath, poll2Ms / 1000, poll2Ms / 1000);
+    const r2 = auditSafetyMonitor({
+      logPaths: [logPath],
+      disableDefaultDiscovery: true,
+      statePath,
+      nowMs: poll2Ms
+    });
+    assert.equal(r2.window.heavyReviewCount, 1);
+    assert.equal(r2.window.heavyMaxChars, 288760, "Cross-poll carry-over must preserve exact 288,760 chars");
+    assert.equal(r2.streamRequests.hiddenHeavy, 1, "Cross-poll activeMonitorByTid must attribute streamGenerateContent");
+    assert.equal(r2.recentHeavyEvents[0].chars, 288760);
+    assert.equal(r2.recentHeavyEvents[0].reason, "unknown_command");
+
+    // 8c. safetyDesktopNotify config defaults OFF, toggles via /api/safety-audit, fires once on active burst with 15m cooldown
+    const cfgDefault = getConfigSnapshot({ configPath: path.join(tmpDir, "missing.json"), env: {} });
+    assert.equal(cfgDefault.values.safetyDesktopNotify, false);
+    const cfgEnvOn = getConfigSnapshot({
+      configPath: path.join(tmpDir, "missing.json"),
+      env: { AGY_DART_SAFETY_DESKTOP_NOTIFY: "1" }
+    });
+    assert.equal(cfgEnvOn.values.safetyDesktopNotify, true);
+
+    const burstLog = path.join(tmpDir, "burst.log");
+    const burstNow = new Date(2026, 10, 27, 8, 20, 0, 0).getTime();
+    const burstLines = [];
+    for (let k = 0; k < 3; k++) {
+      const sec = 10 + k * 10;
+      const tid = 888000 + k;
+      burstLines.push(
+        `ERROR: logging before google.Init: I1127 08:19:${sec}.100000  ${tid} llm_monitor.go:636] LLM Monitor severe_internal_risks_agy: Trajectory formatted, length: 260000`,
+        `ERROR: logging before google.Init: I1127 08:19:${sec}.200000  ${tid} llm_monitor.go:650] LLM Monitor severe_internal_risks_agy: Calling LLM (model: gemini-4-hydrogen-sonar)`,
+        `ERROR: logging before google.Init: I1127 08:19:${sec + 5}.100000  ${tid} llm_monitor.go:690] LLM Monitor severe_internal_risks_agy: Evaluation complete. Triggered: false, Severity: 0, Confidence: 10`
+      );
+    }
+    fs.writeFileSync(burstLog, burstLines.join("\n") + "\n", "utf8");
+    fs.utimesSync(burstLog, burstNow / 1000, burstNow / 1000);
+
+    const sentAlerts = [];
+    const token = "v182-notify-token";
+    srv = createStandaloneServer({
+      csrfToken: token,
+      watchdogOptions: { pollMs: 60000 },
+      safetyAuditOptions: {
+        logPaths: [burstLog],
+        disableDefaultDiscovery: true,
+        persistState: false,
+        nowMs: burstNow,
+        notifyFn: (payload) => sentAlerts.push(payload)
+      }
+    });
+    await new Promise((resolve) => srv.listen(0, "127.0.0.1", resolve));
+    const { port } = srv.address();
+
+    // Default OFF -> 0 OS notifications
+    const resOff = await fetch(`http://127.0.0.1:${port}/api/safety-audit`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "X-Agy-Dart-Token": token },
+      body: JSON.stringify({ forceRefresh: true })
+    });
+    assert.equal(resOff.status, 200);
+    const bodyOff = await resOff.json();
+    assert.equal(bodyOff.desktopNotify.enabled, false);
+    assert.equal(sentAlerts.length, 0);
+
+    // Enable via setDesktopNotify: true -> fires 1 alert immediately
+    const resOn = await fetch(`http://127.0.0.1:${port}/api/safety-audit`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "X-Agy-Dart-Token": token },
+      body: JSON.stringify({ setDesktopNotify: true, forceRefresh: true })
+    });
+    assert.equal(resOn.status, 200);
+    const bodyOn = await resOn.json();
+    assert.equal(bodyOn.desktopNotify.enabled, true);
+    assert.equal(bodyOn.desktopNotify.source, "sqlite");
+    assert.equal(bodyOn.desktopNotify.notifiedNow, true);
+    assert.equal(sentAlerts.length, 1);
+
+    // Immediate re-scan stays inside 15m cooldown -> still 1 alert total
+    const resCooldown = await fetch(`http://127.0.0.1:${port}/api/safety-audit`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "X-Agy-Dart-Token": token },
+      body: JSON.stringify({ forceRefresh: true })
+    });
+    const bodyCooldown = await resCooldown.json();
+    assert.equal(bodyCooldown.desktopNotify.notifiedNow, false);
+    assert.equal(sentAlerts.length, 1);
+
+    // 8d. Dashboard synergy tip + desktop notify chip + 2-step guided handoff hint
+    const html = fs.readFileSync(path.join(ROOT, "sidecars", "dashboard", "index.html"), "utf8");
+    const scriptMatches = [...html.matchAll(/<script(?:\s[^>]*)?>([\s\S]*?)<\/script>/gi)];
+    const mainScript = scriptMatches.map((m) => m[1]).find((s) => s.includes("function renderSafetyContextSynergyTip"));
+    assert.ok(mainScript, "Dashboard script must define renderSafetyContextSynergyTip");
+
+    function makeEl(id, initialClasses = []) {
+      const classes = new Set(initialClasses);
+      return {
+        id,
+        textContent: "",
+        innerHTML: "",
+        className: "",
+        title: "",
+        value: "",
+        disabled: false,
+        dataset: {},
+        style: {},
+        classList: {
+          add(...cs) {
+            for (const c of cs) classes.add(c);
+          },
+          remove(...cs) {
+            for (const c of cs) classes.delete(c);
+          },
+          contains(c) {
+            return classes.has(c);
+          }
+        },
+        setAttribute() {},
+        getAttribute() {
+          return "";
+        },
+        addEventListener() {},
+        querySelectorAll() {
+          return [];
+        }
+      };
+    }
+
+    const els = new Map(
+      [
+        "safety-audit-card",
+        "safety-status-badge",
+        "safety-inline-summary",
+        "safety-details-body",
+        "safety-toggle-btn",
+        "safety-advice-box",
+        "safety-diagnosis-text",
+        "safety-kpi-prechecks",
+        "safety-kpi-prechecks-sub",
+        "safety-kpi-heavy",
+        "safety-kpi-heavy-sub",
+        "safety-kpi-hidden",
+        "safety-kpi-hidden-sub",
+        "safety-kpi-429",
+        "safety-kpi-429-sub",
+        "safety-reasons-row",
+        "safety-restart-note",
+        "safety-handoff-btn",
+        "safety-notify-btn",
+        "kv-safety-synergy-tip",
+        "kv-handoff-warmth-hint"
+      ].map((id) => [id, makeEl(id, id === "kv-safety-synergy-tip" ? ["hidden"] : [])])
+    );
+
+    const sandbox = {
+      console,
+      Math,
+      Date,
+      Number,
+      String,
+      Boolean,
+      Array,
+      Object,
+      Map,
+      Set,
+      JSON,
+      RegExp,
+      Promise,
+      Intl,
+      Headers,
+      URLSearchParams,
+      setTimeout: () => ({}),
+      clearTimeout() {},
+      setInterval: () => ({ unref() {} }),
+      clearInterval() {},
+      fetch: async () => ({ ok: false, status: 503, json: async () => ({}) }),
+      navigator: { language: "zh-CN", clipboard: { writeText: async () => {} } },
+      localStorage: { getItem: () => "zh", setItem() {}, removeItem() {} },
+      location: { search: "", origin: "http://127.0.0.1:0", pathname: "/" },
+      addEventListener() {},
+      removeEventListener() {},
+      document: {
+        hidden: true,
+        documentElement: { lang: "zh" },
+        title: "",
+        getElementById: (id) => els.get(id) || null,
+        querySelector: () => null,
+        querySelectorAll: () => [],
+        addEventListener() {}
+      },
+      window: null
+    };
+    sandbox.window = sandbox;
+    vm.createContext(sandbox);
+    vm.runInContext(mainScript, sandbox);
+    vm.runInContext(
+      `currentLang = 'zh';
+       cachedKv = { transcriptFound: true, currentContextTokens: 145000, modelProfile: { windowTokens: 200000 } };
+       cachedSafetyAudit = {
+         status: 'heavy_burst_or_sticky',
+         severity: 'warn',
+         windowHours: 5,
+         window: { precheckCount: 400, precheckLimit: 4400, precheckUtilizationPct: 9.1, heavyReviewCount: 8, recentHeavyBurst5m: 0, totalLatencySec: 120 },
+         streamRequests: { hiddenSharePct: 45, hiddenTotal: 400, total: 888 },
+         desktopNotify: { enabled: true, source: 'sqlite' },
+         sources: { filesScanned: 1, restartTruncationsDetected: 0 }
+       };
+       renderSafetyAuditCard(cachedSafetyAudit);`,
+      sandbox
+    );
+    assert.equal(els.get("kv-safety-synergy-tip").classList.contains("hidden"), false, "Long chat + heavy safety must show synergy tip");
+    assert.ok(els.get("kv-safety-synergy-tip").textContent.includes("145k"));
+    assert.equal(els.get("safety-notify-btn").textContent, "偷烧弹窗提醒：开");
+    assert.equal(els.get("safety-notify-btn").classList.contains("is-on"), true);
+
+    vm.runInContext("safetyHandoffGuided = true; safetyHandoffAutoCopied = true; renderHandoffWarmthHint();", sandbox);
+    assert.ok(els.get("kv-handoff-warmth-hint").textContent.includes("已自动帮你复制好交接进度"));
+
+    // Short chat hides synergy tip
+    vm.runInContext("cachedKv.currentContextTokens = 25000; renderSafetyContextSynergyTip();", sandbox);
+    assert.equal(els.get("kv-safety-synergy-tip").classList.contains("hidden"), true, "Short chat must hide synergy tip");
+  } finally {
+    if (srv) await new Promise((resolve) => srv.close(resolve));
+    closeRuntimeStore();
+    resetSidecarSafetyAuditCache();
+    if (prevDbEnv === undefined) delete process.env.AGY_DART_DB_PATH;
+    else process.env.AGY_DART_DB_PATH = prevDbEnv;
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  }
+});

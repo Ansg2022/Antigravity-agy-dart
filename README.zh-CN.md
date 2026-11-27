@@ -77,13 +77,13 @@ AI 要搜好几个词时一次同时搜完，要改多个文件时一次改完�
 **Windows（PowerShell）：**
 
 ```powershell
-irm https://raw.githubusercontent.com/zou172866/Antigravity-agy-dart/v1.8.1/install.ps1 | iex
+irm https://raw.githubusercontent.com/zou172866/Antigravity-agy-dart/v1.8.2/install.ps1 | iex
 ```
 
 **macOS / Linux：**
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/zou172866/Antigravity-agy-dart/v1.8.1/install.sh | sh
+curl -fsSL https://raw.githubusercontent.com/zou172866/Antigravity-agy-dart/v1.8.2/install.sh | sh
 ```
 
 ### 方法二：直接发给 Antigravity 装
@@ -91,13 +91,13 @@ curl -fsSL https://raw.githubusercontent.com/zou172866/Antigravity-agy-dart/v1.8
 复制这句发给 Antigravity：
 
 ```text
-请将 https://github.com/zou172866/Antigravity-agy-dart.git 的 v1.8.1 标签克隆到临时目录，运行其中的 scripts/install.mjs install 完成全局安装并跑 doctor 自检（Windows 如未安装 rg 请同时传 --install-rg）。
+请将 https://github.com/zou172866/Antigravity-agy-dart.git 的 v1.8.2 标签克隆到临时目录，运行其中的 scripts/install.mjs install 完成全局安装并跑 doctor 自检（Windows 如未安装 rg 请同时传 --install-rg）。
 ```
 
 ### 方法三：克隆仓库自定义安装
 
 ```powershell
-git clone --branch v1.8.1 --depth 1 https://github.com/zou172866/Antigravity-agy-dart.git
+git clone --branch v1.8.2 --depth 1 https://github.com/zou172866/Antigravity-agy-dart.git
 cd Antigravity-agy-dart
 
 # Windows PowerShell（加 -InstallRg 可顺手自动安装快速搜索工具 rg）
@@ -145,6 +145,11 @@ node scripts/install.mjs tool-loading eager         # 12 个工具全部预载
 ---
 
 ## 更新日志
+
+### v1.8.2
+- **单文件大读直走「0 云端安检」通道 + 首轮再省 24 tokens**：优化 `hooks/pre-tool-use.mjs` 与 `rules/AGENTS.md`（精简至 **369 tokens**），工作区内大源码/补丁文件在附带免费内联大纲后直接引导原生分段 `read_file`（命中 `allowed_tool` 0 次云端安检），不再绕路调 `read_slices` MCP；仅在批量读多文件时使用 `read_slices`，同时合并多处修改/搜索/检查进一步压低后台安检次数。
+- **后台偷烧主动早提醒 + 长对话联动省额提示 + 2 步直达换新窗**：新增可选「**偷烧弹窗提醒：关/开**」（`safetyDesktopNotify`，默认关闭、15 分钟冷却防刷屏），开启后一旦出现此刻狂烧或 429 爆表立刻弹桌面提醒；主上下文条新增「长对话 × 后台安检」联动省额白话提示；点击「整理进度，换新对话」自动复制交接进度并给出 2 步直达粘贴指引。
+- **修复跨增量轮询偶发 `chars: 0` 精度缺口**：在 `context/lib/safety-monitor-audit.js` 中为单文件游标持久化有界在途 `tid` 状态（90 秒过期），确保跨越两次轮询的重型复审 100% 保留精确字符量、触发原因与隐藏请求归因。
 
 ### v1.8.1
 - **后台安检监测卡片大白话重绘与窄侧边栏排版修复**：修复侧边栏窄屏下「后台安全审查」标题被挤成三行、状态徽章截断与摘要重复显示问题（`sidecars/dashboard/index.html`）；将卡片全面改写为通俗大白话——置顶「现在怎么做」行动提示框、耗时自动换算为 `14 分 15 秒`、Token 换算为 `万`、触发原因芯片中文化、按钮改为「整理进度，换新对话」与「复制排查证据（已去隐私）」；区分「过去 5 小时曾有偷烧但近 5 分钟已平稳（柔和黄 `刚有偷烧 · 已平稳`）」与「此刻正在狂烧（红色 `正在偷烧额度`）」，并在未发生日志截断时自动隐藏冗余重启提示。
@@ -277,7 +282,7 @@ npm run cache:simulate
 装到 DeepSeek Harness、Claude Code 或 Codex 时，安装器会把改动记录存在 `~/.agy-dart/<宿主名>-install.json` 里，方便以后卸载时干净还原，不会弄乱你原本的配置。
 
 ```sh
-git clone --branch v1.8.1 --depth 1 https://github.com/zou172866/Antigravity-agy-dart.git
+git clone --branch v1.8.2 --depth 1 https://github.com/zou172866/Antigravity-agy-dart.git
 cd Antigravity-agy-dart
 node bin/agy-dart.mjs install
 node bin/agy-dart.mjs doctor

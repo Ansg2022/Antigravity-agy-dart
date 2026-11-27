@@ -2875,7 +2875,7 @@ export async function evaluatePreToolPayload(rawPayload) {
                         ? `Use ${lineRangeHint} to inspect specific hunks.${softRetryHint}`
                         : isOutsideWorkspace
                           ? `File is outside the active workspace; use native ${toolName} with ${lineRangeHint} (keeps allowed_tool fast-path with 0 cloud safety review) instead of MCP tools.${softRetryHint}`
-                          : `Outline changed files & hunks via ${FAST_SERVER} read_slices({ outlines: ["${filePath}"] }) then read targeted ${lineRangeHint}.${softRetryHint}`);
+                          : `Outline changed files & hunks via native ${toolName} with ${lineRangeHint} (allowed_tool, 0 cloud safety review) for single-file reads, or batch multiple diff files via ${FAST_SERVER} read_slices({ outlines }).${softRetryHint}`);
                   } else if (isSubagentCall) {
                     const lineRangeHint =
                       tierMaxLineRange > 0 ? `StartLine/EndLine (<= ${tierMaxLineRange} lines)` : "StartLine/EndLine";
@@ -2889,14 +2889,14 @@ export async function evaluatePreToolPayload(rawPayload) {
                       `[agy-dart protection] File is ${formatBytes(reportedBytes)} (~${Math.round(reportedBytes / 4).toLocaleString()} tokens${lineMeta}), exceeding the ${formatBytes(tierCutoffBytes)} context limit. ` +
                       `File is outside the active workspace; use native ${toolName} with ${lineRangeHint} (keeps allowed_tool fast-path with 0 cloud safety review) instead of MCP tools.${softRetryHint}`;
                   } else {
-                    const lineInstruction =
-                      tierMaxLineRange > 0
-                        ? ` or outline via ${FAST_SERVER} read_slices({ outlines }) then pass StartLine/EndLine (<= ${tierMaxLineRange} lines).`
-                        : ".";
+                    const lineRangeHint =
+                      tierMaxLineRange > 0 ? `StartLine/EndLine (<= ${tierMaxLineRange} lines)` : "StartLine/EndLine";
                     reason =
                       `[agy-dart protection] File is ${formatBytes(reportedBytes)} (~${Math.round(reportedBytes / 4).toLocaleString()} tokens${lineMeta}), exceeding the ${formatBytes(tierCutoffBytes)} context limit. ` +
                       `Reading the entire file risks severe context bloat. ` +
-                      `For logs/docs/data use call_mcp_tool(ServerName:"${CTX_SERVER}", ToolName:"ctx_index" or "ctx_execute", path:"${filePath}")${lineInstruction}${softRetryHint}`;
+                      (tier === "source"
+                        ? `Use native ${toolName} with ${lineRangeHint} (allowed_tool, 0 cloud safety review) for single-file reads; for logs/docs/data use call_mcp_tool(ServerName:"${CTX_SERVER}", ToolName:"ctx_index" or "ctx_execute", path:"${filePath}").${softRetryHint}`
+                        : `For logs/docs/data use call_mcp_tool(ServerName:"${CTX_SERVER}", ToolName:"ctx_index" or "ctx_execute", path:"${filePath}") or outline via ${FAST_SERVER} read_slices({ outlines }) / read targeted ${lineRangeHint}.${softRetryHint}`);
                   }
 
                   let outlineBlock = "";
@@ -2910,13 +2910,20 @@ export async function evaluatePreToolPayload(rawPayload) {
                         const symbols = extractSymbolsFromLines(absPath, lines);
                         if (symbols.length) {
                           const readHintName = bridgeToolName === "read" ? "read" : "Read";
-                          const next = bridgeInput ? `${readHintName}(file_path, offset, limit)` : "read_file(Path, StartLine, EndLine)";
-                          const hint = "Use " + next + " for up to " + tierMaxLineRange + " lines." +
+                          const next = bridgeInput ? `${readHintName}(file_path, offset, limit)` : `${toolName}(Path, StartLine, EndLine)`;
+                          const hint = "Use " + next + " for up to " + tierMaxLineRange + " lines" +
+                            (bridgeInput ? "." : " (allowed_tool, 0 cloud safety review).") +
                             (isHardDeny ? "" : " Repeat this read once if necessary.");
                           const block = renderOutlineWithinBudget(path.basename(absPath), lines.length, symbols, 3400, 1, { bracketLines: true });
                           if (Buffer.byteLength(block) <= 3400) {
                             outlineBlock = block;
-                            const prefix = bridgeInput ? "" : reason + "\n";
+                            const compactDetail = isOutsideWorkspace
+                              ? `File is outside the active workspace; free inline outline attached below — use native ${toolName}(Path, StartLine, EndLine) (allowed_tool, 0 cloud safety review) instead of MCP tools.${softRetryHint}`
+                              : tier === "review"
+                                ? `Outline changed files & hunks is attached below — use native ${toolName}(Path, StartLine, EndLine) (allowed_tool, 0 cloud safety review) without extra read_slices MCP calls.${softRetryHint}`
+                                : `Free inline outline attached below — use native ${toolName}(Path, StartLine, EndLine) (allowed_tool, 0 cloud safety review) without extra read_slices MCP calls.${softRetryHint}`;
+                            const compactHeader = `[agy-dart protection] File is ${formatBytes(reportedBytes)} (~${Math.round(reportedBytes / 4).toLocaleString()} tokens${lineMeta}), exceeding the ${formatBytes(tierCutoffBytes)} limit. ${compactDetail}\n`;
+                            const prefix = bridgeInput ? "" : compactHeader;
                             reason = (Buffer.byteLength(prefix + hint + "\n" + block) <= 4500 ? prefix : "") + hint + "\n" + block;
                           }
                         }

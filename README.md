@@ -77,13 +77,13 @@ Use **Node.js 22.16.0 or later in the 22.x line, or Node.js 24 or later**. The i
 **Windows (PowerShell):**
 
 ```powershell
-irm https://raw.githubusercontent.com/zou172866/Antigravity-agy-dart/v1.8.1/install.ps1 | iex
+irm https://raw.githubusercontent.com/zou172866/Antigravity-agy-dart/v1.8.2/install.ps1 | iex
 ```
 
 **macOS / Linux:**
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/zou172866/Antigravity-agy-dart/v1.8.1/install.sh | sh
+curl -fsSL https://raw.githubusercontent.com/zou172866/Antigravity-agy-dart/v1.8.2/install.sh | sh
 ```
 
 ### Option 2: Let Antigravity install it
@@ -91,13 +91,13 @@ curl -fsSL https://raw.githubusercontent.com/zou172866/Antigravity-agy-dart/v1.8
 Send this to Antigravity:
 
 ```text
-Clone tag v1.8.1 of https://github.com/zou172866/Antigravity-agy-dart.git to a temp folder, run `node scripts/install.mjs install` (add `--install-rg` on Windows if `rg` is missing), and confirm `doctor` passes.
+Clone tag v1.8.2 of https://github.com/zou172866/Antigravity-agy-dart.git to a temp folder, run `node scripts/install.mjs install` (add `--install-rg` on Windows if `rg` is missing), and confirm `doctor` passes.
 ```
 
 ### Option 3: Clone & install with custom flags
 
 ```powershell
-git clone --branch v1.8.1 --depth 1 https://github.com/zou172866/Antigravity-agy-dart.git
+git clone --branch v1.8.2 --depth 1 https://github.com/zou172866/Antigravity-agy-dart.git
 cd Antigravity-agy-dart
 
 # Windows PowerShell (optional -InstallRg auto-installs ripgrep)
@@ -153,6 +153,11 @@ node scripts/install.mjs tool-loading eager         # All 12 tools eager-loaded
 ---
 
 ## Changelog
+
+### v1.8.2
+- **Zero-cloud-check single-file reads & Turn-0 prompt savings (-24 tok)**: Updated `hooks/pre-tool-use.mjs` and `rules/AGENTS.md` (trimmed to **369 tok**) so single-file large reads with a free inline outline route directly to native ranged `read_file` (`allowed_tool`, 0 cloud Safety Monitor calls) instead of detouring through `read_slices` MCP, reserving `read_slices` for multi-file batching while batching >=2 searches/edits/checks into single calls.
+- **Proactive quota-burn early alerts & 2-step auto-copy Handoff**: Added opt-in `safetyDesktopNotify` (`Burn Alert: OFF/ON` toggle on the dashboard card, default OFF, 15-min cooldown, env/config/SQLite precedence) to notify users immediately on active heavy-review bursts or 429 spikes; added a long-chat × Safety Monitor quota-saver synergy tip next to the Context bar; upgraded **Pack Progress & New Chat** to auto-copy the Handoff brief and show a 2-step paste guide.
+- **Cross-poll Safety Monitor cursor precision**: Persisted bounded in-flight `tid` state (`pendingByTid` / `activeMonitorByTid` / `lastTrigger`, 90s TTL) across incremental log scans in `context/lib/safety-monitor-audit.js` so heavy reviews spanning two poll ticks retain exact trajectory character counts, trigger reasons, and hidden stream attribution.
 
 ### v1.8.1
 - **Plain-language Safety Monitor dashboard card & narrow-sidebar layout fix**: Fixed vertical 3-line title wrapping, clipped status badge text, and duplicated summary lines in narrow Sidecar panes (`sidecars/dashboard/index.html`). Rewrote Safety Monitor alerts, KPI tiles, and buttons into plain human language (e.g., `14m 15s` wait duration instead of raw `855.46s`, localized trigger-reason chips, explicit "What to do now" action callout, and "Pack Progress & New Chat" button), softened past-5h bursts with `0` events in the last 5 minutes from red critical to amber `Past 5h · Calm`, and hid the restart-truncation note when `0` truncations occurred.
@@ -281,7 +286,7 @@ After adding, removing, or editing modules or tests, keep these three places in 
 When installing for DeepSeek Harness, Claude Code, or Codex, the installer saves an undo record in `~/.agy-dart/<host>-install.json` so uninstalling cleanly restores your original config.
 
 ```sh
-git clone --branch v1.8.1 --depth 1 https://github.com/zou172866/Antigravity-agy-dart.git
+git clone --branch v1.8.2 --depth 1 https://github.com/zou172866/Antigravity-agy-dart.git
 cd Antigravity-agy-dart
 node bin/agy-dart.mjs install
 node bin/agy-dart.mjs doctor
