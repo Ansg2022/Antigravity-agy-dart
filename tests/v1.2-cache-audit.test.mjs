@@ -225,7 +225,16 @@ test("2. Mock non-deterministic MCP server is caught as critical non_determinist
             "stable-server": { command: "node", args: [detScript] },
             "flaky-order-server": { command: "node", args: [nonDetScript] },
             "unsorted-server": { command: "node", args: [unsortedScript] },
-            "bloated-server": { command: "node", args: [bloatedScript] },
+            "bloated-server": {
+              command: "node",
+              args: [bloatedScript],
+              tools: Object.fromEntries(
+                Array.from({ length: 20 }, (_, i) => [
+                  `bloated_tool_${String(i).padStart(2, "0")}`,
+                  { eager: true }
+                ])
+              )
+            },
             "remote-http-server": { serverUrl: "https://mcp.example.com/mcp" }
           }
         },

@@ -24,7 +24,8 @@
       "command": "node",
       "args": [
         "${PLUGIN_ROOT}/context/server.js"
-      ]
+      ],
+      "timeoutSeconds": 310
     }
   }
 }

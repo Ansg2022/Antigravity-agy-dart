@@ -272,13 +272,13 @@ export function evaluateCacheAlerts(
     const hitPct = (diag.weightedHitRate * 100).toFixed(0);
     if (isZh) {
       const wasteHint = wastedUsdStr ? `，重填浪费约 ${wastedUsdStr}` : "";
-      const handoffHint = needsHandoffCue ? "先复制右侧面板「**交接简报**」，记下做到哪儿，再执行 `/compact`" : "建议在当前任务阶段收尾后执行 `/compact`";
+      const handoffHint = needsHandoffCue ? "先复制右侧面板「**交接简报**」，记下做到哪儿，再执行 `/compact <focus>`" : "建议在当前任务阶段收尾后执行 `/compact <focus>`";
       alerts.push(
         `这段对话快满了（当前 **${formatK(diag.currentContextTokens)} tokens**，告急水位 >= ${formatK(effectiveCrit)}${windowLabel}，缓存命中率 ${hitPct}%${wasteHint}）。${handoffHint}，随后调用 \`ctx_resume\`。`
       );
     } else {
       const wasteHint = wastedUsdStr ? `, ~${wastedUsdStr} wasted` : "";
-      const handoffHint = needsHandoffCue ? "Copy Sidecar **Handoff Brief** first before `/compact`" : "Consider `/compact` at the next milestone";
+      const handoffHint = needsHandoffCue ? "Copy Sidecar **Handoff Brief** first before `/compact <focus>`" : "Consider `/compact <focus>` at the next milestone";
       alerts.push(
         `This conversation is nearly full (**${formatK(diag.currentContextTokens)} tokens**, critical watermark >= ${formatK(effectiveCrit)}${windowLabel}, cache hit ${hitPct}%${wasteHint}). ${handoffHint}, then call \`ctx_resume\`.`
       );
@@ -309,8 +309,8 @@ export function evaluateCacheAlerts(
       } else if (diag.compactAdvice === "opportunistic_cold_compact") {
         alerts.push(
           isZh
-            ? `当前上下文已达 **${formatK(diag.currentContextTokens)} tokens**（偏高水位 >= ${formatK(effectiveWarn)}${windowLabel}，缓存已冷）。当前适合复制右侧面板「**交接简报**」后执行 \`/compact\`，再调用 \`ctx_resume\`。`
-            : `Context reached **${formatK(diag.currentContextTokens)} tokens** (high watermark >= ${formatK(effectiveWarn)}${windowLabel}, cache cold). Good moment for Sidecar **Handoff Brief** + \`/compact\`, then \`ctx_resume\`.`
+            ? `当前上下文已达 **${formatK(diag.currentContextTokens)} tokens**（偏高水位 >= ${formatK(effectiveWarn)}${windowLabel}，缓存已冷）。当前适合复制右侧面板「**交接简报**」后执行 \`/compact <focus>\`，再调用 \`ctx_resume\`（旁支查询可用 \`/btw\` 隔离）。`
+            : `Context reached **${formatK(diag.currentContextTokens)} tokens** (high watermark >= ${formatK(effectiveWarn)}${windowLabel}, cache cold). Good moment for Sidecar **Handoff Brief** + \`/compact <focus>\`, then \`ctx_resume\` (use \`/btw\` for quick side questions).`
         );
       } else {
         alerts.push(
@@ -347,8 +347,8 @@ export function evaluateCacheAlerts(
                 ? "自定义 "
                 : "";
           const compactTailZh = needsHandoffCue
-            ? "若准备压缩，建议先复制右侧面板「**交接简报**」再执行 `/compact`，随后调用 `ctx_resume`。"
-            : "若准备切换任务，适合顺手执行 `/compact`。";
+            ? "若准备压缩，建议先复制右侧面板「**交接简报**」再执行 `/compact <focus>`，随后调用 `ctx_resume`。"
+            : "若准备切换任务，适合顺手执行 `/compact <focus>`。";
           alerts.push(
             `已空闲 **${formatDuration(diag.idleSeconds)}**（超过 ${ttlSourceZh}${formatDuration(diag.cacheTtlSec)} 缓存 TTL），当前上下文 **${formatK(diag.currentContextTokens)} tokens**${costHint}——下一轮将触发冷重填。${compactTailZh}`
           );
@@ -360,8 +360,8 @@ export function evaluateCacheAlerts(
                 ? " configured"
                 : "";
           const compactTail = needsHandoffCue
-            ? "Good moment to copy Sidecar **Handoff Brief** + `/compact`, then `ctx_resume`."
-            : "Good moment to `/compact` if switching tasks.";
+            ? "Good moment to copy Sidecar **Handoff Brief** + `/compact <focus>`, then `ctx_resume`."
+            : "Good moment to `/compact <focus>` if switching tasks.";
           alerts.push(
             `Idle **${formatDuration(diag.idleSeconds)}** (>${formatDuration(diag.cacheTtlSec)}${ttlSourceTag} KV-cache TTL) at **${formatK(diag.currentContextTokens)} tokens**${costHint} — next turn will re-prefill cold. ${compactTail}`
           );
@@ -376,8 +376,8 @@ export function evaluateCacheAlerts(
         const costHint = estimateColdReprefillHint(diag, isZh);
         alerts.push(
           isZh
-            ? `**${formatK(diag.currentContextTokens)} tokens** 热缓存将在 **${remLabel}** 后过期${costHint}——尽快发送下一句可续热，或在过期后复制右侧面板「**交接简报**」执行 \`/compact\`。`
-            : `KV-cache expiring in **${remLabel}** at **${formatK(diag.currentContextTokens)} tokens**${costHint} — send your next turn soon to stay warm, or copy Sidecar **Handoff Brief** before \`/compact\`.`
+            ? `**${formatK(diag.currentContextTokens)} tokens** 热缓存将在 **${remLabel}** 后过期${costHint}——尽快发送下一句可续热，或在过期后复制右侧面板「**交接简报**」执行 \`/compact <focus>\`。`
+            : `KV-cache expiring in **${remLabel}** at **${formatK(diag.currentContextTokens)} tokens**${costHint} — send your next turn soon to stay warm, or copy Sidecar **Handoff Brief** before \`/compact <focus>\`.`
         );
       }
     }
@@ -390,8 +390,8 @@ export function evaluateCacheAlerts(
       setAlertMeta(mediaKey, "1");
       alerts.push(
         isZh
-          ? `当前 **${formatK(diag.currentContextTokens)} tokens** 会话中包含 **${diag.totalMediaCount} 个图片/多模态附件**（首字延迟可能放大 3–7 倍）。建议将截图检查委派给纯文本子代理或执行 \`/compact\`。`
-          : `${diag.totalMediaCount} media/image item(s) active in a **${formatK(diag.currentContextTokens)}-token** session (3–7x TTFT cliff risk). Delegate screenshot checks to a text-only subagent or \`/compact\`.`
+          ? `当前 **${formatK(diag.currentContextTokens)} tokens** 会话中包含 **${diag.totalMediaCount} 个图片/多模态附件**（首字延迟可能放大 3–7 倍）。建议将截图检查委派给纯文本子代理或执行 \`/compact <focus>\`。`
+          : `${diag.totalMediaCount} media/image item(s) active in a **${formatK(diag.currentContextTokens)}-token** session (3–7x TTFT cliff risk). Delegate screenshot checks to a text-only subagent or \`/compact <focus>\`.`
       );
     }
   }

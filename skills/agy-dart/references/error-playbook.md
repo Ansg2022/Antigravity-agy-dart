@@ -83,11 +83,12 @@ Project-specific CLI output filters live in `<workspace>/.agy-dart/filters.json`
 - Fast Skills-only audit: `node bin/agy-dart.mjs audit skills --workspace .` (flags `missing_skill_frontmatter`, `oversized_skill_frontmatter > 250 tok`, `oversized_skill_body > 3000 tok`, `excessive_skills_frontmatter > 2000 tok`, and `legacy_skill_path`).
 - Plugin budget & MCP schema fingerprint gate: `npm run prefix:budget`.
 - Session replay & keepalive cost check: `npm run cache:simulate`.
+- Live side-pane dashboard (Antigravity App `v2.35.1+`, emit sparingly only during diagnostics or when requested): `[agy-dart Context](sidecar://agy-dart/dashboard/)`.
 
 ### Common root causes & fixes
 - **Bloated Turn-0 prefix**: Move bulky docs out of always-loaded `rules/` into on-demand `SKILL.md` bodies, compress verbose skill YAML `description` fields, and split long `SKILL.md` files into `references/` and `examples/`.
 - **Conflicting legacy plugins**: Disable standalone `agy-fast` or `antigravity-plugin-context-mode` when `agy-dart` is installed.
-- **After `/compact`**: Call `ctx_resume({})` (passing `sessionId` on shared hosts) to restore recent FTS5 source IDs and session checkpoints without re-reading large files.
+- **After `/compact <focus>` (and `/btw` / CLI `/context`)**: Prefer `/compact <focus>` to preserve your active milestone in one step without losing key context, then call `ctx_resume({})` (passing `sessionId` on shared hosts) to restore recent FTS5 source IDs and checkpoints. Use `/btw <question>` for quick read-only side questions so main conversation context stays clean, and run `/context` in Antigravity CLI to inspect per-category token usage.
 - **`stablePrefixOnly` vs keepalive**:
   - Enable `stablePrefixOnly: true` in `~/.agy-dart/config.json` to strip volatile Git status lines from `SessionStart` for higher cross-session prefix stability.
   - Automatic cache keepalive (`ttlKeepalive`) is **off by default** and opt-in per window in the **agy-dart Context** panel (each keepalive consumes model input; use only when intentionally preserving a warm large prompt across short idle gaps).
@@ -110,6 +111,7 @@ Project-specific CLI output filters live in `<workspace>/.agy-dart/filters.json`
 - **Windows / PowerShell quoting & UTF-8**:
   - Inline `ctx_execute` code should stay `<= 5` lines (`~400` chars). For multi-line log/JSONL processing or tricky shell escaping, write a script to `<Artifact Directory Path>/scratch/` (or an OS temp directory outside the repo on non-Antigravity hosts) and call `ctx_execute({ language: "python", file, args })`. See `examples/ctx_trace_summary.py`.
   - Commands with unsafe shell metacharacters (`%`, `!`, etc.) fail open past `cli-filter` automatically.
+- **Enterprise / managed policy compatibility (`cliFilter: false`)**: If managed admin policies restrict `PreToolUse.overwrite` wrapper commands (`cli-filter.mjs`), set `"cliFilter": false` in `~/.agy-dart/config.json` (or `AGY_DART_CLI_FILTER=0`) to cleanly disable shell rewriting while keeping read guards and MCP tools active.
 - **Long tasks & daemons (`run_checks` vs `run_command`)**:
   - Use `agy-dart_fast` `run_checks` for short foreground checks (`<= 60s`).
   - For builds, full integration suites (`> 60s`), watchers, or dev servers, use native `run_command` with `WaitMsBeforeAsync <= 2000` (plus `IsDaemon: true` for servers) and monitor with `manage_task`. Commands with `WaitMsBeforeAsync <= 2000` bypass foreground CLI filtering (`cliFilterAsyncBypassMs: 2000`).

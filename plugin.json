@@ -1,8 +1,21 @@
 {
+  "$schema": "https://antigravity.google/schemas/v1/plugin.json",
   "name": "agy-dart",
   "displayName": "agy-dart",
   "version": "1.8.2",
-  "description": "All-in-one Antigravity latency accelerator, KV-cache protector, context-window guard & Sidecar Stall Watchdog: batched code search/edits/outlines/checks, transparent CLI & JSON crushing, unified config, heading-aware SQLite FTS5, and a CSRF-hardened live Sidecar dashboard.",
+  "description": "Antigravity speed & token optimizer: batched code search/edits/checks, CLI output filtering, SQLite FTS5 context guard, KV-cache monitor & Sidecar.",
+  "license": "MIT",
+  "keywords": [
+    "antigravity",
+    "prompt-caching",
+    "kv-cache",
+    "token-optimization",
+    "context-management",
+    "mcp",
+    "fts5",
+    "ripgrep",
+    "performance"
+  ],
   "logo": "assets/logo.svg",
   "author": {
     "name": "zou172866",

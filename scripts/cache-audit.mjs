@@ -20,11 +20,14 @@ import { sha256Hex, stableSortObject, stableStringify } from "../context/lib/sta
 
 const DEFAULT_TIMEOUT_MS = 4000;
 const SINGLE_RULE_WARN_TOKENS = 1500;
+const SINGLE_RULE_TRUNCATE_BYTES = 24000;
+const RULES_AGGREGATE_BUDGET_TOKENS = 20000;
 const TOTAL_PREFIX_WARN_TOKENS = 6000;
 const SINGLE_SKILL_FRONTMATTER_WARN_TOKENS = 250;
 const SINGLE_SKILL_BODY_WARN_TOKENS = 3000;
 const TOTAL_SKILLS_FRONTMATTER_WARN_TOKENS = 2000;
 const MCP_SCHEMA_WARN_TOKENS = 3000;
+const VALID_RULE_TRIGGERS = new Set(["always_on", "model_decision", "glob", "manual"]);
 const SKILL_AUX_DIR_NAMES = Object.freeze(["examples", "references", "resources", "scripts"]);
 
 const PENALTY_WEIGHTS = Object.freeze({
@@ -42,6 +45,7 @@ const PENALTY_CAPS = Object.freeze({
 const KNOWN_HOOK_EVENTS = new Set([
   "SessionStart",
   "PreInvocation",
+  "PostInvocation",
   "PreToolUse",
   "PostToolUse",
   "Stop",
@@ -51,7 +55,7 @@ const KNOWN_HOOK_EVENTS = new Set([
   "Notification"
 ]);
 
-const MID_SESSION_EVENTS = new Set(["PreInvocation", "PreToolUse", "PostToolUse"]);
+const MID_SESSION_EVENTS = new Set(["PreInvocation", "PostInvocation", "PreToolUse", "PostToolUse"]);
 const TOOL_MATCHER_EVENTS = new Set(["PreToolUse", "PostToolUse"]);
 
 const LEGACY_CONFLICTS_WITH_AGY_DART = Object.freeze([
@@ -363,7 +367,7 @@ function parseMappingEntry(trimmed) {
   return { key, rawVal };
 }
 
-function validateYamlFrontmatter(inner) {
+function validateYamlFrontmatter(inner, { mode = "skill" } = {}) {
   const lines = String(inner || "").split(/\r?\n/);
   const topLevelKeys = new Set();
   const containerStack = [{ kind: "mapping", indent: 0, keys: topLevelKeys }];
@@ -546,14 +550,16 @@ function validateYamlFrontmatter(inner) {
   if (topLevelKeys.size === 0) {
     return { ok: false, topLevelKeys };
   }
-  const hasSkillMetaKey = [...topLevelKeys].some((k) => SKILL_FRONTMATTER_REQUIRED_ANY_KEYS.has(k));
-  if (!hasSkillMetaKey) {
-    return { ok: false, topLevelKeys };
+  if (mode === "skill") {
+    const hasSkillMetaKey = [...topLevelKeys].some((k) => SKILL_FRONTMATTER_REQUIRED_ANY_KEYS.has(k));
+    if (!hasSkillMetaKey) {
+      return { ok: false, topLevelKeys };
+    }
   }
   return { ok: true, topLevelKeys };
 }
 
-export function splitFrontmatter(markdown) {
+export function splitFrontmatter(markdown, options = {}) {
   const raw = String(markdown || "");
   const normalized = raw.charCodeAt(0) === 0xfeff ? raw.slice(1) : raw;
   const match = normalized.match(
@@ -563,7 +569,7 @@ export function splitFrontmatter(markdown) {
     return { frontmatter: "", body: normalized, hasFrontmatter: false };
   }
   const frontmatter = match[0];
-  const validation = validateYamlFrontmatter(match[1]);
+  const validation = validateYamlFrontmatter(match[1], options);
   if (!validation.ok) {
     return { frontmatter: "", body: normalized, hasFrontmatter: false };
   }
@@ -751,8 +757,13 @@ function discoverPlugins(configDir, workspaceDir) {
       if (seenPluginDirs.has(dirKey)) continue;
       seenPluginDirs.add(dirKey);
       let pluginName = ent.name;
-      const manifestPath = path.join(dir, "plugin.json");
-      if (isFile(manifestPath)) {
+      const manifestCandidates = [
+        path.join(dir, ".antigravity-plugin", "plugin.json"),
+        path.join(dir, ".gemini-plugin", "plugin.json"),
+        path.join(dir, "plugin.json")
+      ];
+      const manifestPath = manifestCandidates.find((p) => isFile(p)) || "";
+      if (manifestPath) {
         const mf = safeReadJson(manifestPath);
         if (mf.ok && typeof mf.data?.name === "string" && mf.data.name.trim()) {
           pluginName = mf.data.name.trim();
@@ -993,13 +1004,85 @@ function scanAndAuditSkills(configDir, workspaceDir, activePlugins, findings, se
   };
 }
 
+function listWorkspaceAncestorDirs(workspaceDir) {
+  const start = path.resolve(workspaceDir);
+  const chain = [start];
+  let cur = start;
+  let foundGit = false;
+  try {
+    if (fs.existsSync(path.join(cur, ".git"))) {
+      foundGit = true;
+    }
+  } catch {}
+  for (let depth = 0; !foundGit && depth < 10; depth++) {
+    const parent = path.dirname(cur);
+    if (!parent || parent === cur) break;
+    chain.push(parent);
+    try {
+      if (fs.existsSync(path.join(parent, ".git"))) {
+        foundGit = true;
+        break;
+      }
+    } catch {}
+    cur = parent;
+  }
+  return foundGit ? chain : [start];
+}
+
+function parseRuleFrontmatterMeta(frontmatterText) {
+  const lines = String(frontmatterText || "")
+    .replace(/\r\n/g, "\n")
+    .split("\n")
+    .filter((l) => !/^---[ \t]*$|^\.\.\.[ \t]*$/.test(l));
+  let hasTriggerKey = false;
+  let trigger = "";
+  let description = "";
+  const stripQuotes = (s) => {
+    const t = s.trim();
+    if (t.length >= 2 && ((t[0] === '"' && t[t.length - 1] === '"') || (t[0] === "'" && t[t.length - 1] === "'"))) {
+      return t.slice(1, -1).trim();
+    }
+    return t;
+  };
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i];
+    const trigMatch = line.match(/^trigger\s*:\s*(.*)$/i);
+    if (trigMatch) {
+      hasTriggerKey = true;
+      trigger = stripQuotes(trigMatch[1].replace(/\s+#.*$/, "")).toLowerCase();
+      continue;
+    }
+    const descMatch = line.match(/^description\s*:\s*(.*)$/i);
+    if (descMatch) {
+      const rest = descMatch[1].trim();
+      if (rest === ">" || rest === ">-" || rest === "|" || rest === "|-") {
+        const block = [];
+        for (let j = i + 1; j < lines.length; j++) {
+          if (/^[ \t]+/.test(lines[j])) {
+            block.push(lines[j].trim());
+            i = j;
+          } else {
+            break;
+          }
+        }
+        description = block.join(" ").trim();
+      } else {
+        description = stripQuotes(rest);
+      }
+    }
+  }
+  return { hasTriggerKey, trigger, description };
+}
+
 function auditTurn0Prefix(configDir, workspaceDir, activePlugins, findings) {
   const seen = new Set();
   const ruleItems = [];
+  const onDemandRules = [];
+  let invalidRuleCount = 0;
 
-  const addRuleFile = (filePath, scope, baseDir) => {
+  const addRuleFile = (filePath, scope, baseDir, { isStandalone = false } = {}) => {
     if (!isFile(filePath)) return;
-    const key = normalizePathKey(filePath);
+    const key = canonicalPathKey(filePath);
     if (seen.has(key)) return;
     seen.add(key);
 
@@ -1009,20 +1092,119 @@ function auditTurn0Prefix(configDir, workspaceDir, activePlugins, findings) {
     } catch {
       return;
     }
-    const stats = measureTextStats(text);
+    const fullStats = measureTextStats(text);
     const displayName = toPosixDisplay(filePath, baseDir);
+    const baseUpper = path.basename(filePath).toUpperCase();
+    const isUnconditionalDoc =
+      isStandalone ||
+      baseUpper === "AGENTS.MD" ||
+      baseUpper === "GEMINI.MD" ||
+      baseUpper === "CLAUDE.MD";
+
+    let trigger = "always_on";
+    let loadMode = "always_on";
+    let turn0Stats = fullStats;
+    let invalidTrigger = false;
+
+    if (!isUnconditionalDoc) {
+      const fm = splitFrontmatter(text, { mode: "rule" });
+      if (fm.hasFrontmatter) {
+        const meta = parseRuleFrontmatterMeta(fm.frontmatter);
+        if (!meta.hasTriggerKey || !VALID_RULE_TRIGGERS.has(meta.trigger)) {
+          invalidTrigger = true;
+          trigger = meta.trigger || "missing";
+          loadMode = "invalid";
+          turn0Stats = { bytes: 0, chars: 0, cjkChars: 0, tokens: 0, sha256: fullStats.sha256 };
+        } else {
+          trigger = meta.trigger;
+          loadMode = meta.trigger;
+          if (meta.trigger === "model_decision") {
+            const pointerText = meta.description ? `${displayName}: ${meta.description}` : displayName;
+            turn0Stats = measureTextStats(pointerText);
+          } else if (meta.trigger === "glob" || meta.trigger === "manual") {
+            turn0Stats = { bytes: 0, chars: 0, cjkChars: 0, tokens: 0, sha256: fullStats.sha256 };
+          }
+        }
+      }
+    }
+
+    if (invalidTrigger) {
+      invalidRuleCount += 1;
+      findings.push({
+        severity: "warn",
+        code: "invalid_rule_trigger",
+        category: "prefix",
+        target: `${scope}:${displayName}`,
+        message: `Rule '${displayName}' has YAML frontmatter with missing or invalid trigger ('${trigger}'); Antigravity silently drops rules without a valid trigger (always_on, model_decision, glob, manual).`,
+        recommendation: `Set 'trigger: always_on', 'trigger: model_decision' (with description), 'trigger: glob', or 'trigger: manual' in '${displayName}' frontmatter.`
+      });
+      onDemandRules.push({
+        kind: "rule_invalid",
+        scope,
+        name: displayName,
+        path: path.resolve(filePath),
+        trigger,
+        bodyBytes: fullStats.bytes,
+        bodyTokens: fullStats.tokens,
+        sha256: fullStats.sha256
+      });
+      return;
+    }
+
+    if (loadMode === "glob" || loadMode === "manual") {
+      onDemandRules.push({
+        kind: "rule_on_demand",
+        scope,
+        name: displayName,
+        path: path.resolve(filePath),
+        trigger,
+        bodyBytes: fullStats.bytes,
+        bodyTokens: fullStats.tokens,
+        sha256: fullStats.sha256
+      });
+      return;
+    }
+
+    if (loadMode === "model_decision") {
+      onDemandRules.push({
+        kind: "rule_on_demand",
+        scope,
+        name: displayName,
+        path: path.resolve(filePath),
+        trigger,
+        bodyBytes: fullStats.bytes,
+        bodyTokens: fullStats.tokens,
+        sha256: fullStats.sha256
+      });
+    }
+
     ruleItems.push({
       kind: "rule",
       scope,
       name: displayName,
       path: path.resolve(filePath),
-      bytes: stats.bytes,
-      chars: stats.chars,
-      cjkChars: stats.cjkChars,
-      tokens: stats.tokens,
-      sha256: stats.sha256
+      trigger,
+      bytes: turn0Stats.bytes,
+      chars: turn0Stats.chars,
+      cjkChars: turn0Stats.cjkChars,
+      tokens: turn0Stats.tokens,
+      bodyBytes: fullStats.bytes,
+      bodyTokens: fullStats.tokens,
+      sha256: turn0Stats.sha256
     });
   };
+
+  // Global standalone rules (~/.gemini/config/{AGENTS,GEMINI}.md and ~/.gemini/{AGENTS,GEMINI}.md)
+  for (const rootFile of ["AGENTS.md", "GEMINI.md"]) {
+    addRuleFile(path.join(configDir, rootFile), "global", configDir, { isStandalone: true });
+  }
+  const configBase = path.basename(path.resolve(configDir)).toLowerCase();
+  const configParent = path.dirname(path.resolve(configDir));
+  if (configBase === "config" && path.basename(configParent).toLowerCase() === ".gemini") {
+    for (const rootFile of ["AGENTS.md", "GEMINI.md"]) {
+      addRuleFile(path.join(configParent, rootFile), "global", configParent, { isStandalone: true });
+    }
+  }
 
   // Global configDir rules
   for (const f of listMarkdownFiles(path.join(configDir, "rules"))) {
@@ -1036,18 +1218,27 @@ function auditTurn0Prefix(configDir, workspaceDir, activePlugins, findings) {
     }
   }
 
-  // Workspace always-loaded root rules
-  for (const rootFile of ["AGENTS.md", "GEMINI.md", "CLAUDE.md"]) {
-    const candidate = path.join(workspaceDir, rootFile);
-    if (isFile(candidate)) {
-      addRuleFile(candidate, "workspace", workspaceDir);
+  // Workspace always-loaded & scoped rules (walking up to repo .git root when inside a repo)
+  const ancestorDirs = listWorkspaceAncestorDirs(workspaceDir);
+  for (const dir of ancestorDirs) {
+    for (const rootFile of ["AGENTS.md", "GEMINI.md", "CLAUDE.md"]) {
+      const candidate = path.join(dir, rootFile);
+      if (isFile(candidate)) {
+        addRuleFile(candidate, "workspace", workspaceDir, { isStandalone: true });
+      }
     }
-  }
-  for (const f of listMarkdownFiles(path.join(workspaceDir, ".gemini", "rules"))) {
-    addRuleFile(f, "workspace", workspaceDir);
-  }
-  for (const f of listMarkdownFiles(path.join(workspaceDir, ".agents", "rules"))) {
-    addRuleFile(f, "workspace", workspaceDir);
+    for (const agentsRootFile of ["AGENTS.md", "GEMINI.md"]) {
+      const candidate = path.join(dir, ".agents", agentsRootFile);
+      if (isFile(candidate)) {
+        addRuleFile(candidate, "workspace", workspaceDir, { isStandalone: true });
+      }
+    }
+    for (const f of listMarkdownFiles(path.join(dir, ".gemini", "rules"))) {
+      addRuleFile(f, "workspace", workspaceDir);
+    }
+    for (const f of listMarkdownFiles(path.join(dir, ".agents", "rules"))) {
+      addRuleFile(f, "workspace", workspaceDir);
+    }
   }
 
   // Scan and audit skills across global, plugin, workspace, and legacy paths
@@ -1059,6 +1250,7 @@ function auditTurn0Prefix(configDir, workspaceDir, activePlugins, findings) {
 
   let ruleCount = 0;
   let ruleTokens = 0;
+  let alwaysOnRuleTokens = 0;
   let totalBytes = 0;
   let totalChars = 0;
 
@@ -1068,19 +1260,48 @@ function auditTurn0Prefix(configDir, workspaceDir, activePlugins, findings) {
     if (item.kind === "rule") {
       ruleCount += 1;
       ruleTokens += item.tokens;
-      if (item.tokens > SINGLE_RULE_WARN_TOKENS) {
-        const cjkNote = item.cjkChars > 0 ? ` (${item.cjkChars} CJK chars)` : "";
-        findings.push({
-          severity: "warn",
-          code: "oversized_rule_file",
-          category: "prefix",
-          target: `${item.scope}:${item.name}`,
-          message: `Always-loaded rule '${item.name}' is ~${item.tokens} est. tokens${cjkNote}, exceeding the ${SINGLE_RULE_WARN_TOKENS}-token single-file recommendation.`,
-          recommendation: `Trim '${item.name}' to crisp routing/constraint bullets and move lengthy examples or playbooks into an on-demand SKILL.md body (only YAML frontmatter loads at Turn 0).`
-        });
+      if (item.trigger === "always_on") {
+        alwaysOnRuleTokens += item.tokens;
+        if (item.bytes > SINGLE_RULE_TRUNCATE_BYTES) {
+          findings.push({
+            severity: "warn",
+            code: "rule_truncation_limit",
+            category: "prefix",
+            target: `${item.scope}:${item.name}`,
+            message: `Always-loaded rule '${item.name}' is ${item.bytes.toLocaleString("en-US")} bytes, exceeding Antigravity's ${SINGLE_RULE_TRUNCATE_BYTES.toLocaleString("en-US")}-byte (24 KB) per-rule truncation cap.`,
+            recommendation: `Split '${item.name}' below 24 KB or move detailed guidance into an on-demand SKILL.md / model_decision rule so the tail is not silently truncated.`
+          });
+        }
+        if (item.tokens > SINGLE_RULE_WARN_TOKENS) {
+          const cjkNote = item.cjkChars > 0 ? ` (${item.cjkChars} CJK chars)` : "";
+          findings.push({
+            severity: "warn",
+            code: "oversized_rule_file",
+            category: "prefix",
+            target: `${item.scope}:${item.name}`,
+            message: `Always-loaded rule '${item.name}' is ~${item.tokens} est. tokens${cjkNote}, exceeding the ${SINGLE_RULE_WARN_TOKENS}-token single-file recommendation.`,
+            recommendation: `Trim '${item.name}' to crisp routing/constraint bullets and move lengthy examples or playbooks into an on-demand SKILL.md body (only YAML frontmatter loads at Turn 0).`
+          });
+        }
       }
     }
   }
+
+  if (alwaysOnRuleTokens > RULES_AGGREGATE_BUDGET_TOKENS) {
+    findings.push({
+      severity: "warn",
+      code: "rules_aggregate_budget_exceeded",
+      category: "prefix",
+      target: "turn0-always-on-rules",
+      message: `Combined global & always_on rules consume ~${alwaysOnRuleTokens} est. tokens, exceeding Antigravity's ${RULES_AGGREGATE_BUDGET_TOKENS.toLocaleString("en-US")}-token aggregate rule budget (host demotes overflow rules to on-demand pointers).`,
+      recommendation: "Convert lower-priority rules to trigger: model_decision or glob, or move reference content into SKILL.md files."
+    });
+  }
+
+  const onDemandRuleCount = onDemandRules.filter((r) => r.kind === "rule_on_demand").length;
+  const onDemandRuleTokens = onDemandRules
+    .filter((r) => r.kind === "rule_on_demand")
+    .reduce((acc, r) => acc + r.bodyTokens, 0);
 
   const totalTokens = ruleTokens + skillAudit.skillFrontmatterTokens;
   if (totalTokens > TOTAL_PREFIX_WARN_TOKENS) {
@@ -1101,16 +1322,22 @@ function auditTurn0Prefix(configDir, workspaceDir, activePlugins, findings) {
   return {
     thresholds: {
       singleRuleWarnTokens: SINGLE_RULE_WARN_TOKENS,
+      singleRuleTruncateBytes: SINGLE_RULE_TRUNCATE_BYTES,
+      rulesAggregateBudgetTokens: RULES_AGGREGATE_BUDGET_TOKENS,
       totalPrefixWarnTokens: TOTAL_PREFIX_WARN_TOKENS,
       singleSkillFrontmatterWarnTokens: SINGLE_SKILL_FRONTMATTER_WARN_TOKENS,
       singleSkillBodyWarnTokens: SINGLE_SKILL_BODY_WARN_TOKENS,
       totalSkillsFrontmatterWarnTokens: TOTAL_SKILLS_FRONTMATTER_WARN_TOKENS
     },
     ruleCount,
+    onDemandRuleCount,
+    onDemandRuleTokens,
+    invalidRuleCount,
     skillCount: skillAudit.skillCount,
     progressiveSkillCount: skillAudit.progressiveSkillCount,
     legacySkillCount: skillAudit.legacySkillCount,
     ruleTokens,
+    alwaysOnRuleTokens,
     skillFrontmatterTokens: skillAudit.skillFrontmatterTokens,
     skillBodyTokens: skillAudit.skillBodyTokens,
     skillAuxFileCount: skillAudit.skillAuxFileCount,
@@ -1119,7 +1346,8 @@ function auditTurn0Prefix(configDir, workspaceDir, activePlugins, findings) {
     totalTokens,
     totalBytes,
     totalChars,
-    items
+    items,
+    onDemandRules
   };
 }
 
@@ -1601,6 +1829,9 @@ async function auditMcpServers(configDir, workspaceDir, activePlugins, { live, t
   for (const plugin of activePlugins) {
     addConfig(path.join(plugin.dir, "mcp_config.json"), plugin.scope, plugin.dir);
   }
+  for (const dir of listWorkspaceAncestorDirs(workspaceDir)) {
+    addConfig(path.join(dir, ".agents", "mcp_config.json"), "workspace", dir);
+  }
   addConfig(path.join(workspaceDir, ".gemini", "mcp_config.json"), "workspace", workspaceDir);
 
   const discovered = [];
@@ -1846,6 +2077,33 @@ async function auditMcpServers(configDir, workspaceDir, activePlugins, { live, t
       const bytes = Buffer.byteLength(rawJson1, "utf8");
       const tokens = estimateTokens(rawJson1);
 
+      // Partition exposed tools into Turn-0 eager vs on-demand lazy catalog per Antigravity mcp_config.json spec
+      const enabledSet = Array.isArray(entry.enabledTools)
+        ? new Set(entry.enabledTools.map((t) => String(t)))
+        : null;
+      const disabledSet = Array.isArray(entry.disabledTools)
+        ? new Set(entry.disabledTools.map((t) => String(t)))
+        : new Set();
+      const toolCfgMap = entry.tools && typeof entry.tools === "object" && !Array.isArray(entry.tools) ? entry.tools : {};
+      const eagerTools = [];
+      const lazyTools = [];
+      for (const tool of run1.tools) {
+        const tName = typeof tool?.name === "string" ? tool.name : "";
+        if (enabledSet && !enabledSet.has(tName)) continue;
+        if (disabledSet.has(tName)) continue;
+        const tCfg = toolCfgMap[tName];
+        if (tCfg && (tCfg.disabled === true || tCfg.enabled === false)) continue;
+        if (tCfg && tCfg.eager === true) {
+          eagerTools.push(tool);
+        } else {
+          lazyTools.push(tool);
+        }
+      }
+      const eagerToolCount = eagerTools.length;
+      const lazyToolCount = lazyTools.length;
+      const eagerTokens = eagerTools.length > 0 ? estimateTokens(JSON.stringify(eagerTools)) : 0;
+      const lazyCatalogTokens = lazyTools.length > 0 ? estimateTokens(JSON.stringify(lazyTools)) : 0;
+
       return {
         id,
         name,
@@ -1855,8 +2113,12 @@ async function auditMcpServers(configDir, workspaceDir, activePlugins, { live, t
         command,
         status: deterministic ? "ok" : "non_deterministic",
         toolCount: run1.tools.length,
+        eagerToolCount,
+        lazyToolCount,
         bytes,
         tokens,
+        eagerTokens,
+        lazyCatalogTokens,
         rawSha256: rawSha1,
         rawSha256Run2: rawSha2,
         canonicalSha256: canonicalSha1,
@@ -1880,6 +2142,8 @@ async function auditMcpServers(configDir, workspaceDir, activePlugins, { live, t
     let skippedDisabledCount = 0;
     let errorCount = 0;
     let totalSchemaTokens = 0;
+    let totalEagerSchemaTokens = 0;
+    let totalLazyCatalogTokens = 0;
     let totalToolCount = 0;
 
     for (const s of servers) {
@@ -1909,6 +2173,8 @@ async function auditMcpServers(configDir, workspaceDir, activePlugins, { live, t
 
       probedCount += 1;
       totalSchemaTokens += s.tokens;
+      totalEagerSchemaTokens += s.eagerTokens || 0;
+      totalLazyCatalogTokens += s.lazyCatalogTokens || 0;
       totalToolCount += s.toolCount;
 
       if (s.deterministic === false) {
@@ -1942,14 +2208,14 @@ async function auditMcpServers(configDir, workspaceDir, activePlugins, { live, t
         }
       }
 
-      if (s.tokens > MCP_SCHEMA_WARN_TOKENS) {
+      if ((s.eagerTokens || 0) > MCP_SCHEMA_WARN_TOKENS) {
         findings.push({
           severity: "warn",
           code: "bloated_mcp_schema",
           category: "mcp",
           target: s.id,
-          message: `MCP server '${s.id}' exposes ${s.toolCount} tools consuming ~${s.tokens} est. Turn-0 tokens (>${MCP_SCHEMA_WARN_TOKENS} threshold).`,
-          recommendation: "Shorten verbose parameter descriptions, consolidate overlapping tools, or disable this MCP server when not actively needed."
+          message: `MCP server '${s.id}' loads ${s.eagerToolCount}/${s.toolCount} eager tool(s) consuming ~${s.eagerTokens} est. Turn-0 tokens (>${MCP_SCHEMA_WARN_TOKENS} threshold).`,
+          recommendation: "Remove eager: true from infrequent tools (Antigravity lazy-loads MCP tools by default), shorten verbose parameter descriptions, or disable unused tools."
         });
       }
     }
@@ -1967,6 +2233,8 @@ async function auditMcpServers(configDir, workspaceDir, activePlugins, { live, t
       skippedDisabledCount,
       errorCount,
       totalSchemaTokens,
+      totalEagerSchemaTokens,
+      totalLazyCatalogTokens,
       totalToolCount,
       servers
     };
@@ -3007,6 +3275,9 @@ function auditHooksAndPlugins(configDir, workspaceDir, activePlugins, disabledPl
   for (const plugin of activePlugins) {
     addHookConfig(path.join(plugin.dir, "hooks.json"), plugin.scope, plugin.dir);
   }
+  for (const dir of listWorkspaceAncestorDirs(workspaceDir)) {
+    addHookConfig(path.join(dir, ".agents", "hooks.json"), "workspace", dir);
+  }
   addHookConfig(path.join(workspaceDir, ".gemini", "hooks.json"), "workspace", workspaceDir);
 
   const entries = [];
@@ -3391,7 +3662,9 @@ export async function auditEnvironmentCache(options = {}) {
   const totals = {
     rulesAndSkillsTokens: prefix.totalTokens,
     mcpSchemaTokens: mcp.totalSchemaTokens,
-    estimatedTurn0Tokens: prefix.totalTokens + mcp.totalSchemaTokens
+    eagerMcpSchemaTokens: mcp.totalEagerSchemaTokens,
+    lazyMcpCatalogTokens: mcp.totalLazyCatalogTokens,
+    estimatedTurn0Tokens: prefix.totalTokens + mcp.totalEagerSchemaTokens
   };
 
   return stableSortObject({

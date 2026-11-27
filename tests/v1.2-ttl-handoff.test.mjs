@@ -643,7 +643,7 @@ test("P1-7.4: PreInvocation proactive expiring TTL alert (deduped >=60k, silent 
     assert.ok(a1[0].includes("40s"), `Expected remaining seconds in alert: ${a1[0]}`);
     assert.ok(a1[0].includes("$"), `Expected USD re-prefill estimate in alert: ${a1[0]}`);
     assert.ok(a1[0].includes("Handoff Brief"), `Expected Handoff Brief mention: ${a1[0]}`);
-    assert.ok(a1[0].includes("`/compact`"), `Expected /compact mention: ${a1[0]}`);
+    assert.ok(a1[0].includes("/compact"), `Expected /compact mention: ${a1[0]}`);
     assert.equal(store.getTimedMeta("cache_alert:exp-sess-1:ttl_expiring_turn", ""), turn1Iso);
 
     // Same lastPlannerAt (even 15s later at 25s left): MUST NOT fire a second time!
@@ -669,7 +669,7 @@ test("P1-7.4: PreInvocation proactive expiring TTL alert (deduped >=60k, silent 
     const aExpired = evaluateCacheAlerts(expiredSameTurn, { sessionId: "exp-sess-1", store });
     assert.equal(aExpired.length, 1);
     assert.ok(aExpired[0].includes("Handoff Brief"));
-    assert.ok(aExpired[0].includes("`/compact`"));
+    assert.ok(aExpired[0].includes("/compact"));
     assert.ok(aExpired[0].includes("`ctx_resume`"));
 
     // New turn (new lastPlannerAt) entering expiring again fires once for the new episode
@@ -701,7 +701,7 @@ test("P1-7.4: PreInvocation proactive expiring TTL alert (deduped >=60k, silent 
     const critAlerts = evaluateCacheAlerts(critDiag, { sessionId: "crit-handoff-sess", store });
     assert.equal(critAlerts.length, 1);
     assert.ok(critAlerts[0].includes("Handoff Brief"));
-    assert.ok(critAlerts[0].includes("`/compact`"));
+    assert.ok(critAlerts[0].includes("/compact"));
     assert.ok(critAlerts[0].includes("`ctx_resume`"));
 
     store.close();
@@ -728,7 +728,7 @@ test("P1-7.4: PreInvocation proactive expiring TTL alert (deduped >=60k, silent 
     const userMd = live1.injectSteps[0].systemMessage.metadata?.user_markdown || "";
     assert.ok(userMd.includes("KV-cache expiring in"), `Unexpected user_markdown: ${userMd}`);
     assert.ok(userMd.includes("Handoff Brief"));
-    assert.ok(userMd.includes("`/compact`"));
+    assert.ok(userMd.includes("/compact"));
     assert.ok(userMd.includes("$"));
 
     // Second live invocation on unchanged transcript MUST NOT re-emit

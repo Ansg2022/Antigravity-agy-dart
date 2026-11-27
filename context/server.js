@@ -168,6 +168,7 @@ let inFlightRootsPromise = null;
 let nextRootsReqSeq = 1;
 const pendingClientRequests = new Map();
 let initSessionId = null;
+let clientSupportsMcpUi = false;
 const callContext = new AsyncLocalStorage();
 
 function resolveHostSessionId() {
@@ -401,9 +402,159 @@ const RAW_TOOL_DEFINITIONS = [
   }
 ];
 
+const SUPPORTED_PROTOCOL_VERSIONS = new Set([
+  "2025-11-25",
+  "2025-06-18",
+  "2025-03-26",
+  "2024-11-05"
+]);
+const DEFAULT_PROTOCOL_VERSION = "2025-03-26";
+const SERVER_INSTRUCTIONS =
+  "Use ctx_execute with a short intent to filter >16 KB logs/JSON/CSV/API output locally (<=5 inline lines, else write a script under the conversation scratch dir or OS temp and pass file + args). Use ctx_index + ctx_search for long docs/URLs. After /compact call ctx_resume (pass sessionId on shared hosts).";
+
+export const MCP_APP_EXTENSION_ID = "io.modelcontextprotocol/ui";
+export const MCP_APP_MIME_TYPE = "text/html;profile=mcp-app";
+export const MCP_APP_RESOURCE_URI = "ui://agy-dart/diagnostics.html";
+const MCP_APP_TOOLS = new Set(["ctx_stats", "ctx_doctor"]);
+const MCP_APP_HTML_PATH = path.join(__dirname, "ui", "diagnostics.html");
+const MAX_MCP_APP_HTML_BYTES = 2 * 1024 * 1024;
+
+function detectClientMcpUiSupport(capabilities) {
+  const uiExt = capabilities?.extensions?.[MCP_APP_EXTENSION_ID];
+  if (!uiExt || typeof uiExt !== "object" || Array.isArray(uiExt)) return false;
+  if (Array.isArray(uiExt.mimeTypes) && uiExt.mimeTypes.length > 0) {
+    return uiExt.mimeTypes.some(
+      (m) => typeof m === "string" && m.trim().toLowerCase() === MCP_APP_MIME_TYPE
+    );
+  }
+  return true;
+}
+
+function readMcpAppDiagnosticsHtml() {
+  const overrideRaw = typeof process.env.AGY_DART_MCP_APP_HTML === "string" ? process.env.AGY_DART_MCP_APP_HTML.trim() : "";
+  let targetPath = MCP_APP_HTML_PATH;
+  if (overrideRaw && /\.html?$/i.test(overrideRaw)) {
+    const resolvedOverride = path.resolve(overrideRaw);
+    try {
+      const st = fs.statSync(resolvedOverride);
+      if (st.isFile() && st.size > 0 && st.size <= MAX_MCP_APP_HTML_BYTES) {
+        targetPath = resolvedOverride;
+      }
+    } catch {}
+  }
+  const st = fs.statSync(targetPath);
+  if (!st.isFile() || st.size <= 0 || st.size > MAX_MCP_APP_HTML_BYTES) {
+    throw new Error("Invalid diagnostics UI resource size");
+  }
+  return fs.readFileSync(targetPath, "utf8");
+}
+
+function buildCompactStatsModelSummary(result) {
+  const s = result?.stats || {};
+  const g = result?.ghost || {};
+  const summary = {
+    sessionId: s.sessionId || "",
+    calls: s.calls || 0,
+    totalRawBytes: s.totalRawBytes || 0,
+    totalReturnedBytes: s.totalReturnedBytes || 0,
+    keptOutBytes: s.keptOutBytes || 0,
+    tokensKeptOut: s.tokensKeptOut || 0,
+    savingsPercent: s.savingsPercent || 0,
+    uiRendered: true
+  };
+  if (g.totalBlocked > 0) {
+    summary.ghost = {
+      totalBlocked: g.totalBlocked,
+      ghostRecalls: g.ghostRecalls,
+      evictionEfficiency: g.evictionEfficiency,
+      ...(g.recommendation ? { recommendation: g.recommendation } : {})
+    };
+  }
+  return summary;
+}
+
+function buildCompactDoctorModelSummary(result) {
+  const d = result?.doctor || {};
+  const rg = result?.readGuard || {};
+  const feat = result?.features || {};
+  const sm = result?.safetyMonitor || {};
+  const cfg = result?.config || {};
+  const pf = result?.projectFilters || {};
+  const isHealthy = Boolean(d.allOk === true || d.ok === true || String(d.status || "").toUpperCase() === "HEALTHY");
+  return {
+    ok: isHealthy,
+    status: d.status || (isHealthy ? "HEALTHY" : "ERROR"),
+    dbSizeBytes: d.dbSizeBytes || 0,
+    sources: d.totalSources ?? d.sources ?? d.sourcesCount ?? 0,
+    events: d.totalEvents ?? d.events ?? d.eventsCount ?? 0,
+    chunks: d.totalChunksIndexed ?? d.chunks ?? d.chunksCount ?? 0,
+    readGuardMode: rg.mode || "",
+    sourceCutoffBytes: rg.sourceCutoffBytes ?? null,
+    cliFilterEnabled: Boolean(feat.cliFilterEnabled),
+    readDedupEnabled: Boolean(feat.readDedupEnabled),
+    safetyStatus: sm.status || "not_detected",
+    safetySeverity: sm.severity || "none",
+    configLoaded: Boolean(cfg.loaded),
+    ...(cfg.error ? { configError: cfg.error } : {}),
+    projectFiltersLoaded: pf.loadedCount || 0,
+    projectFiltersRejected: pf.rejectedCount || 0,
+    uiRendered: true
+  };
+}
+
+function formatToolCallResponse(toolName, result, { uiSupported = false } = {}) {
+  if (typeof result === "string") {
+    return {
+      content: [{ type: "text", text: result }],
+      isError: false
+    };
+  }
+  if (toolName === "ctx_stats" && result && typeof result === "object") {
+    const structured = {
+      stats: result.stats,
+      ghost: result.ghost,
+      featureRoi: result.featureRoi
+    };
+    if (uiSupported) {
+      return {
+        content: [{ type: "text", text: JSON.stringify(buildCompactStatsModelSummary(result)) }],
+        structuredContent: { kind: "ctx_stats", ...structured },
+        isError: false
+      };
+    }
+    return {
+      content: [{ type: "text", text: JSON.stringify(structured) }],
+      isError: false
+    };
+  }
+  if (toolName === "ctx_doctor" && result && typeof result === "object" && uiSupported) {
+    return {
+      content: [{ type: "text", text: JSON.stringify(buildCompactDoctorModelSummary(result)) }],
+      structuredContent: { kind: "ctx_doctor", ...result },
+      isError: false
+    };
+  }
+  return {
+    content: [{ type: "text", text: JSON.stringify(result) }],
+    isError: false
+  };
+}
+
 export const TOOL_DEFINITIONS = Object.freeze(
   RAW_TOOL_DEFINITIONS
     .map((def) => stableSortObject(def))
+    .sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0))
+);
+
+export const TOOL_DEFINITIONS_WITH_UI = Object.freeze(
+  RAW_TOOL_DEFINITIONS
+    .map((def) =>
+      stableSortObject(
+        MCP_APP_TOOLS.has(def.name)
+          ? { ...def, _meta: { ui: { resourceUri: MCP_APP_RESOURCE_URI } } }
+          : def
+      )
+    )
     .sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0))
 );
 
@@ -565,6 +716,7 @@ rl.on("line", async (line) => {
         clientSupportsRoots = Boolean(
           params?.capabilities && typeof params.capabilities === "object" && params.capabilities.roots
         );
+        clientSupportsMcpUi = detectClientMcpUiSupport(params?.capabilities);
         const initCandidates = [
           ...(Array.isArray(params?.workspaceFolders)
             ? params.workspaceFolders.map((w) => w?.uri || w?.path)
@@ -579,13 +731,21 @@ rl.on("line", async (line) => {
         }
         const initSid = normalizeSessionId(params?.sessionId);
         if (initSid) initSessionId = initSid;
+        const requestedProto = typeof params?.protocolVersion === "string" ? params.protocolVersion.trim() : "";
+        const protocolVersion = SUPPORTED_PROTOCOL_VERSIONS.has(requestedProto)
+          ? requestedProto
+          : DEFAULT_PROTOCOL_VERSION;
+        const capabilities = clientSupportsMcpUi
+          ? { tools: {}, resources: {}, extensions: { [MCP_APP_EXTENSION_ID]: {} } }
+          : { tools: {} };
         sendResponse(id, {
-          protocolVersion: params?.protocolVersion || "2024-11-05",
-          capabilities: { tools: {} },
+          protocolVersion,
+          capabilities,
           serverInfo: {
             name: "agy-dart-context",
             version: pkgVersion
-          }
+          },
+          instructions: SERVER_INSTRUCTIONS
         });
         break;
       }
@@ -596,7 +756,62 @@ rl.on("line", async (line) => {
       }
 
       case "tools/list": {
-        sendResponse(id, { tools: TOOL_DEFINITIONS });
+        sendResponse(id, { tools: clientSupportsMcpUi ? TOOL_DEFINITIONS_WITH_UI : TOOL_DEFINITIONS });
+        break;
+      }
+
+      case "resources/list": {
+        sendResponse(id, {
+          resources: clientSupportsMcpUi
+            ? [
+                {
+                  uri: MCP_APP_RESOURCE_URI,
+                  name: "agy-dart Diagnostics",
+                  description: "Interactive inline card for agy-dart context savings (ctx_stats) and runtime health (ctx_doctor).",
+                  mimeType: MCP_APP_MIME_TYPE,
+                  _meta: { ui: { prefersBorder: true } }
+                }
+              ]
+            : []
+        });
+        break;
+      }
+
+      case "resources/read": {
+        const uri = typeof params?.uri === "string" ? params.uri.trim() : "";
+        if (!uri) {
+          sendError(id, -32602, "Invalid params: 'uri' is required");
+          break;
+        }
+        if (uri !== MCP_APP_RESOURCE_URI) {
+          sendError(id, -32002, `Resource not found: ${uri}`);
+          break;
+        }
+        try {
+          const html = readMcpAppDiagnosticsHtml();
+          sendResponse(id, {
+            contents: [
+              {
+                uri: MCP_APP_RESOURCE_URI,
+                mimeType: MCP_APP_MIME_TYPE,
+                text: html,
+                _meta: { ui: { prefersBorder: true } }
+              }
+            ]
+          });
+        } catch (readErr) {
+          sendError(id, -32603, `Failed to read UI resource: ${readErr?.message || String(readErr)}`);
+        }
+        break;
+      }
+
+      case "resources/templates/list": {
+        sendResponse(id, { resourceTemplates: [] });
+        break;
+      }
+
+      case "prompts/list": {
+        sendResponse(id, { prompts: [] });
         break;
       }
 
@@ -701,15 +916,10 @@ rl.on("line", async (line) => {
             },
             () => tools[toolName](toolArgs)
           );
-          sendResponse(id, {
-            content: [
-              {
-                type: "text",
-                text: typeof result === "string" ? result : JSON.stringify(result, null, 2)
-              }
-            ],
-            isError: false
-          });
+          sendResponse(
+            id,
+            formatToolCallResponse(toolName, result, { uiSupported: clientSupportsMcpUi })
+          );
         } catch (toolErr) {
           sendResponse(id, {
             content: [

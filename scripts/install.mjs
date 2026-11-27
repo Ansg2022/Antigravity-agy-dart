@@ -122,6 +122,7 @@ export function buildMcpConfigObject(toolLoading = "fast-eager") {
   const contextEntry = {
     command: "node",
     args: ["${PLUGIN_ROOT}/context/server.js"],
+    timeoutSeconds: 310,
     ...(normalized === "eager" ? { tools: buildEagerToolsConfig(CONTEXT_MCP_TOOL_NAMES) } : {})
   };
   return {
@@ -204,7 +205,9 @@ export const RUNTIME_FILES = Object.freeze([
   "fast/mcp-server.mjs",
   "fast/session-start.mjs",
   "context/server.js",
+  "context/ui/diagnostics.html",
   "context/lib/config.js",
+  "context/lib/conversation-api.js",
   "context/lib/code-outline.js",
   "context/lib/store.js",
   "context/lib/store/schema.js",
@@ -521,7 +524,7 @@ async function applyMode(targetDir, modeKey, skipDb = false, { explicitMode = tr
       ],
       PostToolUse: [
         {
-          matcher: "run_command|edit_file|write_file|replace_file_content|multi_replace_file_content|write_to_file|.*apply_edits|.*run_checks|.*read_slices|.*batch_search|.*ctx_resume|.*ctx_execute|.*ctx_index|.*ctx_batch|call_mcp_tool",
+          matcher: "run_command|edit_file|write_file|replace_file_content|multi_replace_file_content|write_to_file|.*apply_edits|.*run_checks|.*ctx_resume|.*ctx_execute|.*ctx_index|.*ctx_batch|call_mcp_tool",
           hooks: [
             {
               type: "command",

@@ -1,0 +1,728 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>agy-dart Diagnostics</title>
+<style>
+:root {
+  color-scheme: light dark;
+  --bg-1: var(--color-background-primary, #ffffff);
+  --bg-2: var(--color-background-secondary, #f6f7f9);
+  --bg-3: var(--color-background-tertiary, #eef1f5);
+  --bg-info: var(--color-background-info, #e8f1fd);
+  --bg-ok: var(--color-background-success, #e7f6ec);
+  --bg-warn: var(--color-background-warning, #fef6e0);
+  --bg-err: var(--color-background-danger, #fdecea);
+  --fg-1: var(--color-text-primary, #171a1f);
+  --fg-2: var(--color-text-secondary, #525b68);
+  --fg-3: var(--color-text-tertiary, #7a8391);
+  --fg-info: var(--color-text-info, #175cd3);
+  --fg-ok: var(--color-text-success, #16794f);
+  --fg-warn: var(--color-text-warning, #9a6700);
+  --fg-err: var(--color-text-danger, #c62828);
+  --bd-1: var(--color-border-primary, #dde2e8);
+  --bd-2: var(--color-border-secondary, #e9edf2);
+  --font: var(--font-sans, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif);
+  --mono: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+}
+:root[data-theme="dark"] {
+  --bg-1: var(--color-background-primary, #16181d);
+  --bg-2: var(--color-background-secondary, #1e2128);
+  --bg-3: var(--color-background-tertiary, #272b34);
+  --bg-info: var(--color-background-info, #182942);
+  --bg-ok: var(--color-background-success, #152e23);
+  --bg-warn: var(--color-background-warning, #332712);
+  --bg-err: var(--color-background-danger, #391b1d);
+  --fg-1: var(--color-text-primary, #eceff4);
+  --fg-2: var(--color-text-secondary, #a8b2c1);
+  --fg-3: var(--color-text-tertiary, #7f8a9a);
+  --fg-info: var(--color-text-info, #7cb4ff);
+  --fg-ok: var(--color-text-success, #57d195);
+  --fg-warn: var(--color-text-warning, #f2c14e);
+  --fg-err: var(--color-text-danger, #ff7b7b);
+  --bd-1: var(--color-border-primary, #2e3440);
+  --bd-2: var(--color-border-secondary, #252a34);
+}
+* { box-sizing: border-box; }
+html, body {
+  margin: 0;
+  padding: 0;
+  background: var(--bg-1);
+  color: var(--fg-1);
+  font-family: var(--font);
+  font-size: 13px;
+  line-height: 1.45;
+  -webkit-font-smoothing: antialiased;
+}
+.shell {
+  padding: 12px 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.hdr {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.hdr-left {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+.title {
+  font-size: 14px;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+}
+.badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 8px;
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 600;
+  border: 1px solid var(--bd-1);
+  background: var(--bg-2);
+  color: var(--fg-2);
+  white-space: nowrap;
+}
+.badge.ok { background: var(--bg-ok); color: var(--fg-ok); border-color: transparent; }
+.badge.warn { background: var(--bg-warn); color: var(--fg-warn); border-color: transparent; }
+.badge.err { background: var(--bg-err); color: var(--fg-err); border-color: transparent; }
+.badge.info { background: var(--bg-info); color: var(--fg-info); border-color: transparent; }
+.mono {
+  font-family: var(--mono);
+  font-size: 11.5px;
+}
+.btn {
+  appearance: none;
+  border: 1px solid var(--bd-1);
+  background: var(--bg-2);
+  color: var(--fg-1);
+  border-radius: 6px;
+  padding: 4px 9px;
+  font-size: 11.5px;
+  font-weight: 500;
+  cursor: pointer;
+}
+.btn:hover { background: var(--bg-3); }
+.btn:disabled { opacity: 0.55; cursor: default; }
+.grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(128px, 1fr));
+  gap: 8px;
+}
+.kpi {
+  background: var(--bg-2);
+  border: 1px solid var(--bd-2);
+  border-radius: 8px;
+  padding: 8px 10px;
+}
+.kpi-label {
+  font-size: 11px;
+  color: var(--fg-2);
+  margin-bottom: 2px;
+}
+.kpi-val {
+  font-size: 16px;
+  font-weight: 650;
+  letter-spacing: -0.02em;
+}
+.kpi-sub {
+  font-size: 11px;
+  color: var(--fg-3);
+  margin-top: 2px;
+  word-break: break-word;
+}
+.panel {
+  background: var(--bg-2);
+  border: 1px solid var(--bd-2);
+  border-radius: 8px;
+  padding: 9px 11px;
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+}
+.sec-title {
+  font-size: 11.5px;
+  font-weight: 600;
+  color: var(--fg-2);
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+}
+.bar-row {
+  display: grid;
+  grid-template-columns: 118px 1fr 68px;
+  align-items: center;
+  gap: 8px;
+  font-size: 12px;
+}
+.bar-track {
+  height: 8px;
+  border-radius: 999px;
+  background: var(--bg-3);
+  overflow: hidden;
+}
+.bar-fill {
+  height: 100%;
+  border-radius: 999px;
+  background: var(--fg-info);
+  transition: width 0.2s ease;
+}
+.bar-fill.muted { background: var(--fg-3); opacity: 0.55; }
+.bar-fill.ok { background: var(--fg-ok); }
+.bar-num {
+  text-align: right;
+  font-family: var(--mono);
+  font-size: 11.5px;
+  color: var(--fg-2);
+}
+.callout {
+  border-radius: 7px;
+  padding: 7px 10px;
+  font-size: 12px;
+  background: var(--bg-warn);
+  color: var(--fg-warn);
+}
+.callout.ok { background: var(--bg-ok); color: var(--fg-ok); }
+.callout.err { background: var(--bg-err); color: var(--fg-err); }
+.callout.info { background: var(--bg-info); color: var(--fg-info); }
+.pills {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 12px;
+}
+th, td {
+  text-align: left;
+  padding: 4px 6px;
+  border-bottom: 1px solid var(--bd-2);
+}
+th {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--fg-2);
+}
+td.num, th.num {
+  text-align: right;
+  font-family: var(--mono);
+  font-size: 11.5px;
+}
+tr:last-child td { border-bottom: none; }
+.empty {
+  color: var(--fg-2);
+  padding: 14px 4px;
+  text-align: center;
+}
+</style>
+</head>
+<body>
+<div id="root" class="shell">
+  <div class="empty">Connecting to agy-dart diagnostics…</div>
+</div>
+<script>
+(function () {
+  "use strict";
+
+  const PROTOCOL_VERSION = "2026-01-26";
+  const CSS_VAR_RE = /^--[a-zA-Z0-9_-]+$/;
+  const rootEl = document.getElementById("root");
+
+  let nextReqId = 1;
+  const pending = new Map();
+  let hostCapabilities = {};
+  let activeTool = "";
+  let lastToolArgs = {};
+  let isRefreshing = false;
+
+  function el(tag, cls, text) {
+    const node = document.createElement(tag);
+    if (cls) node.className = cls;
+    if (text !== undefined && text !== null) node.textContent = String(text);
+    return node;
+  }
+
+  function clear(node) {
+    while (node.firstChild) node.removeChild(node.firstChild);
+  }
+
+  function fmtBytes(n) {
+    const v = Number(n || 0);
+    if (!Number.isFinite(v) || v <= 0) return "0 B";
+    if (v < 1024) return v + " B";
+    if (v < 1024 * 1024) return (v / 1024).toFixed(1) + " KB";
+    return (v / (1024 * 1024)).toFixed(2) + " MB";
+  }
+
+  function fmtNum(n) {
+    const v = Number(n || 0);
+    return Number.isFinite(v) ? v.toLocaleString() : "0";
+  }
+
+  function shortSession(sid) {
+    const s = String(sid || "default");
+    return s.length > 22 ? s.slice(0, 12) + "…" + s.slice(-6) : s;
+  }
+
+  function applyHostContext(ctx) {
+    if (!ctx || typeof ctx !== "object") return;
+    if (ctx.theme === "dark" || ctx.theme === "light") {
+      document.documentElement.dataset.theme = ctx.theme;
+      document.documentElement.style.colorScheme = ctx.theme;
+    }
+    const vars = ctx.styles && ctx.styles.variables;
+    if (vars && typeof vars === "object") {
+      for (const [k, v] of Object.entries(vars)) {
+        if (CSS_VAR_RE.test(k) && typeof v === "string" && v.trim()) {
+          document.documentElement.style.setProperty(k, v.trim());
+        }
+      }
+    }
+  }
+
+  function postMessageRpc(msg) {
+    if (window.parent && window.parent !== window) {
+      window.parent.postMessage(msg, "*");
+    }
+  }
+
+  function sendRequest(method, params) {
+    return new Promise((resolve, reject) => {
+      const id = nextReqId++;
+      const timer = setTimeout(() => {
+        pending.delete(id);
+        reject(new Error("Host RPC timeout: " + method));
+      }, 15000);
+      pending.set(id, {
+        resolve: (val) => { clearTimeout(timer); resolve(val); },
+        reject: (err) => { clearTimeout(timer); reject(err); }
+      });
+      postMessageRpc({ jsonrpc: "2.0", id, method, params });
+    });
+  }
+
+  function sendNotification(method, params) {
+    postMessageRpc({ jsonrpc: "2.0", method, params: params || {} });
+  }
+
+  let resizeQueued = false;
+  function reportSize() {
+    if (resizeQueued) return;
+    resizeQueued = true;
+    requestAnimationFrame(() => {
+      resizeQueued = false;
+      const height = Math.ceil(document.documentElement.scrollHeight || rootEl.offsetHeight || 160);
+      const width = Math.ceil(document.documentElement.scrollWidth || rootEl.offsetWidth || 480);
+      sendNotification("ui/notifications/size-changed", { width, height });
+    });
+  }
+
+  if (typeof ResizeObserver === "function") {
+    const ro = new ResizeObserver(() => reportSize());
+    ro.observe(rootEl);
+  }
+
+  function makeHeader(titleText, badges, refreshable) {
+    const hdr = el("div", "hdr");
+    const left = el("div", "hdr-left");
+    left.appendChild(el("div", "title", titleText));
+    for (const b of badges) {
+      left.appendChild(el("span", "badge" + (b.cls ? " " + b.cls : ""), b.text));
+    }
+    hdr.appendChild(left);
+    if (refreshable && hostCapabilities && hostCapabilities.serverTools && activeTool) {
+      const btn = el("button", "btn", isRefreshing ? "Refreshing…" : "Refresh");
+      btn.type = "button";
+      btn.disabled = isRefreshing;
+      btn.addEventListener("click", () => { void triggerRefresh(); });
+      hdr.appendChild(btn);
+    }
+    return hdr;
+  }
+
+  async function triggerRefresh() {
+    if (isRefreshing || !activeTool || !(hostCapabilities && hostCapabilities.serverTools)) return;
+    isRefreshing = true;
+    renderCurrentNotice();
+    try {
+      const res = await sendRequest("tools/call", { name: activeTool, arguments: lastToolArgs || {} });
+      isRefreshing = false;
+      handleToolResult(res);
+    } catch (err) {
+      isRefreshing = false;
+      renderError("Refresh failed: " + (err && err.message ? err.message : String(err)));
+    }
+  }
+
+  let lastRenderedPayload = null;
+  function renderCurrentNotice() {
+    if (lastRenderedPayload) renderPayload(lastRenderedPayload);
+  }
+
+  function renderError(message) {
+    clear(rootEl);
+    rootEl.appendChild(makeHeader("agy-dart Diagnostics", [{ text: "Error", cls: "err" }], true));
+    rootEl.appendChild(el("div", "callout err", message));
+    reportSize();
+  }
+
+  function renderStats(data) {
+    activeTool = "ctx_stats";
+    const s = data.stats || {};
+    const bd = s.breakdown || {};
+    const ghost = data.ghost || {};
+    const roi = data.featureRoi || {};
+
+    clear(rootEl);
+    rootEl.appendChild(
+      makeHeader(
+        "agy-dart Context Stats",
+        [
+          { text: shortSession(s.sessionId), cls: "mono" },
+          { text: (s.savingsPercent || 0) + "% saved", cls: (s.savingsPercent || 0) >= 50 ? "ok" : "info" }
+        ],
+        true
+      )
+    );
+
+    const grid = el("div", "grid");
+    const kpis = [
+      {
+        label: "Tokens Kept Out",
+        val: "~" + fmtNum(s.tokensKeptOut),
+        sub: fmtBytes(s.keptOutBytes) + " saved"
+      },
+      {
+        label: "Operations",
+        val: fmtNum(s.calls),
+        sub: "exec:" + (bd.executions || 0) + " idx:" + (bd.indexes || 0) + " fast:" + (bd.fastTools || 0) + " cli:" + (bd.cliFilters || 0) + " dedup:" + (bd.dedups || 0) + " guard:" + (bd.interceptions || 0)
+      },
+      {
+        label: "Raw Handled",
+        val: fmtBytes(s.totalRawBytes),
+        sub: "Fed to LLM: " + fmtBytes(s.totalReturnedBytes)
+      }
+    ];
+    if (ghost.totalBlocked > 0) {
+      const effPct = Math.round(Number(ghost.evictionEfficiency || 0) * 100);
+      kpis.push({
+        label: "Ghost Efficiency",
+        val: effPct + "%",
+        sub: "recalls: " + (ghost.ghostRecalls || 0) + "/" + ghost.totalBlocked
+      });
+    }
+    for (const k of kpis) {
+      const card = el("div", "kpi");
+      card.appendChild(el("div", "kpi-label", k.label));
+      card.appendChild(el("div", "kpi-val", k.val));
+      card.appendChild(el("div", "kpi-sub", k.sub));
+      grid.appendChild(card);
+    }
+    rootEl.appendChild(grid);
+
+    const bars = el("div", "panel");
+    bars.appendChild(el("div", "sec-title", "Context Footprint"));
+    const ratio = s.totalRawBytes > 0 ? Math.min(1, Math.max(0, Number(s.totalReturnedBytes || 0) / Number(s.totalRawBytes))) : 0;
+    const rows = [
+      { label: "Without agy-dart", pct: s.totalRawBytes > 0 ? 100 : 0, cls: "muted", val: fmtBytes(s.totalRawBytes) },
+      { label: "With agy-dart", pct: Math.round(ratio * 100), cls: "ok", val: fmtBytes(s.totalReturnedBytes) }
+    ];
+    for (const r of rows) {
+      const row = el("div", "bar-row");
+      row.appendChild(el("span", "", r.label));
+      const track = el("div", "bar-track");
+      const fill = el("div", "bar-fill " + r.cls);
+      fill.style.width = r.pct + "%";
+      track.appendChild(fill);
+      row.appendChild(track);
+      row.appendChild(el("span", "bar-num", r.val));
+      bars.appendChild(row);
+    }
+    rootEl.appendChild(bars);
+
+    if (ghost.recommendation) {
+      rootEl.appendChild(el("div", "callout", String(ghost.recommendation)));
+    }
+
+    const featuresObj = roi.features && typeof roi.features === "object" ? roi.features : null;
+    if (featuresObj) {
+      const entries = Object.entries(featuresObj)
+        .filter(([, v]) => v && typeof v === "object" && (Number(v.calls || 0) > 0 || Number(v.savedBytes || 0) > 0))
+        .sort((a, b) => Number(b[1].savedBytes || 0) - Number(a[1].savedBytes || 0));
+      if (entries.length > 0) {
+        const panel = el("div", "panel");
+        panel.appendChild(el("div", "sec-title", "Feature ROI Breakdown"));
+        const tbl = el("table");
+        const thead = el("thead");
+        const hr = el("tr");
+        hr.appendChild(el("th", "", "Feature"));
+        hr.appendChild(el("th", "num", "Calls"));
+        hr.appendChild(el("th", "num", "Saved"));
+        hr.appendChild(el("th", "", "Status"));
+        thead.appendChild(hr);
+        tbl.appendChild(thead);
+        const tbody = el("tbody");
+        for (const [name, info] of entries) {
+          const tr = el("tr");
+          tr.appendChild(el("td", "mono", name));
+          tr.appendChild(el("td", "num", fmtNum(info.calls || 0)));
+          tr.appendChild(el("td", "num", fmtBytes(info.savedBytes || 0)));
+          const stTd = el("td");
+          const st = String(info.status || "active");
+          const stCls = st === "high_roi" ? "ok" : st === "low_roi" ? "warn" : "info";
+          stTd.appendChild(el("span", "badge " + stCls, st));
+          tr.appendChild(stTd);
+          tbody.appendChild(tr);
+        }
+        tbl.appendChild(tbody);
+        panel.appendChild(tbl);
+        rootEl.appendChild(panel);
+      }
+    }
+
+    reportSize();
+  }
+
+  function renderDoctor(data) {
+    activeTool = "ctx_doctor";
+    const doc = data.doctor || {};
+    const feat = data.features || {};
+    const rg = data.readGuard || {};
+    const rd = data.readDedup || {};
+    const sm = data.safetyMonitor || {};
+    const cfg = data.config || {};
+    const pf = data.projectFilters || {};
+    const rt = data.runtimes || {};
+
+    const isHealthy = Boolean(doc.allOk === true || doc.ok === true || String(doc.status || "").toUpperCase() === "HEALTHY");
+    clear(rootEl);
+    rootEl.appendChild(
+      makeHeader(
+        "agy-dart Runtime Health",
+        [
+          { text: isHealthy ? "Healthy" : (doc.status || "Check Failed"), cls: isHealthy ? "ok" : "err" },
+          { text: [rt.node, rt.platform, rt.arch].filter(Boolean).join(" · "), cls: "mono" }
+        ],
+        true
+      )
+    );
+
+    const grid = el("div", "grid");
+    const cards = [
+      {
+        label: "SQLite Store",
+        val: fmtBytes(doc.dbSizeBytes || 0),
+        sub: "SQLite " + (doc.sqliteVersion || "?") + " · WAL " + fmtBytes(doc.walSizeBytes || 0) + " · schema v" + (doc.schemaVersion || "?")
+      },
+      {
+        label: "Read Guard",
+        val: String(rg.mode || "soft"),
+        sub: "cutoff " + fmtBytes(rg.sourceCutoffBytes || 0) + " (" + (rg.sourceCutoffSource || "default") + ")"
+      },
+      {
+        label: "Indexed Data",
+        val: fmtNum(doc.totalSources ?? doc.sources ?? doc.sourcesCount ?? 0) + " src",
+        sub: fmtNum(doc.totalEvents ?? doc.events ?? doc.eventsCount ?? 0) + " events · " + fmtNum(doc.totalChunksIndexed ?? doc.chunks ?? doc.chunksCount ?? 0) + " chunks"
+      },
+      {
+        label: "Safety Monitor",
+        val: String(sm.status || "not_detected"),
+        sub: "severity: " + String(sm.severity || "none")
+      }
+    ];
+    for (const c of cards) {
+      const card = el("div", "kpi");
+      card.appendChild(el("div", "kpi-label", c.label));
+      card.appendChild(el("div", "kpi-val", c.val));
+      card.appendChild(el("div", "kpi-sub", c.sub));
+      grid.appendChild(card);
+    }
+    rootEl.appendChild(grid);
+
+    const featPanel = el("div", "panel");
+    featPanel.appendChild(el("div", "sec-title", "Active Protections"));
+    const pills = el("div", "pills");
+    const toggles = [
+      ["CLI Filter", feat.cliFilterEnabled],
+      ["Read Dedup", feat.readDedupEnabled],
+      ["Diff Read", feat.diffReadEnabled],
+      ["Secret Redaction", feat.secretRedactionEnabled],
+      ["Sensitive Guard: " + (feat.sensitiveFileGuardMode || "off"), feat.sensitiveFileGuardMode && feat.sensitiveFileGuardMode !== "off"],
+      ["Safety Audit", feat.safetyAuditEnabled]
+    ];
+    for (const [label, on] of toggles) {
+      pills.appendChild(el("span", "badge " + (on ? "ok" : ""), label + (label.includes(":") ? "" : (on ? ": on" : ": off"))));
+    }
+    featPanel.appendChild(pills);
+    if (rd.enabled) {
+      featPanel.appendChild(
+        el("div", "kpi-sub", "Read Dedup window: min " + fmtBytes(rd.minBytes || 0) + ", max " + (rd.maxSteps || 0) + " steps / " + (rd.maxTurns || 0) + " turns")
+      );
+    }
+    rootEl.appendChild(featPanel);
+
+    if (sm.severity && sm.severity !== "none") {
+      const sevCls = sm.severity === "high" || sm.severity === "critical" ? "err" : "warn";
+      const msg = sm.summary || ("Safety Monitor status: " + sm.status + " (" + sm.severity + ")");
+      rootEl.appendChild(el("div", "callout " + sevCls, msg));
+    }
+
+    const cfgPanel = el("div", "panel");
+    cfgPanel.appendChild(el("div", "sec-title", "Config & Project Filters"));
+    const overrideKeys = cfg.overrides && typeof cfg.overrides === "object" ? Object.keys(cfg.overrides) : [];
+    const cfgLine = cfg.error
+      ? "Config error: " + cfg.error
+      : "Config: " + (cfg.loaded ? "loaded" : "defaults") + (overrideKeys.length ? " (" + overrideKeys.length + " overrides: " + overrideKeys.join(", ") + ")" : "");
+    cfgPanel.appendChild(el("div", "kpi-sub", cfgLine));
+    const pfLine = pf.error
+      ? "Project filters error: " + pf.error
+      : "Project filters: " + (pf.exists ? ((pf.loadedCount || 0) + " loaded, " + (pf.rejectedCount || 0) + " rejected") : "none (.agy-dart/filters.json not present)");
+    cfgPanel.appendChild(el("div", "kpi-sub", pfLine));
+    rootEl.appendChild(cfgPanel);
+
+    reportSize();
+  }
+
+  function renderPayload(payload) {
+    lastRenderedPayload = payload;
+    if (!payload || typeof payload !== "object") {
+      renderError("No diagnostic payload received.");
+      return;
+    }
+    if (payload.kind === "ctx_doctor" || payload.doctor) {
+      renderDoctor(payload);
+      return;
+    }
+    if (payload.kind === "ctx_stats" || payload.stats) {
+      renderStats(payload);
+      return;
+    }
+    clear(rootEl);
+    rootEl.appendChild(makeHeader("agy-dart Diagnostics", [], false));
+    rootEl.appendChild(el("pre", "mono", JSON.stringify(payload, null, 2)));
+    reportSize();
+  }
+
+  function extractResultPayload(toolResult) {
+    if (!toolResult || typeof toolResult !== "object") return null;
+    if (toolResult.structuredContent && typeof toolResult.structuredContent === "object") {
+      return toolResult.structuredContent;
+    }
+    const content = Array.isArray(toolResult.content) ? toolResult.content : [];
+    for (const block of content) {
+      if (block && block.type === "text" && typeof block.text === "string") {
+        try {
+          const parsed = JSON.parse(block.text);
+          if (parsed && typeof parsed === "object") return parsed;
+        } catch {}
+      }
+    }
+    return null;
+  }
+
+  function handleToolResult(toolResult) {
+    if (toolResult && toolResult.isError) {
+      const errText =
+        (Array.isArray(toolResult.content) && toolResult.content[0] && toolResult.content[0].text) ||
+        "Tool returned an error.";
+      renderError(errText);
+      return;
+    }
+    const payload = extractResultPayload(toolResult);
+    if (payload) {
+      renderPayload(payload);
+    } else {
+      renderError("Empty diagnostic result.");
+    }
+  }
+
+  window.addEventListener("message", (event) => {
+    const msg = event && event.data;
+    if (!msg || typeof msg !== "object" || msg.jsonrpc !== "2.0") return;
+
+    // Reply to host requests (e.g. ping)
+    if (msg.method && msg.id !== undefined && msg.id !== null) {
+      if (msg.method === "ping") {
+        postMessageRpc({ jsonrpc: "2.0", id: msg.id, result: {} });
+      } else {
+        postMessageRpc({
+          jsonrpc: "2.0",
+          id: msg.id,
+          error: { code: -32601, message: "Method not found: " + msg.method }
+        });
+      }
+      return;
+    }
+
+    // Response to our outbound request
+    if (!msg.method && msg.id !== undefined && msg.id !== null) {
+      const p = pending.get(msg.id);
+      if (p) {
+        pending.delete(msg.id);
+        if (msg.error) p.reject(new Error(msg.error.message || "RPC error"));
+        else p.resolve(msg.result);
+      }
+      return;
+    }
+
+    // Host notifications
+    switch (msg.method) {
+      case "ui/notifications/host-context-changed":
+        applyHostContext(msg.params);
+        break;
+      case "ui/notifications/tool-input":
+        if (msg.params && msg.params.arguments && typeof msg.params.arguments === "object") {
+          lastToolArgs = msg.params.arguments;
+        }
+        if (!lastRenderedPayload) {
+          clear(rootEl);
+          rootEl.appendChild(el("div", "empty", "Loading agy-dart diagnostics…"));
+          reportSize();
+        }
+        break;
+      case "ui/notifications/tool-result":
+        handleToolResult(msg.params);
+        break;
+      case "ui/notifications/tool-cancelled":
+        clear(rootEl);
+        rootEl.appendChild(el("div", "callout", "Diagnostic request cancelled."));
+        reportSize();
+        break;
+      default:
+        break;
+    }
+  });
+
+  sendRequest("ui/initialize", {
+    appInfo: { name: "agy-dart-diagnostics", version: "1.8.2" },
+    appCapabilities: {},
+    protocolVersion: PROTOCOL_VERSION
+  })
+    .then((initRes) => {
+      if (initRes && typeof initRes === "object") {
+        if (initRes.hostCapabilities && typeof initRes.hostCapabilities === "object") {
+          hostCapabilities = initRes.hostCapabilities;
+        }
+        applyHostContext(initRes.hostContext);
+      }
+      sendNotification("ui/notifications/initialized", {});
+      reportSize();
+    })
+    .catch(() => {
+      // Standalone preview fallback without host frame
+      reportSize();
+    });
+})();
+</script>
+</body>
+</html>
