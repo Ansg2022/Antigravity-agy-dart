@@ -1701,10 +1701,10 @@
 
     /* Safety Monitor Quota-Burn Audit Strip / Alert Card (Issue #1886) */
     .safety-strip {
-      padding: 8px 12px;
+      padding: 10px 12px;
       display: flex;
       flex-direction: column;
-      gap: 8px;
+      gap: 7px;
       transition: background 150ms ease, border-color 150ms ease;
     }
 
@@ -1723,7 +1723,7 @@
       align-items: center;
       justify-content: space-between;
       gap: 8px;
-      flex-wrap: wrap;
+      flex-wrap: nowrap;
     }
 
     .safety-head-left {
@@ -1732,14 +1732,22 @@
       gap: 6px;
       min-width: 0;
       flex: 1 1 auto;
+      overflow: hidden;
+    }
+
+    .safety-head-left .band-title,
+    .safety-head-left .meta-tag,
+    .safety-head-row .band-actions {
+      white-space: nowrap;
+      flex-shrink: 0;
     }
 
     .safety-inline-summary {
+      margin: 0;
       font-size: 11.5px;
-      color: var(--text-muted);
-      white-space: nowrap;
-      overflow: hidden;
-      text-overflow: ellipsis;
+      line-height: 1.45;
+      color: var(--text-secondary);
+      overflow-wrap: anywhere;
     }
 
     .safety-strip.is-warn .safety-inline-summary {
@@ -1756,14 +1764,36 @@
       display: flex;
       flex-direction: column;
       gap: 8px;
-      padding-top: 6px;
+      padding-top: 7px;
       border-top: 1px solid var(--border-subtle);
     }
 
-    .safety-diagnosis {
+    .safety-advice-box {
+      margin: 0;
+      padding: 8px 10px;
+      border-radius: var(--radius-md);
+      background: var(--bg-panel);
+      border: 1px solid var(--border);
       font-size: 12px;
-      line-height: 1.45;
+      line-height: 1.5;
       color: var(--text-primary);
+    }
+
+    .safety-strip.is-warn .safety-advice-box {
+      border-color: var(--warn-border);
+      background: rgba(255, 255, 255, 0.82);
+    }
+
+    .safety-strip.is-critical .safety-advice-box {
+      border-color: var(--danger-border);
+      background: rgba(255, 255, 255, 0.88);
+    }
+
+    .safety-diagnosis {
+      margin: 0;
+      font-size: 11.5px;
+      line-height: 1.5;
+      color: var(--text-secondary);
     }
 
     .safety-reasons-row {
@@ -1777,10 +1807,9 @@
       font-size: 11px;
       padding: 2px 7px;
       border-radius: 999px;
-      background: var(--surface-elevated);
-      border: 1px solid var(--border-subtle);
+      background: var(--bg-panel);
+      border: 1px solid var(--border);
       color: var(--text-secondary);
-      font-family: var(--font-mono);
     }
 
     .safety-actions-row {
@@ -2781,38 +2810,40 @@
     <section id="safety-audit-card" class="band safety-strip" role="region" aria-label="Safety Monitor Audit">
       <div class="safety-head-row">
         <div class="safety-head-left">
-          <span class="band-title" data-i18n="safetyCardTitle">Safety Monitor</span>
+          <span class="band-title" data-i18n="safetyCardTitle">Safety Check</span>
           <span id="safety-status-badge" class="meta-tag">--</span>
-          <span id="safety-inline-summary" class="safety-inline-summary" data-i18n="safetyChecking">Scanning Antigravity safety logs...</span>
         </div>
         <div class="band-actions">
           <button id="safety-toggle-btn" type="button" onclick="toggleSafetyAuditDetails()" class="btn btn-ghost btn-sm" data-i18n="safetyDetailsBtn">Details</button>
-          <button id="safety-refresh-btn" type="button" onclick="refreshSafetyAudit(true)" class="btn btn-ghost btn-sm" data-i18n="refreshBtn" data-i18n-title="safetyRefreshTip" title="Force incremental re-scan of local Desktop/CLI safety logs">Refresh</button>
+          <button id="safety-refresh-btn" type="button" onclick="refreshSafetyAudit(true)" class="btn btn-ghost btn-sm" data-i18n="refreshBtn" data-i18n-title="safetyRefreshTip" title="Re-scan local Antigravity logs for hidden background checks">Refresh</button>
         </div>
       </div>
 
+      <p id="safety-inline-summary" class="safety-inline-summary" data-i18n="safetyChecking">Checking background safety logs...</p>
+
       <div id="safety-details-body" class="safety-details-body hidden">
-        <div id="safety-diagnosis-text" class="safety-diagnosis"></div>
+        <p id="safety-advice-box" class="safety-advice-box hidden"></p>
+        <p id="safety-diagnosis-text" class="safety-diagnosis"></p>
 
         <div class="kpi-strip">
-          <div class="kpi-cell" data-i18n-title="safetyKpiPrecheckTip" title="sir_flash_lite pre-checks in rolling 5h window (~4,400 cliff triggers 429 fallback)">
-            <span class="kpi-label" data-i18n="safetyKpiPrecheck">5H PRE-CHECKS</span>
+          <div class="kpi-cell" data-i18n-title="safetyKpiPrecheckTip" title="Routine background checks in the last 5h (~4,400 triggers 429 heavy fallback)">
+            <span class="kpi-label" data-i18n="safetyKpiPrecheck">5H CHECKS</span>
             <span id="safety-kpi-prechecks" class="kpi-value kpi-value-sm">0 / 4,400</span>
             <span id="safety-kpi-prechecks-sub" class="kpi-sub">0%</span>
           </div>
-          <div class="kpi-cell" data-i18n-title="safetyKpiHeavyTip" title="severe_internal_risks_agy (gemini-4-hydrogen-sonar) heavy reviews up to 300K chars and false-alarm rate">
+          <div class="kpi-cell" data-i18n-title="safetyKpiHeavyTip" title="Full-model background re-reviews (up to ~300K chars each) and how many were false alarms">
             <span class="kpi-label" data-i18n="safetyKpiHeavy">HEAVY REVIEWS</span>
             <span id="safety-kpi-heavy" class="kpi-value kpi-value-sm">0</span>
             <span id="safety-kpi-heavy-sub" class="kpi-sub">avg 0K chars</span>
           </div>
-          <div class="kpi-cell" data-i18n-title="safetyKpiHiddenTip" title="Hidden background safety requests vs total streamGenerateContent calls (correlated by tid)">
-            <span class="kpi-label" data-i18n="safetyKpiHidden">HIDDEN STREAM</span>
+          <div class="kpi-cell" data-i18n-title="safetyKpiHiddenTip" title="Share of all requests spent on hidden background safety checks">
+            <span class="kpi-label" data-i18n="safetyKpiHidden">HIDDEN REQUESTS</span>
             <span id="safety-kpi-hidden" class="kpi-value kpi-value-sm">--%</span>
             <span id="safety-kpi-hidden-sub" class="kpi-sub">0 / 0 reqs</span>
           </div>
-          <div class="kpi-cell" data-i18n-title="safetyKpi429Tip" title="Strict HTTP 429 / parent sir_flash_lite fallback count and cumulative monitor wait time">
-            <span class="kpi-label" data-i18n="safetyKpi429">429 / WAIT TAX</span>
-            <span id="safety-kpi-429" class="kpi-value kpi-value-sm">0 / 0s</span>
+          <div class="kpi-cell" data-i18n-title="safetyKpi429Tip" title="Extra waiting time caused by background safety checks and estimated token burn">
+            <span class="kpi-label" data-i18n="safetyKpi429">WAIT &amp; EST. BURN</span>
+            <span id="safety-kpi-429" class="kpi-value kpi-value-sm">0s</span>
             <span id="safety-kpi-429-sub" class="kpi-sub">est. 0 tok</span>
           </div>
         </div>
@@ -2821,8 +2852,8 @@
         <div id="safety-restart-note" class="muted-note hidden"></div>
 
         <div class="safety-actions-row">
-          <button id="safety-handoff-btn" type="button" onclick="openSafetyHandoffBrief()" class="btn btn-primary btn-sm hidden" data-i18n="safetyHandoffBtn">Generate Handoff Brief</button>
-          <button id="safety-copy-report-btn" type="button" onclick="copySafetyAuditReport()" class="btn btn-secondary btn-sm" data-i18n="safetyCopyReportBtn">Copy Redacted Report</button>
+          <button id="safety-handoff-btn" type="button" onclick="openSafetyHandoffBrief()" class="btn btn-primary btn-sm hidden" data-i18n="safetyHandoffBtn" data-i18n-title="safetyHandoffTip" title="Pack current progress into a short summary so you can continue in a fresh chat">Pack Progress &amp; New Chat</button>
+          <button id="safety-copy-report-btn" type="button" onclick="copySafetyAuditReport()" class="btn btn-secondary btn-sm" data-i18n="safetyCopyReportBtn" data-i18n-title="safetyCopyReportTip" title="Copy privacy-scrubbed audit evidence (for bug reports)">Copy Evidence (Redacted)</button>
           <span id="safety-action-feedback" class="safety-feedback hidden"></span>
         </div>
       </div>
@@ -3569,39 +3600,62 @@
         versionErrRecovery: 'Update and rollback failed; backup preserved for manual recovery.',
         versionErrInstall: 'Failed to replace installed plugin files.',
         versionErrRestoredSuffix: ' Previous files were restored.',
-        safetyCardTitle: 'Safety Monitor',
-        safetyChecking: 'Scanning local safety logs...',
+        safetyCardTitle: 'Safety Check',
+        safetyChecking: 'Checking background safety logs...',
         safetyDetailsBtn: 'Details',
         safetyHideBtn: 'Hide',
-        safetyRefreshTip: 'Force incremental re-scan of local Antigravity Desktop/CLI safety logs',
-        safetyKpiPrecheck: '5H PRE-CHECKS',
-        safetyKpiPrecheckTip: 'sir_flash_lite pre-checks in rolling 5h window (~4,400 cliff triggers 429 fallback)',
+        safetyRefreshTip: 'Re-scan local Antigravity Desktop/CLI logs for hidden background safety checks',
+        safetyKpiPrecheck: '5H ROUTINE CHECKS',
+        safetyKpiPrecheckTip: 'Routine background safety checks (sir_flash_lite) in the last 5h; ~4,400 triggers 429 heavy fallback',
         safetyKpiHeavy: 'HEAVY REVIEWS',
-        safetyKpiHeavyTip: 'severe_internal_risks_agy (gemini-4-hydrogen-sonar) heavy reviews up to 300K chars and false-alarm rate',
-        safetyKpiHidden: 'HIDDEN STREAM',
-        safetyKpiHiddenTip: 'Hidden background safety requests vs total streamGenerateContent calls (correlated by tid)',
-        safetyKpi429: '429 / WAIT TAX',
-        safetyKpi429Tip: 'Strict HTTP 429 / parent sir_flash_lite fallback count and cumulative monitor wait time',
-        safetyHandoffBtn: 'Handoff to New Window',
-        safetyCopyReportBtn: 'Copy Redacted Report',
-        safetyCopied: 'Copied redacted report!',
+        safetyKpiHeavyTip: 'Full-model background re-reviews (gemini-4-hydrogen-sonar, up to ~300K chars each) and false-alarm rate',
+        safetyKpiHidden: 'HIDDEN REQUESTS',
+        safetyKpiHiddenTip: 'Share of all requests spent on hidden background safety checks (correlated by request thread)',
+        safetyKpi429: 'WAIT & EST. BURN',
+        safetyKpi429Tip: 'Extra waiting time from background safety checks, estimated token burn, and any HTTP 429 rate-limit hits',
+        safetyHandoffBtn: 'Pack Progress & New Chat',
+        safetyHandoffTip: 'Pack current progress into a short summary so you can continue in a fresh chat and cut long-history re-reviews',
+        safetyCopyReportBtn: 'Copy Evidence (Redacted)',
+        safetyCopyReportTip: 'Copy privacy-scrubbed audit report (useful for GitHub bug reports; not needed in daily use)',
+        safetyCopied: 'Copied redacted evidence!',
         safetyCopyFailed: 'Copy failed',
         safetyBadgeNotDetected: 'No Logs',
-        safetyBadgeNoEvents: 'Idle',
+        safetyBadgeNoEvents: 'Quiet',
         safetyBadgeDisabled: 'OFF',
-        safetyBadgeOk: 'OK',
-        safetyBadgeWarn: 'WARN',
-        safetyBadgeBurst: 'HEAVY BURST',
-        safetyBadgeAvalanche: '429 AVALANCHE',
-        safetyInlineOk: '{pre}/{lim} pre-checks ({h}h) · {hidden} hidden reqs',
-        safetyInlineNotDetected: 'No Antigravity safety logs found (silent fallback)',
-        safetyInlineNoEvents: '{files} log(s) scanned · 0 safety events in {h}h',
-        safetyInlineDisabled: 'Disabled in config',
-        safetyFalseAlarmFmt: '{falseCnt} false ({pct}%) · avg {avgK}K',
-        safetyAvgCharsFmt: 'avg {avgK}K chars',
-        safetyReqsFmt: '{hidden} / {total} reqs',
+        safetyBadgeOk: 'Normal',
+        safetyBadgeWarn: 'Near Limit',
+        safetyBadgeCalm: 'Past 5h · Calm',
+        safetyBadgeBurst: 'Burning Now',
+        safetyBadgeAvalanche: '429 Spike',
+        safetyInlineOk: '{h}h: {pre}/{lim} routine checks · {hidden} hidden reqs — all clear',
+        safetyInlineCalm: 'Past {h}h had {heavy} heavy review(s), 0 in last 5m (calm now) · {hidden} hidden reqs',
+        safetyInlineBurst: 'Active now: {recent} heavy review(s) in last 5m ({heavy} in {h}h) — switch to a fresh chat',
+        safetyInlineAvalanche: '429 spike: background checks falling back to heavy model ({heavy} in {h}h) — pause & switch chat',
+        safetyInlineWarn: '{h}h routine checks at {pre}/{lim} ({pct}%) — ease off parallel tool loops',
+        safetyInlineNotDetected: 'No Antigravity safety logs found on this machine',
+        safetyInlineNoEvents: 'Scanned {files} log(s) · 0 background safety checks in the last {h}h',
+        safetyInlineDisabled: 'Turned off in config',
+        safetyAdviceOk: 'What to do now: Everything looks normal — no action needed.',
+        safetyAdviceQuiet: 'What to do now: No hidden safety checks detected — no action needed.',
+        safetyAdviceCalm: 'What to do now: Calm right now (0 heavy checks in the last 5m). If you are still working in a very long older chat, click the blue button below to move to a fresh chat; otherwise click Hide.',
+        safetyAdviceBurst: 'What to do now: Background safety is actively burning quota on long history. Click "Pack Progress & New Chat" below to continue in a fresh chat and cut re-reviews.',
+        safetyAdviceAvalanche: 'What to do now: Pause parallel CLI / multi-window runs, click the blue button below to move active work to a fresh chat, and wait for the 5h limit window to recover.',
+        safetyAdviceWarn: 'What to do now: Routine checks are nearing the 4,400/5h cliff. Slow down parallel tool-heavy windows so you do not trigger 429 heavy fallback.',
+        safetyDiagOk: 'Last {h}h: {pre}/{lim} routine checks, {heavy} heavy review(s), and 0 rate-limit spikes.',
+        safetyDiagCalm: 'In the last {h}h, background safety ran {heavy} heavy review(s){falsePart} (avg {avgChars}), but 0 in the last 5 minutes.',
+        safetyDiagBurst: 'Background safety ran {recent} heavy review(s) in the last 5m ({heavy} in {h}h{falsePart}, avg {avgChars}), speeding up quota drain.',
+        safetyDiagAvalanche: 'Background safety hit HTTP 429 ({c429} hit(s)) and escalated {heavy} call(s) to heavy model reviews (avg {avgChars}) in the last {h}h.',
+        safetyDiagWarn: 'Routine background checks reached {pre}/{lim} ({pct}%) in the last {h}h, approaching the ~4,400 cliff.',
+        safetyFalsePart: ' ({pct}% false alarms)',
+        safetyPreSubOk: '{pct}% of cliff (safe)',
+        safetyPreSubWarn: '{pct}% (near limit)',
+        safetyHeavyCountFmt: '{count}',
+        safetyFalseAlarmFmt: '{pct}% false alarm · {avgChars}',
+        safetyAvgCharsFmt: '{avgChars}',
+        safetyReqsFmt: '{hidden} hidden / {total} total',
+        safetyWaitWith429Fmt: '{dur} · 429: {c429}',
         safetyEstTokFmt: 'est. ~{low}–{high} tok',
-        safetyRestartNote: 'Desktop log truncated on restart ({ts}); persisted rolling buckets preserved ({count} truncation(s) survived).'
+        safetyRestartNote: 'Note: Desktop cleared logs on {count} restart(s); agy-dart kept the {h}h totals intact.'
       },
       zh: {
         pageTitle: 'agy-dart 上下文检查器',
@@ -4083,39 +4137,62 @@
         versionErrRecovery: '更新与回滚均失败，已保留备份目录以便手动恢复。',
         versionErrInstall: '替换已安装插件文件时出错。',
         versionErrRestoredSuffix: ' 已自动回滚恢复原版本文件。',
-        safetyCardTitle: '后台安全审查',
-        safetyChecking: '正在扫描本地安全审查日志...',
+        safetyCardTitle: '后台安检监测',
+        safetyChecking: '正在查看后台安检日志...',
         safetyDetailsBtn: '详情',
         safetyHideBtn: '收起',
-        safetyRefreshTip: '立即增量重扫本机 Antigravity 桌面端与 CLI 安全审查日志',
-        safetyKpiPrecheck: '5h 轻量预检',
-        safetyKpiPrecheckTip: '5 小时滚动窗口内 sir_flash_lite 预检次数（逼近 ~4,400 次将触发 429 降级雪崩）',
-        safetyKpiHeavy: '重型复审',
-        safetyKpiHeavyTip: 'severe_internal_risks_agy（gemini-4-hydrogen-sonar）重型复审次数、最高 300K 字符轨迹及误报率',
-        safetyKpiHidden: '隐藏请求占比',
-        safetyKpiHiddenTip: '按 tid 精确归因的后台审查请求占总 streamGenerateContent 请求比例',
-        safetyKpi429: '429 / 阻塞耗时',
-        safetyKpi429Tip: '严格过滤后的 429/降级次数与累计审查阻塞秒数',
-        safetyHandoffBtn: '一键 Handoff 换新窗',
-        safetyCopyReportBtn: '复制脱敏报告',
-        safetyCopied: '已复制脱敏报告',
+        safetyRefreshTip: '立即重新扫描本机 Antigravity 桌面端与命令行后台安检日志',
+        safetyKpiPrecheck: '近 5h 常规安检',
+        safetyKpiPrecheckTip: '近 5 小时后台轻量预检（sir_flash_lite）次数；超过约 4,400 次容易撞限流触发大模型重审',
+        safetyKpiHeavy: '大模型白审',
+        safetyKpiHeavyTip: '后台升级拉大模型（gemini-4-hydrogen-sonar）重审长聊天记录的次数与误判比例',
+        safetyKpiHidden: '后台隐藏请求占比',
+        safetyKpiHiddenTip: '你每发一批请求中，有多少比例其实被后台安检悄悄占用了',
+        safetyKpi429: '白等时间与估算消耗',
+        safetyKpi429Tip: '被后台安检拖慢的累计等待时间、估算消耗 Token，以及是否撞到 429 限流',
+        safetyHandoffBtn: '整理进度，换新对话',
+        safetyHandoffTip: '把当前对话做到哪了自动整理成一小段文字，复制去新对话继续干，就能断掉超长旧记录被反复白审',
+        safetyCopyReportBtn: '复制排查证据（已去隐私）',
+        safetyCopyReportTip: '日常不用点；仅在想给官方 GitHub 反馈问题时用来一键复制脱敏证据',
+        safetyCopied: '已复制，可直接贴到 GitHub 反馈',
         safetyCopyFailed: '复制失败',
         safetyBadgeNotDetected: '无日志',
-        safetyBadgeNoEvents: '静默',
+        safetyBadgeNoEvents: '无记录',
         safetyBadgeDisabled: '已关闭',
         safetyBadgeOk: '正常',
-        safetyBadgeWarn: '逼近阈值',
-        safetyBadgeBurst: '重型连环复审',
-        safetyBadgeAvalanche: '429 雪崩',
-        safetyInlineOk: '{h}h 预检 {pre}/{lim} · 隐藏请求 {hidden}',
-        safetyInlineNotDetected: '未检测到本机安全审查日志（静默降级）',
-        safetyInlineNoEvents: '已扫 {files} 份日志 · 近 {h}h 无审查记录',
-        safetyInlineDisabled: '已在配置中关闭',
-        safetyFalseAlarmFmt: '误报 {falseCnt} 次 ({pct}%) · 均长 {avgK}K',
-        safetyAvgCharsFmt: '均长 {avgK}K 字符',
-        safetyReqsFmt: '{hidden} / {total} 次请求',
-        safetyEstTokFmt: '估算 ~{low}–{high} tok',
-        safetyRestartNote: '桌面端上次重启已清空旧日志（{ts}），agy-dart 已持久化保留 5h 账本（已跨 {count} 次重启截断）。'
+        safetyBadgeWarn: '快到上限',
+        safetyBadgeCalm: '刚有偷烧 · 已平稳',
+        safetyBadgeBurst: '正在偷烧额度',
+        safetyBadgeAvalanche: '429 疯狂偷烧',
+        safetyInlineOk: '近 {h} 小时一切正常（安检 {pre}/{lim} 次 · 后台占 {hidden}）',
+        safetyInlineCalm: '过去 {h} 小时有 {heavy} 次大模型白审，但近 5 分钟已平稳（0 次）· 后台占 {hidden}',
+        safetyInlineBurst: '正在偷烧：近 5 分钟已触发 {recent} 次大模型白审（近 {h}h 共 {heavy} 次），建议换新对话',
+        safetyInlineAvalanche: '后台安检触发 429 限流，正用大模型狂审（近 {h}h 共 {heavy} 次），建议先停并发并换新对话',
+        safetyInlineWarn: '近 {h} 小时常规安检已用 {pre}/{lim}（{pct}%），快到限流红线，建议放缓并发',
+        safetyInlineNotDetected: '暂未检测到本机反重力安检日志（不影响正常使用）',
+        safetyInlineNoEvents: '已检查 {files} 份日志 · 近 {h} 小时没有后台安检记录',
+        safetyInlineDisabled: '已在设置中关闭监测',
+        safetyAdviceOk: '现在怎么做：目前完全正常，什么都不用做。',
+        safetyAdviceQuiet: '现在怎么做：没有检测到后台偷烧，不用管它。',
+        safetyAdviceCalm: '现在怎么做：此刻已经平稳（近 5 分钟 0 次），不用慌。如果手里还有聊了很久的超长旧对话要继续干，点下方蓝色按钮换个新对话就能止血；如果已经在新对话，直接点右上角「收起」就行。',
+        safetyAdviceBurst: '现在怎么做：后台安检正在把超长聊天记录反复拉去大模型白审。建议马上点下方「整理进度，换新对话」，把任务带去新窗口就能立刻止血。',
+        safetyAdviceAvalanche: '现在怎么做：后台安检已撞上 429 限流红线，每步操作都在被大模型硬审。请先暂停多窗口/命令行并发，点下方蓝色按钮把重要任务换去新对话，等 5 小时窗口恢复。',
+        safetyAdviceWarn: '现在怎么做：常规安检次数快撞上 4,400 次/5h 上限了。建议暂时少开几个同时跑工具的窗口，避免撞线触发大模型全量重审。',
+        safetyDiagOk: '过去 {h} 小时：常规安检 {pre}/{lim} 次、大模型重审 {heavy} 次、无 429 爆表。',
+        safetyDiagCalm: '过去 {h} 小时后台安检多查了 {heavy} 次大模型{falsePart}（每次{avgChars}），但最近 5 分钟已降为 0 次，目前没有继续狂烧。',
+        safetyDiagBurst: '后台安检近 5 分钟内就触发了 {recent} 次大模型重审（过去 {h} 小时共 {heavy} 次{falsePart}，每次{avgChars}），会明显加快扣额度。',
+        safetyDiagAvalanche: '后台安检已触发 {c429} 次 429 限流/降级，过去 {h} 小时把 {heavy} 次操作直接送去大模型硬审（每次{avgChars}）。',
+        safetyDiagWarn: '过去 {h} 小时常规安检已达 {pre}/{lim} 次（{pct}%），逼近 ~4,400 次限流红线。',
+        safetyFalsePart: '（其中 {pct}% 是误判放行）',
+        safetyPreSubOk: '已用 {pct}%（安全）',
+        safetyPreSubWarn: '已用 {pct}%（偏高）',
+        safetyHeavyCountFmt: '{count} 次',
+        safetyFalseAlarmFmt: '误判 {pct}% · {avgChars}',
+        safetyAvgCharsFmt: '{avgChars}',
+        safetyReqsFmt: '后台 {hidden} / 总共 {total} 次',
+        safetyWaitWith429Fmt: '{dur} · 429: {c429}次',
+        safetyEstTokFmt: '约消耗 {low}–{high} tok',
+        safetyRestartNote: '提示：桌面端重启曾清空过 {count} 次日志，以上 {h} 小时账本已由 agy-dart 自动留底未丢失。'
       }
     };
 
@@ -5822,6 +5899,77 @@
       return String(v);
     }
 
+    function formatHumanSafetyDuration(sec, lang) {
+      const s = Math.max(0, Math.round(Number(sec) || 0));
+      if (lang === 'zh') {
+        if (s < 60) return `${s} 秒`;
+        if (s < 3600) {
+          const m = Math.floor(s / 60);
+          const r = s % 60;
+          return r > 0 ? `${m} 分 ${r} 秒` : `${m} 分钟`;
+        }
+        const h = Math.floor(s / 3600);
+        const m = Math.floor((s % 3600) / 60);
+        return m > 0 ? `${h} 小时 ${m} 分` : `${h} 小时`;
+      }
+      if (s < 60) return `${s}s`;
+      if (s < 3600) {
+        const m = Math.floor(s / 60);
+        const r = s % 60;
+        return r > 0 ? `${m}m ${r}s` : `${m}m`;
+      }
+      const h = Math.floor(s / 3600);
+      const m = Math.floor((s % 3600) / 60);
+      return m > 0 ? `${h}h ${m}m` : `${h}h`;
+    }
+
+    function formatSafetyTokensByLang(n, lang) {
+      const v = Number(n) || 0;
+      if (lang === 'zh' && v >= 10000) {
+        if (v >= 1000000) return `${Math.round(v / 10000)}万`;
+        return `${(v / 10000).toFixed(1).replace(/\.0$/, '')}万`;
+      }
+      return formatCompactK(v);
+    }
+
+    function formatSafetyAvgCharsByLang(chars, lang) {
+      const v = Number(chars) || 0;
+      if (lang === 'zh') {
+        if (v <= 0) return '约 0 字';
+        if (v >= 10000) return `均长约 ${Math.round(v / 10000)} 万字`;
+        if (v >= 1000) return `均长约 ${(v / 10000).toFixed(1)} 万字`;
+        return `均长 ${v} 字`;
+      }
+      return `avg ${Math.round(v / 1000)}K chars`;
+    }
+
+    function formatSafetyReasonLabel(reason, lang) {
+      const key = String(reason || '').trim();
+      const mapZh = {
+        unknown_command: '复杂终端命令',
+        edit_file: '编辑文件',
+        write_file: '新建/写文件',
+        call_mcp_tool: '调用插件工具',
+        absolute_path: '跨路径访问',
+        run_command: '执行命令',
+        unsupported_tool: '未列白名单工具',
+        read_file: '读取文件'
+      };
+      const mapEn = {
+        unknown_command: 'complex shell cmd',
+        edit_file: 'edit_file',
+        write_file: 'write_file',
+        call_mcp_tool: 'MCP tool',
+        absolute_path: 'outside path',
+        run_command: 'run_command',
+        unsupported_tool: 'non-allowlisted tool',
+        read_file: 'read_file'
+      };
+      if (lang === 'zh' && mapZh[key]) return mapZh[key];
+      if (lang !== 'zh' && mapEn[key]) return mapEn[key];
+      return key;
+    }
+
     function renderSafetyAuditCard(data) {
       const card = document.getElementById('safety-audit-card');
       if (!card || !data || typeof data !== 'object') return;
@@ -5829,6 +5977,7 @@
       const inlineEl = document.getElementById('safety-inline-summary');
       const detailsEl = document.getElementById('safety-details-body');
       const toggleBtn = document.getElementById('safety-toggle-btn');
+      const adviceEl = document.getElementById('safety-advice-box');
       const diagEl = document.getElementById('safety-diagnosis-text');
       const preEl = document.getElementById('safety-kpi-prechecks');
       const preSubEl = document.getElementById('safety-kpi-prechecks-sub');
@@ -5844,15 +5993,29 @@
 
       const status = String(data.status || 'not_detected');
       const severity = String(data.severity || 'none');
+      const w = data.window || {};
+      const sr = data.streamRequests || {};
+      const src = data.sources || {};
+      const winH = Number(data.windowHours || 5);
+      const recent5m = Number(w.recentHeavyBurst5m || 0);
+      const heavyCount = Number(w.heavyReviewCount || 0);
+      const preCount = Number(w.precheckCount || 0);
+      const preLimit = Number(w.precheckLimit || 4400);
+      const prePct = Number(w.precheckUtilizationPct || 0);
+      const c429 = Number(w.rateLimit429Count || 0) + Number(w.fallbackEscalationCount || 0);
+      const isCalmRecently = status === 'heavy_burst_or_sticky' && recent5m === 0;
       const isAlerting =
         severity === 'warn' ||
         severity === 'critical' ||
         status === '429_avalanche' ||
         status === 'heavy_burst_or_sticky' ||
         status === 'approaching_quota';
+      const isActiveCritical =
+        status === '429_avalanche' ||
+        (status === 'heavy_burst_or_sticky' && !isCalmRecently && severity === 'critical');
 
       card.classList.remove('is-warn', 'is-critical');
-      if (severity === 'critical' || status === '429_avalanche') {
+      if (isActiveCritical) {
         card.classList.add('is-critical');
       } else if (isAlerting) {
         card.classList.add('is-warn');
@@ -5864,8 +6027,13 @@
           badgeEl.textContent = t('safetyBadgeAvalanche');
           badgeEl.classList.add('is-danger');
         } else if (status === 'heavy_burst_or_sticky') {
-          badgeEl.textContent = t('safetyBadgeBurst');
-          badgeEl.classList.add(severity === 'critical' ? 'is-danger' : 'is-warn');
+          if (isCalmRecently) {
+            badgeEl.textContent = t('safetyBadgeCalm');
+            badgeEl.classList.add('is-warn');
+          } else {
+            badgeEl.textContent = t('safetyBadgeBurst');
+            badgeEl.classList.add(isActiveCritical ? 'is-danger' : 'is-warn');
+          }
         } else if (status === 'approaching_quota') {
           badgeEl.textContent = t('safetyBadgeWarn');
           badgeEl.classList.add('is-warn');
@@ -5881,36 +6049,82 @@
         }
       }
 
-      const w = data.window || {};
-      const sr = data.streamRequests || {};
-      const src = data.sources || {};
-      const winH = Number(data.windowHours || 5);
       const hiddenPctStr = sr.hiddenSharePct !== null && sr.hiddenSharePct !== undefined ? `${sr.hiddenSharePct}%` : '--%';
-      const diagMsg = currentLang === 'zh' ? (data.summaryZh || data.summaryEn || '') : (data.summaryEn || data.summaryZh || '');
+      const avgCharsLabel = formatSafetyAvgCharsByLang(w.heavyAvgChars || 0, currentLang);
+      const hasFalseAlarmPct =
+        Number(w.heavyTriggeredFalse || 0) > 0 &&
+        w.heavyFalseAlarmRatePct !== null &&
+        w.heavyFalseAlarmRatePct !== undefined;
+      const falsePart = hasFalseAlarmPct ? t('safetyFalsePart', { pct: w.heavyFalseAlarmRatePct }) : '';
 
-      if (inlineEl) {
-        if (isAlerting) {
-          inlineEl.textContent = diagMsg;
-        } else if (status === 'ok') {
-          inlineEl.textContent = t('safetyInlineOk', {
-            pre: Number(w.precheckCount || 0).toLocaleString(),
-            lim: Number(w.precheckLimit || 4400).toLocaleString(),
-            h: winH,
-            hidden: hiddenPctStr
-          });
-        } else if (status === 'no_safety_events') {
-          inlineEl.textContent = t('safetyInlineNoEvents', {
-            files: Number(src.filesScanned || 0),
-            h: winH
-          });
-        } else if (status === 'disabled') {
-          inlineEl.textContent = t('safetyInlineDisabled');
-        } else {
-          inlineEl.textContent = t('safetyInlineNotDetected');
-        }
+      let inlineText = '';
+      let adviceText = '';
+      let diagMsg = '';
+      if (status === '429_avalanche') {
+        inlineText = t('safetyInlineAvalanche', { h: winH, heavy: heavyCount });
+        adviceText = t('safetyAdviceAvalanche');
+        diagMsg = t('safetyDiagAvalanche', { h: winH, c429, heavy: heavyCount, avgChars: avgCharsLabel });
+      } else if (status === 'heavy_burst_or_sticky' && isCalmRecently) {
+        inlineText = t('safetyInlineCalm', { h: winH, heavy: heavyCount, hidden: hiddenPctStr });
+        adviceText = t('safetyAdviceCalm');
+        diagMsg = t('safetyDiagCalm', { h: winH, heavy: heavyCount, falsePart, avgChars: avgCharsLabel });
+      } else if (status === 'heavy_burst_or_sticky') {
+        inlineText = t('safetyInlineBurst', { h: winH, recent: recent5m, heavy: heavyCount });
+        adviceText = t('safetyAdviceBurst');
+        diagMsg = t('safetyDiagBurst', { h: winH, recent: recent5m, heavy: heavyCount, falsePart, avgChars: avgCharsLabel });
+      } else if (status === 'approaching_quota') {
+        inlineText = t('safetyInlineWarn', {
+          h: winH,
+          pre: preCount.toLocaleString(),
+          lim: preLimit.toLocaleString(),
+          pct: prePct
+        });
+        adviceText = t('safetyAdviceWarn');
+        diagMsg = t('safetyDiagWarn', {
+          h: winH,
+          pre: preCount.toLocaleString(),
+          lim: preLimit.toLocaleString(),
+          pct: prePct
+        });
+      } else if (status === 'ok') {
+        inlineText = t('safetyInlineOk', {
+          pre: preCount.toLocaleString(),
+          lim: preLimit.toLocaleString(),
+          h: winH,
+          hidden: hiddenPctStr
+        });
+        adviceText = t('safetyAdviceOk');
+        diagMsg = t('safetyDiagOk', {
+          h: winH,
+          pre: preCount.toLocaleString(),
+          lim: preLimit.toLocaleString(),
+          heavy: heavyCount
+        });
+      } else if (status === 'no_safety_events') {
+        inlineText = t('safetyInlineNoEvents', {
+          files: Number(src.filesScanned || 0),
+          h: winH
+        });
+        adviceText = t('safetyAdviceQuiet');
+        diagMsg = inlineText;
+      } else if (status === 'disabled') {
+        inlineText = t('safetyInlineDisabled');
+        adviceText = '';
+        diagMsg = inlineText;
+      } else {
+        inlineText = t('safetyInlineNotDetected');
+        adviceText = t('safetyAdviceQuiet');
+        diagMsg = inlineText;
       }
 
       const shouldExpand = safetyUserExpanded !== null ? safetyUserExpanded : isAlerting;
+      if (inlineEl) {
+        inlineEl.textContent = inlineText;
+        if (inlineEl.classList) {
+          if (shouldExpand) inlineEl.classList.add('hidden');
+          else inlineEl.classList.remove('hidden');
+        }
+      }
       if (detailsEl && detailsEl.classList) {
         if (shouldExpand) detailsEl.classList.remove('hidden');
         else detailsEl.classList.add('hidden');
@@ -5919,27 +6133,32 @@
         toggleBtn.textContent = shouldExpand ? t('safetyHideBtn') : t('safetyDetailsBtn');
       }
 
+      if (adviceEl) {
+        adviceEl.textContent = adviceText;
+        if (adviceEl.classList) {
+          if (adviceText) adviceEl.classList.remove('hidden');
+          else adviceEl.classList.add('hidden');
+        }
+      }
       if (diagEl) diagEl.textContent = diagMsg;
 
       if (preEl) {
-        preEl.textContent = `${Number(w.precheckCount || 0).toLocaleString()} / ${Number(w.precheckLimit || 4400).toLocaleString()}`;
+        preEl.textContent = `${preCount.toLocaleString()} / ${preLimit.toLocaleString()}`;
       }
       if (preSubEl) {
-        preSubEl.textContent = `${Number(w.precheckUtilizationPct || 0)}%`;
+        preSubEl.textContent = t(prePct >= 80 ? 'safetyPreSubWarn' : 'safetyPreSubOk', { pct: prePct });
       }
       if (heavyEl) {
-        heavyEl.textContent = String(Number(w.heavyReviewCount || 0));
+        heavyEl.textContent = t('safetyHeavyCountFmt', { count: heavyCount });
       }
       if (heavySubEl) {
-        const avgK = Math.round(Number(w.heavyAvgChars || 0) / 1000);
-        if (Number(w.heavyTriggeredFalse || 0) > 0 && w.heavyFalseAlarmRatePct !== null && w.heavyFalseAlarmRatePct !== undefined) {
+        if (hasFalseAlarmPct) {
           heavySubEl.textContent = t('safetyFalseAlarmFmt', {
-            falseCnt: Number(w.heavyTriggeredFalse || 0),
             pct: w.heavyFalseAlarmRatePct,
-            avgK
+            avgChars: avgCharsLabel
           });
         } else {
-          heavySubEl.textContent = t('safetyAvgCharsFmt', { avgK });
+          heavySubEl.textContent = t('safetyAvgCharsFmt', { avgChars: avgCharsLabel });
         }
       }
       if (hiddenEl) {
@@ -5947,18 +6166,18 @@
       }
       if (hiddenSubEl) {
         hiddenSubEl.textContent = t('safetyReqsFmt', {
-          hidden: Number(sr.hiddenTotal || 0),
-          total: Number(sr.total || 0)
+          hidden: Number(sr.hiddenTotal || 0).toLocaleString(),
+          total: Number(sr.total || 0).toLocaleString()
         });
       }
       if (kpi429El) {
-        const c429 = Number(w.rateLimit429Count || 0) + Number(w.fallbackEscalationCount || 0);
-        kpi429El.textContent = `${c429} / ${Number(w.totalLatencySec || 0)}s`;
+        const durLabel = formatHumanSafetyDuration(w.totalLatencySec || 0, currentLang);
+        kpi429El.textContent = c429 > 0 ? t('safetyWaitWith429Fmt', { dur: durLabel, c429 }) : durLabel;
       }
       if (kpi429SubEl) {
         kpi429SubEl.textContent = t('safetyEstTokFmt', {
-          low: formatCompactK(w.estimatedHiddenInputTokensLow || 0),
-          high: formatCompactK(w.estimatedHiddenInputTokensHigh || 0)
+          low: formatSafetyTokensByLang(w.estimatedHiddenInputTokensLow || 0, currentLang),
+          high: formatSafetyTokensByLang(w.estimatedHiddenInputTokensHigh || 0, currentLang)
         });
       }
 
@@ -5966,7 +6185,10 @@
         const reasons = Array.isArray(data.triggerReasons) ? data.triggerReasons.slice(0, 6) : [];
         if (reasons.length > 0) {
           reasonsEl.innerHTML = reasons
-            .map((r) => `<span class="safety-reason-chip">${escapeHtml(r.reason)} · ${Number(r.count)} (${Number(r.pct)}%)</span>`)
+            .map((r) => {
+              const label = formatSafetyReasonLabel(r.reason, currentLang);
+              return `<span class="safety-reason-chip" title="${escapeHtml(r.reason)}">${escapeHtml(label)} · ${Number(r.count)} (${Number(r.pct)}%)</span>`;
+            })
             .join('');
           reasonsEl.classList.remove('hidden');
         } else {
@@ -5976,12 +6198,11 @@
       }
 
       if (restartEl) {
-        const lastTs = src.lastDesktopRestart?.ts || '';
         const truncs = Number(src.restartTruncationsDetected || 0);
-        if (lastTs || truncs > 0) {
+        if (truncs > 0) {
           restartEl.textContent = t('safetyRestartNote', {
-            ts: lastTs || 'detected',
-            count: truncs
+            count: truncs,
+            h: winH
           });
           restartEl.classList.remove('hidden');
         } else {

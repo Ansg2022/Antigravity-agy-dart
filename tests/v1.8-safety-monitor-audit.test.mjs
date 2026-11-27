@@ -679,3 +679,219 @@ test("6. Sidecar /api/safety-audit (standalone CSRF + SidecarApp POST-only) and 
     fs.rmSync(tmpDir, { recursive: true, force: true });
   }
 });
+
+test("7. Dashboard Safety Monitor plain-language UX: narrow-header CSS, calm-recent vs active-burst severity, human duration & zero-truncation suppression", async () => {
+  const vm = await import("node:vm");
+  const html = fs.readFileSync(path.join(ROOT, "sidecars", "dashboard", "index.html"), "utf8");
+
+  // Layout invariants: prevent 3-line vertical title squash & clipped badge in narrow sidebars
+  assert.ok(html.includes(".safety-head-left .band-title"), "CSS must protect title/badge from flexing/clipping");
+  assert.ok(html.includes('id="safety-advice-box"'), "HTML must include plain-language action callout box");
+  assert.ok(!html.includes("var(--surface-elevated)"), "CSS must not reference undefined --surface-elevated variable");
+
+  // Extract inline script & execute renderSafetyAuditCard against lightweight DOM mocks (no classList.toggle)
+  const scriptMatches = [...html.matchAll(/<script(?:\s[^>]*)?>([\s\S]*?)<\/script>/gi)];
+  const mainScript = scriptMatches.map((m) => m[1]).find((s) => s.includes("function renderSafetyAuditCard"));
+  assert.ok(mainScript, "Dashboard main script must define renderSafetyAuditCard");
+
+  function makeEl(id, initialClasses = []) {
+    const classes = new Set(initialClasses);
+    return {
+      id,
+      textContent: "",
+      innerHTML: "",
+      title: "",
+      value: "",
+      dataset: {},
+      style: {},
+      classList: {
+        add(...cs) {
+          for (const c of cs) classes.add(c);
+        },
+        remove(...cs) {
+          for (const c of cs) classes.delete(c);
+        },
+        contains(c) {
+          return classes.has(c);
+        }
+      },
+      setAttribute() {},
+      getAttribute() {
+        return "";
+      },
+      addEventListener() {},
+      querySelectorAll() {
+        return [];
+      }
+    };
+  }
+
+  const els = new Map(
+    [
+      "safety-audit-card",
+      "safety-status-badge",
+      "safety-inline-summary",
+      "safety-details-body",
+      "safety-toggle-btn",
+      "safety-advice-box",
+      "safety-diagnosis-text",
+      "safety-kpi-prechecks",
+      "safety-kpi-prechecks-sub",
+      "safety-kpi-heavy",
+      "safety-kpi-heavy-sub",
+      "safety-kpi-hidden",
+      "safety-kpi-hidden-sub",
+      "safety-kpi-429",
+      "safety-kpi-429-sub",
+      "safety-reasons-row",
+      "safety-restart-note",
+      "safety-handoff-btn"
+    ].map((id) => [id, makeEl(id, id === "safety-details-body" || id === "safety-advice-box" || id === "safety-restart-note" || id === "safety-handoff-btn" ? ["hidden"] : [])])
+  );
+
+  const timers = [];
+  const sandbox = {
+    console,
+    Math,
+    Date,
+    Number,
+    String,
+    Boolean,
+    Array,
+    Object,
+    Map,
+    Set,
+    JSON,
+    RegExp,
+    Promise,
+    Intl,
+    Headers,
+    URLSearchParams,
+    setTimeout(fn) {
+      const t = { fn };
+      timers.push(t);
+      return t;
+    },
+    clearTimeout() {},
+    setInterval() {
+      return { unref() {} };
+    },
+    clearInterval() {},
+    fetch: async () => ({ ok: false, status: 503, json: async () => ({}) }),
+    navigator: { language: "zh-CN", clipboard: { writeText: async () => {} } },
+    localStorage: { getItem: () => "zh", setItem() {}, removeItem() {} },
+    location: { search: "", origin: "http://127.0.0.1:0", pathname: "/" },
+    addEventListener() {},
+    removeEventListener() {},
+    document: {
+      hidden: true,
+      documentElement: { lang: "zh" },
+      title: "",
+      getElementById: (id) => els.get(id) || null,
+      querySelector: () => null,
+      querySelectorAll: () => [],
+      addEventListener() {}
+    },
+    window: null
+  };
+  sandbox.window = sandbox;
+  vm.createContext(sandbox);
+  vm.runInContext(mainScript, sandbox);
+  vm.runInContext("currentLang = 'zh'; safetyUserExpanded = null;", sandbox);
+
+  // Case A: Past-5h heavy burst that is CALM right now (recentHeavyBurst5m = 0, truncs = 0)
+  sandbox.renderSafetyAuditCard({
+    status: "heavy_burst_or_sticky",
+    severity: "critical",
+    windowHours: 5,
+    window: {
+      precheckCount: 544,
+      precheckLimit: 4400,
+      precheckUtilizationPct: 12.4,
+      heavyReviewCount: 43,
+      heavyTriggeredFalse: 43,
+      heavyFalseAlarmRatePct: 100,
+      heavyAvgChars: 246000,
+      recentHeavyBurst5m: 0,
+      totalLatencySec: 855.46,
+      rateLimit429Count: 0,
+      fallbackEscalationCount: 0,
+      estimatedHiddenInputTokensLow: 3900000,
+      estimatedHiddenInputTokensHigh: 5100000
+    },
+    streamRequests: { hiddenSharePct: 48.3, hiddenTotal: 586, total: 1212 },
+    triggerReasons: [{ reason: "unknown_command", count: 12, pct: 60 }],
+    sources: { filesScanned: 2, restartTruncationsDetected: 0, lastDesktopRestart: { ts: "2026-11-26 23:51:59.536" } }
+  });
+
+  const card = els.get("safety-audit-card");
+  assert.equal(card.classList.contains("is-warn"), true, "Calm-recent 5h heavy burst should soften to amber is-warn");
+  assert.equal(card.classList.contains("is-critical"), false, "Calm-recent 5h heavy burst must not scream critical red");
+  assert.equal(els.get("safety-status-badge").textContent, "刚有偷烧 · 已平稳");
+  assert.equal(els.get("safety-inline-summary").classList.contains("hidden"), true, "Expanded card must hide inline summary to avoid duplicate text");
+  assert.equal(els.get("safety-details-body").classList.contains("hidden"), false);
+  assert.ok(els.get("safety-advice-box").textContent.includes("此刻已经平稳"));
+  assert.ok(!els.get("safety-diagnosis-text").textContent.includes("gemini-4-hydrogen-sonar"), "Plain-language card should avoid internal model jargon");
+  assert.equal(els.get("safety-kpi-429").textContent, "14 分 15 秒");
+  assert.ok(els.get("safety-kpi-429-sub").textContent.includes("390万"));
+  assert.ok(els.get("safety-reasons-row").innerHTML.includes("复杂终端命令"));
+  assert.equal(els.get("safety-restart-note").classList.contains("hidden"), true, "Zero restart truncations must keep restart note hidden");
+
+  // Case B: Active heavy burst right now (recentHeavyBurst5m = 4, truncs = 2) -> critical red + visible restart note
+  sandbox.renderSafetyAuditCard({
+    status: "heavy_burst_or_sticky",
+    severity: "critical",
+    windowHours: 5,
+    window: {
+      precheckCount: 600,
+      precheckLimit: 4400,
+      precheckUtilizationPct: 13.6,
+      heavyReviewCount: 47,
+      heavyTriggeredFalse: 47,
+      heavyFalseAlarmRatePct: 100,
+      heavyAvgChars: 250000,
+      recentHeavyBurst5m: 4,
+      totalLatencySec: 910,
+      rateLimit429Count: 0,
+      fallbackEscalationCount: 0,
+      estimatedHiddenInputTokensLow: 4100000,
+      estimatedHiddenInputTokensHigh: 5400000
+    },
+    streamRequests: { hiddenSharePct: 51.0, hiddenTotal: 620, total: 1216 },
+    triggerReasons: [],
+    sources: { filesScanned: 2, restartTruncationsDetected: 2 }
+  });
+  assert.equal(card.classList.contains("is-critical"), true, "Active burst right now must highlight is-critical");
+  assert.equal(els.get("safety-status-badge").textContent, "正在偷烧额度");
+  assert.equal(els.get("safety-restart-note").classList.contains("hidden"), false, "Non-zero restart truncations must show plain-language note");
+  assert.ok(els.get("safety-restart-note").textContent.includes("2 次"));
+
+  // Case C: English mode renders cleanly with human duration (14m 15s) and calm badge
+  vm.runInContext("currentLang = 'en'; safetyUserExpanded = false;", sandbox);
+  sandbox.renderSafetyAuditCard({
+    status: "heavy_burst_or_sticky",
+    severity: "critical",
+    windowHours: 5,
+    window: {
+      precheckCount: 544,
+      precheckLimit: 4400,
+      precheckUtilizationPct: 12.4,
+      heavyReviewCount: 43,
+      heavyTriggeredFalse: 43,
+      heavyFalseAlarmRatePct: 100,
+      heavyAvgChars: 246000,
+      recentHeavyBurst5m: 0,
+      totalLatencySec: 855.46,
+      rateLimit429Count: 0,
+      fallbackEscalationCount: 0,
+      estimatedHiddenInputTokensLow: 3900000,
+      estimatedHiddenInputTokensHigh: 5100000
+    },
+    streamRequests: { hiddenSharePct: 48.3, hiddenTotal: 586, total: 1212 },
+    triggerReasons: [],
+    sources: { filesScanned: 2, restartTruncationsDetected: 0 }
+  });
+  assert.equal(els.get("safety-status-badge").textContent, "Past 5h · Calm");
+  assert.equal(els.get("safety-inline-summary").classList.contains("hidden"), false, "Collapsed card must show 1-line summary");
+  assert.equal(els.get("safety-kpi-429").textContent, "14m 15s");
+});

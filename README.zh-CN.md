@@ -77,13 +77,13 @@ AI 要搜好几个词时一次同时搜完，要改多个文件时一次改完�
 **Windows（PowerShell）：**
 
 ```powershell
-irm https://raw.githubusercontent.com/zou172866/Antigravity-agy-dart/v1.8.0/install.ps1 | iex
+irm https://raw.githubusercontent.com/zou172866/Antigravity-agy-dart/v1.8.1/install.ps1 | iex
 ```
 
 **macOS / Linux：**
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/zou172866/Antigravity-agy-dart/v1.8.0/install.sh | sh
+curl -fsSL https://raw.githubusercontent.com/zou172866/Antigravity-agy-dart/v1.8.1/install.sh | sh
 ```
 
 ### 方法二：直接发给 Antigravity 装
@@ -91,13 +91,13 @@ curl -fsSL https://raw.githubusercontent.com/zou172866/Antigravity-agy-dart/v1.8
 复制这句发给 Antigravity：
 
 ```text
-请将 https://github.com/zou172866/Antigravity-agy-dart.git 的 v1.8.0 标签克隆到临时目录，运行其中的 scripts/install.mjs install 完成全局安装并跑 doctor 自检（Windows 如未安装 rg 请同时传 --install-rg）。
+请将 https://github.com/zou172866/Antigravity-agy-dart.git 的 v1.8.1 标签克隆到临时目录，运行其中的 scripts/install.mjs install 完成全局安装并跑 doctor 自检（Windows 如未安装 rg 请同时传 --install-rg）。
 ```
 
 ### 方法三：克隆仓库自定义安装
 
 ```powershell
-git clone --branch v1.8.0 --depth 1 https://github.com/zou172866/Antigravity-agy-dart.git
+git clone --branch v1.8.1 --depth 1 https://github.com/zou172866/Antigravity-agy-dart.git
 cd Antigravity-agy-dart
 
 # Windows PowerShell（加 -InstallRg 可顺手自动安装快速搜索工具 rg）
@@ -145,6 +145,9 @@ node scripts/install.mjs tool-loading eager         # 12 个工具全部预载
 ---
 
 ## 更新日志
+
+### v1.8.1
+- **后台安检监测卡片大白话重绘与窄侧边栏排版修复**：修复侧边栏窄屏下「后台安全审查」标题被挤成三行、状态徽章截断与摘要重复显示问题（`sidecars/dashboard/index.html`）；将卡片全面改写为通俗大白话——置顶「现在怎么做」行动提示框、耗时自动换算为 `14 分 15 秒`、Token 换算为 `万`、触发原因芯片中文化、按钮改为「整理进度，换新对话」与「复制排查证据（已去隐私）」；区分「过去 5 小时曾有偷烧但近 5 分钟已平稳（柔和黄 `刚有偷烧 · 已平稳`）」与「此刻正在狂烧（红色 `正在偷烧额度`）」，并在未发生日志截断时自动隐藏冗余重启提示。
 
 ### v1.8.0
 - **新增后台安全审查配额监测与重启防丢账本（Issue #1886）**：新增零依赖增量只读日志审计引擎（`context/lib/safety-monitor-audit.js`），自动发现 Antigravity 桌面端（`%APPDATA%\Antigravity\logs\language_server.log`，兼容 `D:\Roaming` 等自定义盘符）与 CLI 日志（`~/.gemini/antigravity-cli/log/cli-*.log`，自动跳过重复副本 `cli.log` 并拆分 Windows 并发交错行）；按分钟聚合持久化至 `~/.agy-dart/safety-audit-state.json`，解决桌面端重启清空日志丢现场问题；同 `tid` 精确统计隐藏 `streamGenerateContent` 请求占比，严格屏蔽时间戳/端口/UUID 的 429 假阳性，精准告警 `429_avalanche`、零 429 重型误报突发（`heavy_burst_or_sticky`）与逼近 ~4,400/5h 悬崖水位（`approaching_quota`）。三端同步透出：`ctx_doctor`（严格 `<= 8.4 KB`）、Sidecar 面板（`/api/safety-audit`，正常单行静默收起、异常自动展开并支持一键换新窗 Handoff 与复制脱敏报告）以及 CLI（`npm run safety:audit` / `node bin/agy-dart.mjs audit safety` / `cache:audit -- --with-safety`）。
@@ -274,7 +277,7 @@ npm run cache:simulate
 装到 DeepSeek Harness、Claude Code 或 Codex 时，安装器会把改动记录存在 `~/.agy-dart/<宿主名>-install.json` 里，方便以后卸载时干净还原，不会弄乱你原本的配置。
 
 ```sh
-git clone --branch v1.8.0 --depth 1 https://github.com/zou172866/Antigravity-agy-dart.git
+git clone --branch v1.8.1 --depth 1 https://github.com/zou172866/Antigravity-agy-dart.git
 cd Antigravity-agy-dart
 node bin/agy-dart.mjs install
 node bin/agy-dart.mjs doctor
