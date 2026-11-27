@@ -6,9 +6,9 @@
 
 # agy-dart
 
-**Google Antigravity plugin — Save tokens · Improve KV-cache hits · Keep cache warm automatically · Protect context quota · Rescue crashed sessions**
+**Google Antigravity plugin — Save tokens · Improve cache hits · Keep cache warm on demand · Catch silent background quota burn · Rescue stalled chats**
 
-No extra dependencies · Works automatically in the background · Built-in Sidecar dashboard
+Zero extra dependencies · Works automatically in the background · Built-in right-sidebar dashboard
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-10b981.svg)](LICENSE)
 [![Node.js 22.16+ (22.x) or 24+](https://img.shields.io/badge/Node.js-22.16%2B_(22.x)_or_24%2B-38bdf8.svg)](package.json)
@@ -34,35 +34,37 @@ No extra dependencies · Works automatically in the background · Built-in Sidec
 
 ---
 
-## What does this Google Antigravity plugin do?
+## What does this plugin do?
 
-`agy-dart` is a performance, KV-cache, and context-window plugin for **Google Antigravity** (also supports DeepSeek Harness, Claude Code, and Codex via `--target`). It reduces repeated reads and large tool results, shows prompt-cache usage, and helps you resume work in a new chat when a session fills up or stalls.
+`agy-dart` is a token-saving, cache-watching, and session-rescue plugin built for **Google Antigravity** (also supports DeepSeek Harness, Claude Code, and Codex via `--target`).
 
-Once installed, it runs automatically in the background — no new commands to learn, just chat and code as usual:
+Once installed, it runs quietly in the background — **no new commands to memorize, just chat and code as usual**:
 
-### 1. Combine actions
-When the AI needs to search several terms, it runs them in one batch; when it edits multiple files, it edits them together and runs tests in the same step instead of resending your full chat context across half a dozen turns.
+### 1. Combine small steps into fewer turns
+When the AI needs to search several terms, it runs them in one batch; when it edits multiple files, it edits them together and runs checks in the same step instead of resending your entire chat history turn after turn.
 
-### 2. Block noise
-If a test run prints 3,000 lines of logs, the plugin passes only the lines that matter to the AI (e.g., line 42 failed, the other 199 passed) and stores the full log locally for lookup. On multi-thousand-line code files, it pulls the outline first and reads only the target lines.
+### 2. Block noisy output & read large files smartly
+If a test run dumps 3,000 lines of logs, the plugin passes only the key failure lines to the AI (e.g., line 42 failed, the other 199 passed) and keeps the full log locally for lookup. On huge code files, it hands over a line-numbered outline first so the AI reads only the lines it needs.
 
-### 3. Cache monitoring and optional keepalive
-The plugin stabilizes controllable client-side prefixes and reduces repeated reads of unchanged files; actual cache hit rates still depend on how the host constructs requests and on backend caching behavior (if you use a dynamic proxy pool, pinning a single exit node can serve as a controlled troubleshooting experiment). Automatic keepalive and desktop expiry alerts start off. If you enable keepalive, the initial limit is one ping per chat until your next message. You can change the limit in the panel.
+### 3. Monitor cache & keep it warm on demand
+The plugin keeps the controllable start of each request steady and cuts down repeated reads of unchanged files; actual cache hit rates still depend on how Antigravity builds requests and how the backend caches them (if you use a dynamic rotating proxy, pinning a single exit node is a useful controlled check). Automatic warming and expiry desktop alerts start off; once enabled, the default limit is 1 warm-up per chat until your next message, and both the count and interval can be changed in the panel.
 
-### 4. Side panel & crash/hang rescue
-The right-sidebar panel shows: remaining context space, minutes until cache expiry, and total noise blocked.
-With multiple project windows open, if a background window is nearly out of context or stuck spinning with zero output, a desktop popup names that exact project and chat — click the popup to jump straight there. If a session crashes from blown-out context or hangs completely, click once in the panel to copy a progress summary and paste it into a new chat to continue.
+### 4. Right-sidebar dashboard & crash/hang rescue
+See at a glance how much context space is left, how many minutes until cache expiry, and how much noise has been blocked. With multiple project windows open, if a background chat runs low on context or gets stuck spinning with zero output, a desktop alert names that project and chat — click it to jump right there. If a chat stalls or hits the limit, copy a progress summary in one click and continue in a fresh chat.
+
+### 5. Catch silent background quota burn (Safety Monitor)
+Antigravity can occasionally re-review long chats in the background and quietly burn through your 5-hour quota or trigger 429 errors. The plugin watches local logs automatically (and keeps history even if a restart wipes the log): when everything is calm it stays collapsed to one quiet line; if a burn burst or quota cliff hits, the panel expands in plain language and gives you a one-click **Pack Progress & New Chat** button to stop the bleed.
 
 ### Other built-in features
-1. **Restore context clues after `/compact`**: Records modified files, latest test/build pass status, and saved reference IDs in the background so the AI can pick back up right after `/compact`.
-2. **Local search for long docs & web pages**: Stores multi-thousand-word docs or web pages by section in a local database and fetches only matching sections by keyword.
-3. **Local script filtering for giant logs & tables**: On multi-MB logs, CSVs, or huge JSON dumps, the AI runs a short local script to compute counts or extract rows (e.g., top 5 failing endpoints) and returns only the result; large JSON outputs also surface error rows automatically.
-4. **Workspace layout on new chats**: Supplies a compact directory, script, and core-file summary at the start of a new conversation.
-5. **Loop warnings**: Shows a UI-only note (not injected into model context) when the AI repeats `edit → fail → revert → fail` cycles or calls the same tool with no progress.
-6. **Secret masking & sensitive-file blocking**: Masks API keys and tokens in logs or fetched pages, blocks accidental reads of `.env` files when configured, and sandboxes read-only `git` queries against untrusted `.git/config` hooks.
-7. **Hard 8.8 KB response cap with dynamic quota**: Antigravity spills tool outputs above ~10 KB into a temp file that costs an extra read turn; all plugin responses stay within 8.8 KB, dynamically giving short passing checks' unused space to failing stack traces.
-8. **Detailed panel breakdown & offline simulation**: Inspect context usage across file reads, terminal output, and subagents, check 15-turn cache hit trends and miss causes, optionally read only changed lines after edits (off by default), or replay past chat history via CLI to measure cache hit rates and keepalive cost.
-9. **Works smoothly alongside your Skills, plus a Skills bloat check**: Use it with any Skills in Antigravity, Claude Code, or Codex — your Skills guide the workflow while `agy-dart` quietly blocks giant file reads, trims noisy logs, and looks after your cache; run `node bin/agy-dart.mjs audit skills` to see how much startup context each installed Skill uses and spot oversized main files.
+1. **Keep your place after `/compact`**: Tracks modified files, latest test/build status, and saved reference IDs in the background so the AI picks right back up after compacting.
+2. **Local search for long docs & web pages**: Saves multi-thousand-word docs or web pages locally by section and pulls only matching snippets by keyword.
+3. **Filter huge logs & tables locally first**: On multi-MB logs, CSVs, or huge JSON dumps, the AI runs a quick local script to summarize (e.g., top 5 failing endpoints) and brings only the answer into chat; big JSON blobs automatically surface error rows.
+4. **Workspace map on new chats**: Gives the AI a compact folder layout, script list, and core-file overview as soon as a new chat starts.
+5. **Loop warnings**: Shows a UI-only note (never injected into model context) when the AI gets stuck in `edit → fail → revert → fail` cycles.
+6. **Secret masking & sensitive-file protection**: Masks API keys and tokens in logs or web pages, blocks accidental reads of `.env` files when configured, and stops untrusted Git configs from running external commands.
+7. **Keep tool replies under 8.8 KB**: Antigravity spills tool replies above ~10 KB into a temp file that costs an extra read turn; the plugin stays inside 8.8 KB and shifts leftover space from short passing checks to real error stack traces.
+8. **Usage breakdown, inline diagnostic cards & one-click updates**: Inspect how much context goes to file reads, terminal output, or subagents, view 15-turn cache trends, see interactive inline cards when running `ctx_stats` / `ctx_doctor` (with one-click jump pills to open the side panel on Antigravity `v2.35.1+`), update right from the panel top bar, or replay past chats via CLI to estimate cache hits and warming cost.
+9. **Plays nicely with your Skills + Skills bloat check**: Your Skills handle workflows while `agy-dart` quietly guards file reads, trims logs, and watches cache underneath; run `node bin/agy-dart.mjs audit skills` to see how much startup context each installed Skill uses.
 
 > Antigravity updates frequently — click **Star** at the top right to follow compatibility updates.
 
@@ -70,20 +72,20 @@ With multiple project windows open, if a background window is nearly out of cont
 
 ## How to Install
 
-Use **Node.js 22.16.0 or later in the 22.x line, or Node.js 24 or later**. The installer checks that the built-in SQLite supports FTS5 with the trigram tokenizer. The plugin uses only built-in modules.
+Requires **Node.js 22.16+ (22.x) or Node.js 24+**. Zero third-party packages — the installer checks that Node's built-in SQLite search engine (FTS5 with trigram) is ready.
 
 ### Option 1: One-line terminal install (no clone needed)
 
 **Windows (PowerShell):**
 
 ```powershell
-irm https://raw.githubusercontent.com/zou172866/Antigravity-agy-dart/v1.8.2/install.ps1 | iex
+irm https://raw.githubusercontent.com/zou172866/Antigravity-agy-dart/v1.9.0/install.ps1 | iex
 ```
 
 **macOS / Linux:**
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/zou172866/Antigravity-agy-dart/v1.8.2/install.sh | sh
+curl -fsSL https://raw.githubusercontent.com/zou172866/Antigravity-agy-dart/v1.9.0/install.sh | sh
 ```
 
 ### Option 2: Let Antigravity install it
@@ -91,13 +93,13 @@ curl -fsSL https://raw.githubusercontent.com/zou172866/Antigravity-agy-dart/v1.8
 Send this to Antigravity:
 
 ```text
-Clone tag v1.8.2 of https://github.com/zou172866/Antigravity-agy-dart.git to a temp folder, run `node scripts/install.mjs install` (add `--install-rg` on Windows if `rg` is missing), and confirm `doctor` passes.
+Clone tag v1.9.0 of https://github.com/zou172866/Antigravity-agy-dart.git to a temp folder, run `node scripts/install.mjs install` (add `--install-rg` on Windows if `rg` is missing), and confirm `doctor` passes.
 ```
 
 ### Option 3: Clone & install with custom flags
 
 ```powershell
-git clone --branch v1.8.2 --depth 1 https://github.com/zou172866/Antigravity-agy-dart.git
+git clone --branch v1.9.0 --depth 1 https://github.com/zou172866/Antigravity-agy-dart.git
 cd Antigravity-agy-dart
 
 # Windows PowerShell (optional -InstallRg auto-installs ripgrep)
@@ -116,19 +118,23 @@ node scripts/install.mjs doctor                         # Check install health
 node scripts/install.mjs uninstall                      # Uninstall
 ```
 
-Restart or reload Antigravity after installing and open a new chat. User-created `rules/*.local.md` files inside the plugin directory are preserved across upgrades. If you previously installed standalone `agy-fast` or `antigravity-plugin-context-mode`, disable the old ones in your plugin list.
+Restart or reload Antigravity after installing and open a new chat. Your own `rules/*.local.md` files are preserved across upgrades. If you previously installed standalone `agy-fast` or `antigravity-plugin-context-mode`, disable the old ones in your plugin list.
 
-Indexed content and usage history are stored locally in `~/.agy-dart/context.db` by default and survive uninstall. Before uninstalling, `ctx_purge` can clear the current chat's index. When the host omits a session ID, this covers anonymous data for the confirmed workspace. To clear indexed data and history across all projects, call `ctx_purge` with `scope: "all"`.
-
-Global uninstall also removes the Gemini/T3 copies recorded by the installer. If an older copy has no ownership record, the installer prints its location and a command for removing that copy explicitly.
+Saved document indexes and usage history live locally in `~/.agy-dart/context.db` and stay intact on uninstall. To clear the current chat's index before uninstalling, call `ctx_purge` (when the host omits a session ID, this clears unattributed data for the current workspace); pass `scope: "all"` to wipe all projects. Global uninstall also removes installer-tracked Gemini/T3 copies and lists any older untracked copies with a dedicated removal command instead of deleting blindly.
 
 ---
 
 ## Settings
 
-Automatic cache warming is off by default. To turn it on for a chat, enable **Auto-Keepalive** in the **agy-dart Context** panel — or click **Warm 1×** next to the countdown anytime for a single manual ping. **Global Warm** sets the default count and timing (**Auto**, **Fixed 4 / 9 / 15 min**, or **Custom 1–60 min**) for chats that haven't picked their own. Turning warming off for a chat silences its expiry and limit desktop alerts. Desktop alerts for stalled chats are also off by default and can be enabled separately. Each warm-up asks the model for a short `OK` reply and uses input tokens (or the full conversation if the cache already expired). The panel also controls desktop alerts, pausing protection, local cleanup, and file-size limits.
+Everyday switches live right in the **agy-dart Context** side panel:
 
-Preset modes & tool-loading modes via CLI:
+- **Auto-Keepalive (off by default)**: Turn it on for the current chat in the panel, or click **Warm 1×** next to the countdown anytime for a single manual ping. Use **Global Warm** to set the default count and schedule (**Auto**, **Fixed 4 / 9 / 15 min**, or **Custom 1–60 min**). Turning warming off for a chat also silences its expiry and limit alerts.
+  > Note: Each warm-up asks the model for a short `OK` reply and uses input tokens (or the full conversation if the cache already expired).
+- **Desktop alerts (off by default)**: Cache expiry, stalled-chat alerts, and background quota burn alerts (**Burn Alert: OFF/ON**) all start off and can be toggled individually.
+- **One-click & automatic updates**: Click **Check Update** / **Update Now** in the top bar anytime, or toggle **Auto-Update: OFF/ON** (off by default) for silent same-major upgrades.
+- **Other panel controls**: Pause protection, clear old local data, and adjust file-size limits directly in the panel.
+
+Preset read limits & tool-loading modes via CLI:
 
 ```bash
 node scripts/install.mjs mode host-45k              # Default: direct read up to 45 KB code / 128 KB patches, block >16 KB noisy logs
@@ -142,42 +148,54 @@ node scripts/install.mjs tool-loading lazy          # All 12 tools lazy-loaded
 node scripts/install.mjs tool-loading eager         # All 12 tools eager-loaded
 ```
 
-> **Troubleshooting (`ide-tools` duplicate `/required` error):** If Antigravity fails during toolbox initialization with `building toolbox: tool "mcp_ide-tools_mcp_agy-dart_fast_apply_edits" advertises an invalid parameter schema ... at '/required': items at 1 and 2 are equal`, the host's `ide-tools` bridge is re-wrapping already-eager `mcp_agy-dart_fast_*` tools and appending `toolSummary` to `/required` a second time without deduplicating (`agy-dart` itself only declares `"required": ["edits"]`). Switch to lazy loading and restart Antigravity:
->
-> ```bash
-> node ~/.gemini/config/plugins/agy-dart/scripts/install.mjs tool-loading lazy
-> ```
->
-> (Or remove `"tools"` / `"eager": true` under `mcpServers.fast` in `~/.gemini/config/plugins/agy-dart/mcp_config.json` and restart. See [skills/agy-dart/references/error-playbook.md](skills/agy-dart/references/error-playbook.md) for diagnostics.)
+<details>
+<summary>Troubleshooting: <code>ide-tools</code> duplicate <code>/required</code> schema error</summary>
+
+If Antigravity fails during toolbox initialization with `building toolbox: tool "mcp_ide-tools_mcp_agy-dart_fast_apply_edits" advertises an invalid parameter schema ... at '/required': items at 1 and 2 are equal`, the host's `ide-tools` bridge is duplicating `toolSummary` in `/required`. Switch to lazy loading and restart Antigravity:
+
+```bash
+node ~/.gemini/config/plugins/agy-dart/scripts/install.mjs tool-loading lazy
+```
+
+(Or remove `"tools"` / `"eager": true` under `mcpServers.fast` in `~/.gemini/config/plugins/agy-dart/mcp_config.json` and restart. See [skills/agy-dart/references/error-playbook.md](skills/agy-dart/references/error-playbook.md) for diagnostics.)
+
+</details>
 
 ---
 
 ## Changelog
 
+### v1.9.0
+- **Gemini 4 95% cache & pricing alignment**: Updated cache savings math, per-variant pricing (Carbon/Argon, Neon, Hydrogen), minimum cacheable threshold (4,096 tokens), and multi-turn delta checks (2,050 tokens) for Gemini 4 so cost and hit-rate estimates stay accurate without false cache-miss warnings; also recognized Carbon/Neon default high-reasoning tiers and raised the keepalive ROI floor.
+- **Interactive inline diagnostic cards & leaner MCP replies**: On Antigravity `v2.34.0+` UI hosts, `ctx_stats` and `ctx_doctor` now render a self-contained inline card right in chat (auto-following light/dark theme with a built-in Refresh button) while sending a compact summary to the model; CLI/IDE hosts stay zero-overhead with single-line compact JSON. Also added a one-click side-panel link (`sidecar://agy-dart/dashboard/`) on `v2.35.1+`.
+- **Stays fast with unlimited chat history (`ConversationService` API)**: Watchdog and the side panel now query Antigravity's local `ConversationService` API first (strict loopback-only) to check archived, subagent, and active-run states directly, falling back cleanly to bounded SQLite/directory scans with LRU caching so performance never degrades as history grows.
+- **Smarter file slicing, `/swarm` isolation & lower hook overhead**: Ranged reads now measure actual slice bytes before blocking and pass through `.heic`/`.avif`/`.amr`, PDF page slices, and official skill/rule/agent files automatically; `/swarm` workers are isolated cleanly from primary chats without resetting active windows; trimmed read-only tools from `PostToolUse`, wrote `fast` verification checkpoints directly, aligned MCP timeouts (`310s`) / protocol negotiation / built-in subagent eager configs, and upgraded `cache-audit` for `.agents/` layouts and eager-vs-lazy token budgets.
+
 ### v1.8.2
-- **Zero-cloud-check single-file reads & Turn-0 prompt savings (-24 tok)**: Updated `hooks/pre-tool-use.mjs` and `rules/AGENTS.md` (trimmed to **369 tok**) so single-file large reads with a free inline outline route directly to native ranged `read_file` (`allowed_tool`, 0 cloud Safety Monitor calls) instead of detouring through `read_slices` MCP, reserving `read_slices` for multi-file batching while batching >=2 searches/edits/checks into single calls.
-- **Proactive quota-burn early alerts & 2-step auto-copy Handoff**: Added opt-in `safetyDesktopNotify` (`Burn Alert: OFF/ON` toggle on the dashboard card, default OFF, 15-min cooldown, env/config/SQLite precedence) to notify users immediately on active heavy-review bursts or 429 spikes; added a long-chat × Safety Monitor quota-saver synergy tip next to the Context bar; upgraded **Pack Progress & New Chat** to auto-copy the Handoff brief and show a 2-step paste guide.
-- **Cross-poll Safety Monitor cursor precision**: Persisted bounded in-flight `tid` state (`pendingByTid` / `activeMonitorByTid` / `lastTrigger`, 90s TTL) across incremental log scans in `context/lib/safety-monitor-audit.js` so heavy reviews spanning two poll ticks retain exact trajectory character counts, trigger reasons, and hidden stream attribution.
+- **Single-file reads now skip background cloud checks completely (+ leaner startup prompt)**: When reading a single large file, the plugin hands over a free outline and sends the AI straight to Antigravity's built-in ranged file reader (zero background cloud reviews) instead of detouring through a plugin tool; multi-file reads, searches, edits, and checks still batch together, and the built-in rules were trimmed further to save tokens on Turn 1.
+- **Optional desktop alert for active quota burn & 2-step new-chat handoff**: Added an opt-in **Burn Alert: OFF/ON** toggle on the dashboard card (off by default, 15-minute cooldown) that pops up as soon as active background burn or 429 spikes start; added a plain-language quota-saver tip next to the Context bar for long chats; clicking **Pack Progress & New Chat** now copies your handoff brief automatically and shows a quick 2-step paste guide.
+- **Fixed occasional missing character counts in burn stats**: Heavy background reviews that straddle two dashboard refresh ticks now keep their full character count and trigger reason instead of occasionally recording `0`.
 
 ### v1.8.1
-- **Plain-language Safety Monitor dashboard card & narrow-sidebar layout fix**: Fixed vertical 3-line title wrapping, clipped status badge text, and duplicated summary lines in narrow Sidecar panes (`sidecars/dashboard/index.html`). Rewrote Safety Monitor alerts, KPI tiles, and buttons into plain human language (e.g., `14m 15s` wait duration instead of raw `855.46s`, localized trigger-reason chips, explicit "What to do now" action callout, and "Pack Progress & New Chat" button), softened past-5h bursts with `0` events in the last 5 minutes from red critical to amber `Past 5h · Calm`, and hid the restart-truncation note when `0` truncations occurred.
+- **Plain-language Safety Monitor card**: Rewrote the background quota-burn card into clear, everyday wording — put a **"What to do now"** box at the top, formatted waits like `14m 15s`, made trigger labels readable, and renamed actions to **Pack Progress & New Chat** and **Copy Evidence (Redacted)**.
+- **Fixed narrow-sidebar layout & calmer status badges**: Fixed 3-line title wrapping, clipped badges, and repeated summary lines in narrow panels; softened past-5h bursts that have been quiet for the last 5 minutes from red to amber (`Past 5h · Calm`) and hid restart-log notes when no restart truncation happened.
 
 ### v1.8.0
-- **Background Safety Monitor quota-burn observability & restart-proof ledger (Issue #1886)**: Added a zero-dependency incremental log auditor (`context/lib/safety-monitor-audit.js`) across Antigravity Desktop (`%APPDATA%\Antigravity\logs\language_server.log`, supporting redirected Roaming drives) and CLI (`~/.gemini/antigravity-cli/log/cli-*.log`, deduplicating `cli.log` and splitting Windows interleaved lines). Persists rolling 5h/24h minute buckets (`~/.agy-dart/safety-audit-state.json`) so Desktop restart truncations no longer erase history, computes exact `tid`-correlated hidden `streamGenerateContent` share, guards strictly against naive `429` false positives, and alerts on `429_avalanche`, zero-429 `heavy_burst_or_sticky` false-alarm bursts, and `approaching_quota` (~4,400/5h cliff). Surfaced across `ctx_doctor` (<=8.4 KB safe), a quiet/auto-expanding Sidecar Dashboard card (`/api/safety-audit` with one-click Handoff & redacted Markdown copy), and CLI (`npm run safety:audit` / `node bin/agy-dart.mjs audit safety` / `cache:audit -- --with-safety`).
-- **Outside-workspace `read_file` guardrail & Handoff break-chain advisory**: Updated `hooks/pre-tool-use.mjs` so large files outside the active workspace still return an inline outline but stay on native ranged `read_file` (`allowed_tool`, 0 cloud review) instead of nudging MCP tools that can trigger 200K–300K char `gemini-4-hydrogen-sonar` Signal E false alarms. Added optional `## Safety Monitor Advisory` to `handoff.js` and concise guidance in `rules/AGENTS.md` (393 tok, within 400-tok budget) + `skills/agy-dart/references/error-playbook.md`.
-- **PreInvocation host panic guard (Issue #7 / upstream #1394 & #1845)**: Gated inline `metadata.user_markdown` banner emission in `hooks/pre-invocation.mjs` behind opt-in `cacheWatchInlineAlerts` (default `false`; configurable via `~/.agy-dart/config.json` or `AGY_DART_CACHE_WATCH_INLINE_ALERTS`) to prevent host `proto_utils.go` panics while keeping all non-banner bookkeeping (leases, `/compact` invalidation, turn sequence, TTL calibration, and Sidecar/desktop alerts) active.
-- **Workspace root auto-fallback for `fast` & `context` MCP servers (Issue #6)**: Fixed `"Workspace root could not be determined (server cwd is inside plugin directory)"` when hosts launch MCP servers inside the plugin folder without passing `cwd`. Added a live `session_workspace` registry wired through `SessionStart`, `PreInvocation`, and `Stop` hooks so omitted-`cwd` calls resolve on Turn 1 and track window switches without restarting MCP servers (while still failing fast on ambiguous multi-window sessions), added capability-aware `roots/list` cold-start retries, and added `AGY_DART_WORKSPACE` / `AGY_DART_DEFAULT_CWD` and `defaultCwd` (`~/.agy-dart/config.json`) overrides.
+- **Background quota-burn monitoring that survives restarts**: Watches local Antigravity Desktop and CLI logs automatically and saves per-minute history locally so restarting Antigravity never wipes the evidence. Stays collapsed to a single quiet line when healthy, and auto-expands with one-click new-chat handoff and redacted report copy if 429 spikes, heavy re-review bursts, or the 5-hour quota cliff appear (also available via `node bin/agy-dart.mjs audit safety`).
+- **Reading files outside the workspace no longer triggers heavy re-reviews**: Large files outside your active project still get a free outline, but now route to built-in ranged reading (zero cloud checks) instead of nudging external tools that could trigger giant background reviews; handoff briefs also remind you to break review loops when starting a fresh chat.
+- **Prevented crashes on affected Antigravity versions**: Turned off inline chat banners by default to avoid crashes in certain host versions, while keeping the side panel, cache countdown, hang detection, and desktop alerts fully working.
+- **Fixed occasional "workspace root not found" errors on Turn 1**: The plugin now remembers your active project folder automatically and updates as you switch windows (while still refusing ambiguous multi-window calls so it never edits the wrong repo).
 
 ### v1.7.8
-- **Opt-in silent auto-updates (default OFF)**: Added an `Auto-Update: OFF/ON` toggle in the dashboard topbar (also configurable via `autoUpdateInstall` in `~/.agy-dart/config.json` or `AGY_DART_AUTO_UPDATE_INSTALL` / `AGY_DART_DISABLE_AUTO_UPDATE_INSTALL`). When enabled, background checks (at startup and every 6 hours) silently upgrade same-major releases only when a verified SHA-256 `.tgz` asset is present, defer during active TTL keepalive pings, trip a per-version circuit breaker on failure, and display a one-time dismissible notice after reload.
+- **Optional silent auto-updates (off by default)**: Added an **Auto-Update: OFF/ON** toggle in the panel top bar. When enabled, startup and 6-hour checks silently install verified same-major releases in the background, waiting if a cache warm-up is in flight, stopping retries on a failed version, and showing a one-time notice after reload.
 
 ### v1.7.7
-- **DeepSeek Harness (`dsh`) native support (`--target dsh`)**: Added a zero-dependency native Cordis plugin (`dsh/plugin.mjs`) and `--target dsh` installer (`--profile <name>` / `--mcp-only`) that mounts both MCP servers (`agy_dart_fast` & `agy_dart_context` with tuned `toolCallTimeoutMs`), bridges DSH native `tools/pre-execute` / `tools/execute` / `tools/result` (supporting `read`, Windows `pwsh`, `bash`, `edit`, `write`, `apply_patch`), syncs `~/.dsh/skills/agy-dart/`, and adds `node bin/agy-dart.mjs dashboard` to open the live dashboard standalone. Zero token or behavior overhead on Antigravity.
-- **Archived-conversation keepalive guard**: Automatically suppresses background auto-keepalive pings, manual warm-ups, and desktop alerts for archived conversations without losing state, and cleanly resumes when unarchived.
+- **DeepSeek Harness support (`--target dsh`)**: Install into DeepSeek Harness alongside Antigravity, Claude Code, and Codex with automatic read guards and log trimming, plus `node bin/agy-dart.mjs dashboard` to open the live monitor in a browser — zero impact or token overhead on Antigravity.
+- **Pause warming & alerts on archived chats**: Archived chats automatically stop background keepalive pings, manual warm-ups, and desktop alerts without losing state, and resume cleanly if unarchived.
 
 ### v1.7.6
-- **One-click self-update & startup version check in the panel** (thanks to [@bestmulicc](https://github.com/bestmulicc), [#5](https://github.com/zou172866/Antigravity-agy-dart/pull/5)): The right-sidebar panel now checks GitHub Releases for new versions on startup (disable via `autoUpdateCheck: false` in `~/.agy-dart/config.json` or `AGY_DART_DISABLE_AUTO_UPDATE_CHECK=1`) and lets you click **Check Update** / **Update Now** to upgrade in place without running terminal commands.
-- **Verified downloads, automatic rollback & preserved settings**: Prefers the release `.tgz` package with SHA-256 verification before unpacking, rolls back automatically if a file is locked, reloads the panel cleanly, and keeps your local `rules/*.local.md`, tool-loading mode, `--with-devtools` tools, and synced Gemini/T3 copies intact.
+- **One-click online update in the panel** (thanks to [@bestmulicc](https://github.com/bestmulicc), [#5](https://github.com/zou172866/Antigravity-agy-dart/pull/5)): The right panel now checks GitHub Releases on startup and lets you click **Check Update** / **Update Now** to upgrade in place without running terminal commands (startup checks can be turned off in config).
+- **Verified downloads, automatic rollback & preserved settings**: Verifies release package integrity before unpacking, rolls back automatically if a file is locked, reloads the panel cleanly, and keeps your local `rules/*.local.md`, tool-loading mode, and synced copies intact.
 
 ### v1.7.5
 - **One-click manual `Warm 1×` button in the panel**: Added a manual warm-up button right next to the cache countdown. It works even when Auto-Keepalive is off and doesn't use up your automatic warm-up limit (with double-click protection and rollback if sending fails).
@@ -204,6 +222,9 @@ node scripts/install.mjs tool-loading eager         # All 12 tools eager-loaded
 - **Hand the AI a file map when blocking a full large-file read**: When the AI tries to read a huge code file all at once for the first time, the block message now includes a line-numbered list of functions and classes so it can jump straight to the lines it needs without an extra turn.
 - **Unified CLI with Claude Code & Codex support**: Added `node bin/agy-dart.mjs` to install for Antigravity, Claude Code, or Codex, print file outlines, and compare token usage across chats; also shipped lightweight built-in coding/review subagents and stronger workspace & Node.js checks.
 
+<details>
+<summary>Show earlier releases (v1.1.0 – v1.6.0)</summary>
+
 ### v1.6.0
 - **4 core tools preloaded directly, fixing occasional dropped multi-file edits**: Batch search, file outlines, multi-file edits, and quick checks now load directly instead of going through an extra layer that sometimes emptied multi-file edits; the other 8 large-log tools stay on-demand to save startup context.
 - **Fixed Auto-Keepalive stalls & skipped all background subagents**: The background panel now restarts cleanly after plugin updates so stale processes don't interfere; subagents spawned by `/boost`, browser tasks, or workflows — plus closed chats — never send keepalive pings or crowd the top status bar.
@@ -213,7 +234,7 @@ node scripts/install.mjs tool-loading eager         # All 12 tools eager-loaded
 
 ### v1.5.4
 - **Click alerts to jump to that chat**: Clicking a desktop popup or cross-window panel alert brings the matching project window to the front and opens that conversation; added a multi-window session switcher bar in the panel.
-- **Optional cache keepalive** sends a ping for primary chats shortly before expiry. The panel controls the per-chat limit. Your next message resets the count.
+- **Optional cache keepalive**: Sends a ping for primary chats shortly before expiry; the panel controls the per-chat limit, and your next message resets the count.
 - Moved current context usage, cache countdown, and blocked noise volume into a larger top card in the panel.
 
 ### v1.5.3
@@ -254,15 +275,42 @@ node scripts/install.mjs tool-loading eager         # All 12 tools eager-loaded
 - **Automatic terminal output trimming**: Strips progress bars and repetitive noise from `git`, test, build, and install commands while saving full logs locally.
 - Unchanged-file duplicate-read protection, edit-fail loop notes, internal-URL SSRF blocking, log secret masking, and one-click panel cleanup.
 
+</details>
+
 ---
 
-## Local Checks
+## Using with Other AI Tools (CLI)
+
+`node bin/agy-dart.mjs` installs for Antigravity by default and can also target other coding tools (saving a restore record in `~/.agy-dart/` so uninstalling cleanly puts your original config back):
 
 ```bash
-npm test                                    # Run full test suite
-npm run verify:pkg                          # Verify installer file list
-npm run prefix:budget                       # Estimate configured Antigravity startup and full-catalog token usage
-npm run brief:check                         # Check that AI_REVIEW_BRIEF.md line/test counts are up to date
+node bin/agy-dart.mjs install                        # Install for Antigravity (default)
+node bin/agy-dart.mjs install --target dsh           # Install for DeepSeek Harness (optional --profile <name> or --mcp-only)
+node bin/agy-dart.mjs install --target claude        # Install for Claude Code
+node bin/agy-dart.mjs install --target codex         # Install for Codex
+```
+
+Handy CLI utilities:
+
+```bash
+node bin/agy-dart.mjs dashboard                      # Open the live dashboard standalone in a browser
+node bin/agy-dart.mjs audit safety                   # Check recent background quota-burn events
+node bin/agy-dart.mjs audit skills                   # Audit startup context usage of installed Skills
+node bin/agy-dart.mjs outline <file>                 # Print a file's function/class map with line numbers
+node bin/agy-dart.mjs session <id>                   # Inspect one chat's token bill
+node bin/agy-dart.mjs compare <before> <after>       # Compare token usage across two chats
+```
+
+---
+
+<details>
+<summary><strong>Developer Local Checks (for contributors)</strong></summary>
+
+```bash
+npm test                                           # Run full test suite
+npm run verify:pkg                                 # Verify installer file list
+npm run prefix:budget                              # Estimate configured Antigravity startup and full-catalog token usage
+npm run brief:check                                # Check that AI_REVIEW_BRIEF.md line/test counts are up to date
 node scripts/cache-audit.mjs --workspace . --no-live
 node bin/agy-dart.mjs audit skills --workspace .   # Check startup context usage and structure of installed Skills
 npm run cache:simulate
@@ -273,24 +321,13 @@ After adding, removing, or editing modules or tests, keep these three places in 
 - **Test count check** (`tests/v1.2-hardening.test.mjs`): when the test count changes, update the hardcoded `computeBriefMetrics(ROOT).testCases` number to match `npm test`.
 - **Review brief** (`AI_REVIEW_BRIEF.md`): after changing tracked source files or test counts, run `node scripts/gen-review-brief.mjs --write` to refresh the numbers, then verify with `npm run brief:check`.
 
+</details>
+
 ---
 
 ## Credits & License
 
 [MIT License](LICENSE). Incorporates and adapts MIT-licensed code from [INK-Q/agy-fast](https://github.com/INK-Q/agy-fast) and [Domush/antigravity-plugin-context-mode](https://github.com/Domush/antigravity-plugin-context-mode); full third-party notices are in [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
-
-## CLI (Antigravity / DeepSeek Harness / Claude Code / Codex)
-
-`node bin/agy-dart.mjs` installs for Antigravity by default; pass `--target dsh` (optional `--profile <name>` / `--mcp-only`), `--target claude`, or `--target codex` for DeepSeek Harness, Claude Code, or Codex. For DeepSeek Harness, `--target dsh` mounts both MCP servers (`agy_dart_fast` & `agy_dart_context`), the zero-dependency native Cordis guard plugin (`dsh/plugin.mjs`), and `~/.dsh/skills/agy-dart/`; run `node bin/agy-dart.mjs dashboard` to open the live Web dashboard standalone. You can also run `outline <file>` to print a file's function map with line numbers, `session <id>` to inspect one chat's token bill, or `compare <before> <after>` to compare two chats.
-
-When installing for DeepSeek Harness, Claude Code, or Codex, the installer saves an undo record in `~/.agy-dart/<host>-install.json` so uninstalling cleanly restores your original config.
-
-```sh
-git clone --branch v1.8.2 --depth 1 https://github.com/zou172866/Antigravity-agy-dart.git
-cd Antigravity-agy-dart
-node bin/agy-dart.mjs install
-node bin/agy-dart.mjs doctor
-```
 
 ---
 
