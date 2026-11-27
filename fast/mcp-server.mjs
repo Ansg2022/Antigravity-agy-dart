@@ -505,14 +505,32 @@ var McpStdioServer = class {
       try {
         const res = await tool.handler(args, { server: this, rpcId: id, hostSessionId, directConvId });
         const rpcResp = buildBoundedToolRpcResponse(id, res.text, Boolean(res.isError), DEFAULT_INLINE_MAX_BYTES - 1);
+        const finalText = rpcResp.result.content[0].text;
         if (!res.isError && res.telemetry && res.telemetry.rawBytes > 0) {
           try {
             await recordFastSavingsEvent({
               toolName: name,
               telemetry: res.telemetry,
-              finalText: rpcResp.result.content[0].text,
+              finalText,
               hostSessionId,
               directConvId
+            });
+          } catch {}
+        }
+        if (
+          !res.isError &&
+          (name === "run_checks" || (name === "apply_edits" && args?.verify && !args?.dryRun))
+        ) {
+          try {
+            await recordFastVerificationCheckpoint({
+              toolName: name,
+              args,
+              finalText,
+              worktree:
+                res.telemetry?.worktree ||
+                res.verifyWorktree ||
+                (typeof args?.cwd === "string" && args.cwd.trim() ? args.cwd.trim() : process.cwd()),
+              hostSessionId
             });
           } catch {}
         }
@@ -2444,7 +2462,11 @@ ${summaryLines.join("\n")}`];
   }
   const outText = parts.join("\n");
   const finalText = truncateWithByteNotice(outText, DEFAULT_INLINE_MAX_BYTES);
-  return { text: finalText, isError: false };
+  return {
+    text: finalText,
+    isError: false,
+    ...(verifySpec && !input.dryRun ? { verifyWorktree: baseCwd } : {})
+  };
 }
 
 // src/tools/batch-search.ts
@@ -4405,6 +4427,94 @@ async function recordFastSavingsEvent({ toolName, telemetry, finalText, hostSess
     sandboxBytes: telemetry.rawBytes,
     returnedBytes,
     claimFingerprint
+  });
+}
+var fastPostToolVerifyModPromise = null;
+var fastFilterRulesModPromise = null;
+function loadFastPostToolVerifyMod() {
+  if (!fastPostToolVerifyModPromise) {
+    fastPostToolVerifyModPromise = import("../hooks/post-tool-use.mjs").catch(() => null);
+  }
+  return fastPostToolVerifyModPromise;
+}
+function loadFastFilterRulesMod() {
+  if (!fastFilterRulesModPromise) {
+    fastFilterRulesModPromise = import("../hooks/filter-rules.mjs").catch(() => null);
+  }
+  return fastFilterRulesModPromise;
+}
+async function recordFastVerificationCheckpoint({
+  toolName,
+  args = {},
+  finalText = "",
+  worktree = process.cwd(),
+  hostSessionId = null
+}) {
+  if (!finalText || typeof finalText !== "string") return;
+  const postMod = await loadFastPostToolVerifyMod();
+  if (typeof postMod?.extractVerificationSignal !== "function") return;
+  const verifySignal = postMod.extractVerificationSignal(toolName, args, finalText);
+  if (!verifySignal) return;
+  const store = await getFastTelemetryStore();
+  if (!store || typeof store.recordVerificationResult !== "function") return;
+
+  let targetSessionId = "default";
+  if (hostSessionId) {
+    targetSessionId =
+      typeof store.resolveRootSessionId === "function"
+        ? store.resolveRootSessionId(hostSessionId)
+        : hostSessionId;
+  } else if (worktree) {
+    const uniquePrimarySid =
+      typeof store.resolveUniqueActivePrimarySessionForWorkspace === "function"
+        ? store.resolveUniqueActivePrimarySessionForWorkspace(worktree, {
+            pluginRootNorm: FAST_PLUGIN_ROOT_NORM
+          })
+        : "";
+    if (uniquePrimarySid) {
+      targetSessionId = uniquePrimarySid;
+    } else {
+      try {
+        const canonicalDir = fsSyncNode.realpathSync.native(worktree);
+        targetSessionId = "workspace:" + createHashNode("sha256").update(canonicalDir).digest("hex");
+      } catch {}
+    }
+  }
+
+  const safeCommand = redactSecrets(verifySignal.command || "").text;
+  const safeSummary = redactSecrets(verifySignal.summary || "").text;
+  const redactCmdEntries = (list) =>
+    Array.isArray(list)
+      ? list.map((item) => ({
+          name: redactSecrets(String(item?.name || "")).text,
+          command: redactSecrets(String(item?.command || "")).text
+        }))
+      : undefined;
+  let safeFailureExcerpt = "";
+  if (!verifySignal.passed && verifySignal.failureSection) {
+    const filterRulesMod = await loadFastFilterRulesMod();
+    if (typeof filterRulesMod?.extractFailureExcerpt === "function") {
+      safeFailureExcerpt = filterRulesMod.extractFailureExcerpt(
+        redactSecrets(verifySignal.failureSection).text
+      );
+    }
+  }
+  const { failureSection: _ignoredSection, ...cleanVerifySignal } = verifySignal;
+  store.recordVerificationResult(targetSessionId, {
+    ...cleanVerifySignal,
+    command: safeCommand,
+    summary: safeSummary,
+    ...(Array.isArray(cleanVerifySignal.batchCommands)
+      ? { batchCommands: redactCmdEntries(cleanVerifySignal.batchCommands) }
+      : {}),
+    ...(Array.isArray(cleanVerifySignal.failedCommands)
+      ? { failedCommands: redactCmdEntries(cleanVerifySignal.failedCommands) }
+      : {}),
+    ...(Array.isArray(cleanVerifySignal.passedCommands)
+      ? { passedCommands: redactCmdEntries(cleanVerifySignal.passedCommands) }
+      : {}),
+    failureExcerpt: safeFailureExcerpt,
+    worktree
   });
 }
 function closeOutlineDbStore() {

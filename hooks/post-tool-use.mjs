@@ -1346,6 +1346,19 @@ export async function processPostToolPayload(rawPayload) {
       } else if (paths.length > 0) {
         const partialApplied = extractPartialAppliedPaths(responseText, toolName, args, cwd, paths);
         const explicitlyApplied = /^\s*Applied edits to \d+ file\(s\):/im.test(responseText);
+        const bareToolForWrite = stripHostNamespace(toolName);
+        const effectiveApplyTool =
+          bareToolForWrite === "call_mcp_tool"
+            ? stripHostNamespace(cleanPath(args.ToolName || args.toolName || ""))
+            : bareToolForWrite;
+        const effectiveApplyArgs =
+          bareToolForWrite === "call_mcp_tool"
+            ? parseMaybeJson(args.Arguments ?? args.arguments) || {}
+            : args;
+        const isBestEffortApply =
+          (effectiveApplyTool === "apply_edits" || /(?:^|_)apply_edits$/.test(effectiveApplyTool)) &&
+          Boolean(effectiveApplyArgs?.bestEffort) &&
+          !effectiveApplyArgs?.dryRun;
         const abortedNoWrite =
           partialApplied === null &&
           !explicitlyApplied &&
@@ -1353,8 +1366,21 @@ export async function processPostToolPayload(rawPayload) {
             /^\s*(?:(?:Atomic edit aborted|Edit aborted|Validation failed)\s*\(0 files modified\)|Write failed \(changes rolled back\)|Dry run validated|Encountered error in step execution|Tool error \(|Error(?:\s*\[[A-Z0-9_]+\])?:)/i.test(
               responseText
             ));
-        const effectivePaths = partialApplied !== null ? partialApplied : abortedNoWrite ? [] : paths;
-        if (effectivePaths.length > 0) {
+        // When bestEffort apply_edits returns isError with an empty toolResponse (e.g. host omits
+        // PostToolUse response payload), some files may still have been written on disk: fail safe
+        // by invalidating read-dedup/ghost caches for all candidate paths without polluting modifiedFiles.
+        const isUnconfirmedBestEffortError = isBestEffortApply && !responseText && responseIsError;
+        const invalidationPaths =
+          partialApplied !== null
+            ? partialApplied
+            : isUnconfirmedBestEffortError
+              ? paths
+              : abortedNoWrite
+                ? []
+                : paths;
+        const checkpointSourcePaths =
+          partialApplied !== null ? partialApplied : abortedNoWrite ? [] : paths;
+        if (invalidationPaths.length > 0) {
           const invalidateSinglePath = (target) => {
             store.invalidateFileReads(sessionId, target);
             if (typeof store.clearGhostInterception === "function") {
@@ -1370,7 +1396,7 @@ export async function processPostToolPayload(rawPayload) {
               store.invalidateFileReadsByPath(target);
             }
           };
-          for (const absPath of effectivePaths) {
+          for (const absPath of invalidationPaths) {
             invalidateSinglePath(absPath);
             const realTarget = resolveRealPathBestEffort(absPath);
             if (
@@ -1382,11 +1408,13 @@ export async function processPostToolPayload(rawPayload) {
               invalidateSinglePath(realTarget);
             }
           }
+        }
+        if (checkpointSourcePaths.length > 0) {
           const wsLogicalForm =
             cwd && typeof cwd === "string" && cwd.trim()
               ? (process.platform === "win32" ? path.resolve(cwd).toLowerCase() : path.resolve(cwd))
               : "";
-          const checkpointPaths = effectivePaths
+          const checkpointPaths = checkpointSourcePaths
             .filter(
               (absPath) =>
                 !isEphemeralScratchOrTempPathOutsideWorkspace(absPath, cwd, {

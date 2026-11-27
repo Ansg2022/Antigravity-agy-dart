@@ -31,7 +31,7 @@ export const FILE_CATEGORIES = {
   images: {
     id: "images",
     name: "Images",
-    extensions: [".png", ".jpg", ".jpeg", ".gif", ".webp", ".svg", ".bmp", ".ico", ".tiff", ".psd"]
+    extensions: [".png", ".jpg", ".jpeg", ".gif", ".webp", ".heic", ".avif", ".svg", ".bmp", ".ico", ".tiff", ".psd"]
   },
   documents: {
     id: "documents",
@@ -51,7 +51,7 @@ export const FILE_CATEGORIES = {
   music: {
     id: "music",
     name: "Music",
-    extensions: [".mp3", ".wav", ".ogg", ".flac", ".aac", ".m4a", ".wma", ".midi"]
+    extensions: [".mp3", ".wav", ".ogg", ".flac", ".aac", ".m4a", ".amr", ".wma", ".midi"]
   },
   video: {
     id: "video",

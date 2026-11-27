@@ -264,8 +264,8 @@ const KNOWN_TEXT_EXTENSIONS = new Set([
 
 const BINARY_EXTENSIONS = new Set([
   ".pdf", ".docx", ".doc", ".xlsx", ".xls", ".pptx", ".ppt",
-  ".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp", ".ico", ".tiff", ".tif",
-  ".mp3", ".wav", ".ogg", ".m4a", ".flac", ".aac", ".mp4", ".webm", ".mkv", ".avi", ".mov",
+  ".png", ".jpg", ".jpeg", ".gif", ".webp", ".heic", ".avif", ".bmp", ".ico", ".tiff", ".tif",
+  ".mp3", ".wav", ".ogg", ".m4a", ".flac", ".aac", ".amr", ".mp4", ".webm", ".mkv", ".avi", ".mov",
   ".zip", ".tar", ".gz", ".7z", ".rar", ".exe", ".dll", ".so", ".dylib", ".bin",
   ".blend", ".fbx", ".obj", ".gltf", ".glb", ".wasm"
 ]);
@@ -588,7 +588,11 @@ function isUserAttachedFile(filePath, absPath) {
   );
 }
 
-/** Exempt Antigravity's own skills, rules, and builtin manuals so agents can read instructions whole */
+const AGENT_PLUGIN_INSTRUCTION_RE =
+  /(?:^|\/)(?:\.gemini\/config|\.agents)\/plugins\/[^/]+\/(?:skills|rules|agents)\//;
+const LEGACY_AGENT_INSTRUCTION_RE = /(?:^|\/)\.agent\/(?:skills|rules|agents)\//;
+
+/** Exempt Antigravity's own skills, rules, agents, and builtin manuals so agents can read instructions whole */
 export function isAgentInstructionFile(filePath, absPath) {
   const raw = (absPath || filePath || "").replace(/\\/g, "/");
   const lower = raw.toLowerCase();
@@ -600,8 +604,14 @@ export function isAgentInstructionFile(filePath, absPath) {
     lower.includes("/.gemini/antigravity/builtin/") ||
     lower.includes("/.gemini/config/skills/") ||
     lower.includes("/.gemini/config/rules/") ||
+    lower.includes("/.gemini/config/agents/") ||
+    lower.includes("/.gemini/antigravity-cli/skills/") ||
+    lower.includes("/.gemini/skills/") ||
     lower.includes("/.agents/skills/") ||
-    lower.includes("/.agents/rules/")
+    lower.includes("/.agents/rules/") ||
+    lower.includes("/.agents/agents/") ||
+    AGENT_PLUGIN_INSTRUCTION_RE.test(lower) ||
+    LEGACY_AGENT_INSTRUCTION_RE.test(lower)
   );
 }
 
@@ -691,50 +701,79 @@ export function hasExplicitConversationId(payload = {}, env = process.env) {
 }
 
 const SUBAGENT_ROLE_GUARD_RE =
-  /(?:^|[-_\s/])(?:sub[-_]?agent|worker|research(?:er)?|verifier|review(?:er)?|explor(?:er|e)|audit(?:or)?|investigat(?:or)?|browser|image[-_]?generator)(?:$|[-_\s/])|^(?:DeepCoder|DeepInvestigator)[A-Za-z0-9_-]*$/i;
-const PRIMARY_HOST_ROLE_RE = /^(?:antigravity|main|default|primary|chat|user|assistant|cascade)$/i;
+  /(?:^|[-_\s/])(?:sub[-_]?agent|worker|monitor|swarm|research(?:er)?|verifier|review(?:er)?|explor(?:er|e)|audit(?:or)?|investigat(?:or)?|browser|image[-_]?generator)(?:$|[-_\s/])|^(?:DeepCoder|DeepInvestigator)[A-Za-z0-9_-]*$/i;
+const PRIMARY_HOST_ROLE_RE = /^(?:antigravity|main|default|primary|chat|user|assistant|cascade|coordinator)$/i;
 
 export function isSubagentReadPayload(payload = {}, env = process.env) {
   if (env?.ANTIGRAVITY_PARENT_CONVERSATION_ID) return true;
   const envSub = String(env?.ANTIGRAVITY_SUBAGENT || "").trim().toLowerCase();
   if (envSub === "1" || envSub === "true") return true;
+  const envSwarmWorker = String(env?.ANTIGRAVITY_SWARM_WORKER || "").trim().toLowerCase();
+  if (envSwarmWorker === "1" || envSwarmWorker === "true") return true;
   if (!payload || typeof payload !== "object") return false;
-  if (payload.subagent === true || payload.isSubagent === true || payload.is_subagent === true) return true;
-  if (
-    (typeof payload.subagentId === "string" && payload.subagentId.trim()) ||
-    (typeof payload.subagent_id === "string" && payload.subagent_id.trim())
-  ) {
-    return true;
-  }
-  const directDepth = Number(payload.nestingDepth ?? payload.nesting_depth);
-  if (Number.isFinite(directDepth) && directDepth > 0) return true;
-  if (payload.metadata && typeof payload.metadata === "object") {
-    const metaDepth = Number(payload.metadata.nestingDepth ?? payload.metadata.nesting_depth);
+  const common = payload.common && typeof payload.common === "object" && !Array.isArray(payload.common) ? payload.common : null;
+  const meta = payload.metadata && typeof payload.metadata === "object" && !Array.isArray(payload.metadata) ? payload.metadata : null;
+  for (const bag of [payload, common, meta]) {
+    if (!bag) continue;
     if (
-      payload.metadata.subagent === true ||
-      payload.metadata.isSubagent === true ||
-      payload.metadata.is_subagent === true ||
-      (typeof payload.metadata.subagentId === "string" && payload.metadata.subagentId.trim()) ||
-      (typeof payload.metadata.subagent_id === "string" && payload.metadata.subagent_id.trim()) ||
-      payload.metadata.parentConversationId ||
-      payload.metadata.parent_conversation_id ||
-      payload.metadata.parentSessionId ||
-      payload.metadata.parent_session_id ||
-      (Number.isFinite(metaDepth) && metaDepth > 0)
+      bag.subagent === true ||
+      bag.isSubagent === true ||
+      bag.is_subagent === true ||
+      bag.swarmWorker === true ||
+      bag.isSwarmWorker === true ||
+      bag.is_swarm_worker === true
+    ) {
+      return true;
+    }
+    if (
+      (typeof bag.subagentId === "string" && bag.subagentId.trim()) ||
+      (typeof bag.subagent_id === "string" && bag.subagent_id.trim())
+    ) {
+      return true;
+    }
+    const workerName = [bag.workerName, bag.worker_name, bag.rosterName, bag.roster_name]
+      .find((v) => typeof v === "string" && v.trim());
+    if (workerName && !PRIMARY_HOST_ROLE_RE.test(workerName.trim())) {
+      return true;
+    }
+    const swarmObj = bag.swarm && typeof bag.swarm === "object" && !Array.isArray(bag.swarm) ? bag.swarm : null;
+    if (swarmObj) {
+      if (swarmObj.isWorker === true || swarmObj.is_worker === true) return true;
+      const swRole = typeof swarmObj.role === "string" ? swarmObj.role.trim() : "";
+      if (swRole && !PRIMARY_HOST_ROLE_RE.test(swRole) && SUBAGENT_ROLE_GUARD_RE.test(swRole)) return true;
+      const swName = [swarmObj.workerName, swarmObj.worker_name, swarmObj.name]
+        .find((v) => typeof v === "string" && v.trim());
+      if (swName && !PRIMARY_HOST_ROLE_RE.test(swName.trim()) && swRole.toLowerCase() !== "coordinator") {
+        return true;
+      }
+    }
+    const depth = Number(bag.nestingDepth ?? bag.nesting_depth);
+    if (Number.isFinite(depth) && depth > 0) return true;
+    if (
+      bag.parentConversationId ||
+      bag.parent_conversation_id ||
+      bag.parentSessionId ||
+      bag.parent_session_id
     ) {
       return true;
     }
   }
-  if (payload.parentConversationId || payload.parent_conversation_id || payload.parentSessionId || payload.parent_session_id) {
-    return true;
-  }
   const rootId =
     payload.rootConversationId ||
     payload.root_conversation_id ||
-    payload.metadata?.rootConversationId ||
-    payload.metadata?.root_conversation_id ||
+    common?.rootConversationId ||
+    common?.root_conversation_id ||
+    meta?.rootConversationId ||
+    meta?.root_conversation_id ||
     "";
-  const convId = payload.conversationId || payload.conversation_id || payload.sessionId || payload.session_id || "";
+  const convId =
+    payload.conversationId ||
+    payload.conversation_id ||
+    common?.conversationId ||
+    common?.conversation_id ||
+    payload.sessionId ||
+    payload.session_id ||
+    "";
   if (rootId && convId && rootId !== convId) return true;
   const roleCandidates = [
     payload.role,
@@ -744,17 +783,26 @@ export function isSubagentReadPayload(payload = {}, env = process.env) {
     payload.agent_type,
     payload.agentName,
     payload.agent_name,
+    payload.swarmRole,
+    payload.swarm_role,
     payload.sessionType,
     payload.session_type,
     payload.sessionKind,
     payload.session_kind,
-    payload.metadata?.role,
-    payload.metadata?.agentRole,
-    payload.metadata?.agent_role,
-    payload.metadata?.agentType,
-    payload.metadata?.agent_type,
-    payload.metadata?.agentName,
-    payload.metadata?.agent_name
+    common?.role,
+    common?.agentName,
+    common?.agent_name,
+    common?.swarmRole,
+    common?.swarm_role,
+    meta?.role,
+    meta?.agentRole,
+    meta?.agent_role,
+    meta?.agentType,
+    meta?.agent_type,
+    meta?.agentName,
+    meta?.agent_name,
+    meta?.swarmRole,
+    meta?.swarm_role
   ];
   for (const candidate of roleCandidates) {
     if (typeof candidate === "string" && candidate.trim()) {
@@ -1949,15 +1997,22 @@ export async function evaluatePreToolPayload(rawPayload) {
     const absPath = path.isAbsolute(filePath) ? filePath : path.resolve(cwd, filePath);
     const ext = path.extname(absPath).toLowerCase();
     const guardActive = (effectiveCfg.sensitiveFileGuard || "off") !== "off";
+    const isViewFilePageRange =
+      toolName === "view_file" &&
+      ((args.StartPage !== undefined && args.StartPage !== null && String(args.StartPage).trim() !== "") ||
+        (args.EndPage !== undefined && args.EndPage !== null && String(args.EndPage).trim() !== "") ||
+        (args.startPage !== undefined && args.startPage !== null && String(args.startPage).trim() !== "") ||
+        (args.endPage !== undefined && args.endPage !== null && String(args.endPage).trim() !== ""));
     if (
       !guardActive &&
       (isUserAttachedFile(rawFilePath, absPath) ||
         isAgentInstructionFile(rawFilePath, absPath) ||
-        BINARY_EXTENSIONS.has(ext))
+        BINARY_EXTENSIONS.has(ext) ||
+        isViewFilePageRange)
     ) {
       return done({ decision: "allow" });
     }
-    preParsedRead = { rawFilePath, filePath, absPath, ext };
+    preParsedRead = { rawFilePath, filePath, absPath, ext, isViewFilePageRange };
   }
 
   try {
@@ -2186,11 +2241,12 @@ export async function evaluatePreToolPayload(rawPayload) {
           }
         }
 
-        // Tier 0: unconditional allow (attachments, instruction files, binary files)
+        // Tier 0: unconditional allow (attachments, instruction files, binary files, view_file page ranges)
         if (
           isUserAttachedFile(preParsedRead.rawFilePath, absPath) ||
           isAgentInstructionFile(preParsedRead.rawFilePath, absPath) ||
-          BINARY_EXTENSIONS.has(ext)
+          BINARY_EXTENSIONS.has(ext) ||
+          preParsedRead.isViewFilePageRange
         ) {
           return done({ decision: "allow" });
         }
@@ -2775,11 +2831,13 @@ export async function evaluatePreToolPayload(rawPayload) {
 
             if (!isContinuationAllow) {
               const isLargeFile = remainingBytes > tierCutoffBytes;
-              const isWideRange = tierMaxLineRange > 0 && (endLine === null || endLine - startLine > tierMaxLineRange);
-              const requestedLineSpan = endLine !== null ? Math.max(1, endLine - startLine + 1) : 1;
+              const isBoundedSlice = endLine !== null;
+              const requestedLineSpan = isBoundedSlice ? Math.max(1, endLine - startLine + 1) : 1;
+              const rawWideRange =
+                tierMaxLineRange > 0 && (!isBoundedSlice || requestedLineSpan > tierMaxLineRange);
               const maxPagedSliceBytes = Math.max(HOST_READ_MAX_BYTES, tierCutoffBytes * 2);
               const slicedRangeBytes =
-                isLargeFile && !isWideRange && endLine !== null
+                isLargeFile && isBoundedSlice
                   ? measureLineRangeBytes(absPath, startLine, endLine, stat.size, 0, readCtx)
                   : 0;
               const avgSliceLineBytes = slicedRangeBytes / requestedLineSpan;
@@ -2787,6 +2845,15 @@ export async function evaluatePreToolPayload(rawPayload) {
                 slicedRangeBytes > tierCutoffBytes && avgSliceLineBytes > 512;
               const isOversizedMultiLineSlice =
                 !isMinifiedDenseSlice && slicedRangeBytes > maxPagedSliceBytes;
+              // Allow bounded non-minified line slices whose actual UTF-8 byte length fits within tierCutoffBytes
+              // (e.g., requesting lines 651-1520 on a 54 KB / 1,517-line file whose slice is only ~25 KB).
+              const isSmallVerifiedSlice =
+                isBoundedSlice &&
+                byteOffset === 0 &&
+                !isMinifiedContent &&
+                !isMinifiedDenseSlice &&
+                slicedRangeBytes <= tierCutoffBytes;
+              const isWideRange = rawWideRange && !isSmallVerifiedSlice;
 
               if (isLargeFile && (isWideRange || isMinifiedDenseSlice || isOversizedMultiLineSlice)) {
                 const independentSubagent =
@@ -2832,7 +2899,13 @@ export async function evaluatePreToolPayload(rawPayload) {
                       ? `, ${lineInfo.exact ? "" : "~"}${lineInfo.lines.toLocaleString()} lines`
                       : "";
                   const reportedBytes =
-                    isMinifiedDenseSlice || isOversizedMultiLineSlice ? slicedRangeBytes : remainingBytes;
+                    isMinifiedDenseSlice || isOversizedMultiLineSlice || (isBoundedSlice && slicedRangeBytes > 0)
+                      ? slicedRangeBytes
+                      : remainingBytes;
+                  const subjectLabel = isBoundedSlice
+                    ? `File slice (lines ${startLine}-${endLine})`
+                    : "File";
+                  const subjectMeta = isBoundedSlice ? "" : lineMeta;
                   const hasDeclaredWorkspace = Boolean(
                     (typeof payload?.cwd === "string" && payload.cwd.trim()) ||
                       (Array.isArray(payload?.workspacePaths) && payload.workspacePaths.some((p) => typeof p === "string" && p.trim()))
@@ -2869,8 +2942,11 @@ export async function evaluatePreToolPayload(rawPayload) {
                   } else if (tier === "review") {
                     const lineRangeHint =
                       tierMaxLineRange > 0 ? `StartLine/EndLine (<= ${tierMaxLineRange} lines)` : "StartLine/EndLine";
+                    const reviewSubject = isBoundedSlice
+                      ? `Diff/patch slice (lines ${startLine}-${endLine})`
+                      : "Diff/patch file";
                     reason =
-                      `[agy-dart protection] Diff/patch file is ${formatBytes(reportedBytes)} (~${Math.round(reportedBytes / 4).toLocaleString()} tokens${lineMeta}), exceeding the ${formatBytes(tierCutoffBytes)} review limit. ` +
+                      `[agy-dart protection] ${reviewSubject} is ${formatBytes(reportedBytes)} (~${Math.round(reportedBytes / 4).toLocaleString()} tokens${subjectMeta}), exceeding the ${formatBytes(tierCutoffBytes)} review limit. ` +
                       (isSubagentCall
                         ? `Use ${lineRangeHint} to inspect specific hunks.${softRetryHint}`
                         : isOutsideWorkspace
@@ -2880,20 +2956,23 @@ export async function evaluatePreToolPayload(rawPayload) {
                     const lineRangeHint =
                       tierMaxLineRange > 0 ? `StartLine/EndLine (<= ${tierMaxLineRange} lines)` : "StartLine/EndLine";
                     reason =
-                      `[agy-dart protection] File is ${formatBytes(reportedBytes)} (~${Math.round(reportedBytes / 4).toLocaleString()} tokens${lineMeta}), exceeding the ${formatBytes(tierCutoffBytes)} context limit. ` +
+                      `[agy-dart protection] ${subjectLabel} is ${formatBytes(reportedBytes)} (~${Math.round(reportedBytes / 4).toLocaleString()} tokens${subjectMeta}), exceeding the ${formatBytes(tierCutoffBytes)} context limit. ` +
                       `Use native ${toolName} with ${lineRangeHint} to read relevant sections${isOutsideWorkspace ? "" : ` (or ${FAST_SERVER} read_slices if available)`}.${softRetryHint}`;
                   } else if (isOutsideWorkspace) {
                     const lineRangeHint =
                       tierMaxLineRange > 0 ? `StartLine/EndLine (<= ${tierMaxLineRange} lines)` : "StartLine/EndLine";
                     reason =
-                      `[agy-dart protection] File is ${formatBytes(reportedBytes)} (~${Math.round(reportedBytes / 4).toLocaleString()} tokens${lineMeta}), exceeding the ${formatBytes(tierCutoffBytes)} context limit. ` +
+                      `[agy-dart protection] ${subjectLabel} is ${formatBytes(reportedBytes)} (~${Math.round(reportedBytes / 4).toLocaleString()} tokens${subjectMeta}), exceeding the ${formatBytes(tierCutoffBytes)} context limit. ` +
                       `File is outside the active workspace; use native ${toolName} with ${lineRangeHint} (keeps allowed_tool fast-path with 0 cloud safety review) instead of MCP tools.${softRetryHint}`;
                   } else {
                     const lineRangeHint =
                       tierMaxLineRange > 0 ? `StartLine/EndLine (<= ${tierMaxLineRange} lines)` : "StartLine/EndLine";
+                    const bloatText = isBoundedSlice
+                      ? "Reading an oversized slice risks context bloat."
+                      : "Reading the entire file risks severe context bloat.";
                     reason =
-                      `[agy-dart protection] File is ${formatBytes(reportedBytes)} (~${Math.round(reportedBytes / 4).toLocaleString()} tokens${lineMeta}), exceeding the ${formatBytes(tierCutoffBytes)} context limit. ` +
-                      `Reading the entire file risks severe context bloat. ` +
+                      `[agy-dart protection] ${subjectLabel} is ${formatBytes(reportedBytes)} (~${Math.round(reportedBytes / 4).toLocaleString()} tokens${subjectMeta}), exceeding the ${formatBytes(tierCutoffBytes)} context limit. ` +
+                      `${bloatText} ` +
                       (tier === "source"
                         ? `Use native ${toolName} with ${lineRangeHint} (allowed_tool, 0 cloud safety review) for single-file reads; for logs/docs/data use call_mcp_tool(ServerName:"${CTX_SERVER}", ToolName:"ctx_index" or "ctx_execute", path:"${filePath}").${softRetryHint}`
                         : `For logs/docs/data use call_mcp_tool(ServerName:"${CTX_SERVER}", ToolName:"ctx_index" or "ctx_execute", path:"${filePath}") or outline via ${FAST_SERVER} read_slices({ outlines }) / read targeted ${lineRangeHint}.${softRetryHint}`);
@@ -2922,7 +3001,7 @@ export async function evaluatePreToolPayload(rawPayload) {
                               : tier === "review"
                                 ? `Outline changed files & hunks is attached below — use native ${toolName}(Path, StartLine, EndLine) (allowed_tool, 0 cloud safety review) without extra read_slices MCP calls.${softRetryHint}`
                                 : `Free inline outline attached below — use native ${toolName}(Path, StartLine, EndLine) (allowed_tool, 0 cloud safety review) without extra read_slices MCP calls.${softRetryHint}`;
-                            const compactHeader = `[agy-dart protection] File is ${formatBytes(reportedBytes)} (~${Math.round(reportedBytes / 4).toLocaleString()} tokens${lineMeta}), exceeding the ${formatBytes(tierCutoffBytes)} limit. ${compactDetail}\n`;
+                            const compactHeader = `[agy-dart protection] ${subjectLabel} is ${formatBytes(reportedBytes)} (~${Math.round(reportedBytes / 4).toLocaleString()} tokens${subjectMeta}), exceeding the ${formatBytes(tierCutoffBytes)} limit. ${compactDetail}\n`;
                             const prefix = bridgeInput ? "" : compactHeader;
                             reason = (Buffer.byteLength(prefix + hint + "\n" + block) <= 4500 ? prefix : "") + hint + "\n" + block;
                           }

@@ -337,12 +337,12 @@ test("P0: Anonymous shared fast/mcp-server.mjs savings attribute cleanly via Pos
     "utf8"
   );
 
-  // Verify hooks.json PostToolUse matcher covers all fast + context receipt tools
+  // Verify hooks.json PostToolUse matcher covers write/verify/context tools while omitting read-only
+  // read_slices & batch_search (which PreInvocation claims from the transcript without extra hook spawns)
   const hooksCfg = JSON.parse(fs.readFileSync(path.join(ROOT, "hooks.json"), "utf8"));
   const postMatcher = new RegExp(`^(?:${hooksCfg["agy-dart-lifecycle"].PostToolUse[0].matcher})$`);
   for (const name of [
-    "mcp_agy-dart_fast_read_slices",
-    "mcp_agy-dart_fast_batch_search",
+    "mcp_agy-dart_fast_apply_edits",
     "mcp_agy-dart_fast_run_checks",
     "mcp_agy-dart_context_ctx_execute",
     "mcp_agy-dart_context_ctx_index",
@@ -350,6 +350,9 @@ test("P0: Anonymous shared fast/mcp-server.mjs savings attribute cleanly via Pos
     "call_mcp_tool"
   ]) {
     assert.equal(postMatcher.test(name), true, `hooks.json PostToolUse matcher must cover ${name}`);
+  }
+  for (const readOnlyFast of ["mcp_agy-dart_fast_read_slices", "mcp_agy-dart_fast_batch_search"]) {
+    assert.equal(postMatcher.test(readOnlyFast), false, `PostToolUse matcher should skip read-only ${readOnlyFast}`);
   }
 
   const fastClient = createPersistentMcpClient(path.join(ROOT, "fast", "mcp-server.mjs"), {

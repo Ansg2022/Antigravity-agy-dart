@@ -63,8 +63,8 @@ function nonEmptyString(val) {
 }
 
 const SUBAGENT_ROLE_RE =
-  /(?:^|[-_\s/])(?:sub[-_]?agent|worker|research(?:er)?|verifier|review(?:er)?|explor(?:er|e)|audit(?:or)?|investigat(?:or)?|browser|image[-_]?generator)(?:$|[-_\s/])|^(?:DeepCoder|DeepInvestigator)[A-Za-z0-9_-]*$/i;
-const PRIMARY_HOST_AGENT_NAME_RE = /^(?:antigravity|main|default|primary|chat|user|assistant|cascade)$/i;
+  /(?:^|[-_\s/])(?:sub[-_]?agent|worker|monitor|swarm|research(?:er)?|verifier|review(?:er)?|explor(?:er|e)|audit(?:or)?|investigat(?:or)?|browser|image[-_]?generator)(?:$|[-_\s/])|^(?:DeepCoder|DeepInvestigator)[A-Za-z0-9_-]*$/i;
+const PRIMARY_HOST_AGENT_NAME_RE = /^(?:antigravity|main|default|primary|chat|user|assistant|cascade|coordinator)$/i;
 
 /**
  * Detect whether a SessionStart hook payload / environment belongs to a subagent or swarm worker.
@@ -74,6 +74,8 @@ export function isSubagentPayload(payload, env = process.env) {
   if (nonEmptyString(e.ANTIGRAVITY_PARENT_CONVERSATION_ID)) return true;
   const envSubagent = nonEmptyString(e.ANTIGRAVITY_SUBAGENT).toLowerCase();
   if (envSubagent === "1" || envSubagent === "true") return true;
+  const envSwarmWorker = nonEmptyString(e.ANTIGRAVITY_SWARM_WORKER).toLowerCase();
+  if (envSwarmWorker === "1" || envSwarmWorker === "true") return true;
 
   const p = parseHookPayload(payload);
   if (!p) return false;
@@ -82,8 +84,36 @@ export function isSubagentPayload(payload, env = process.env) {
 
   for (const bag of [p, common, meta]) {
     if (!bag) continue;
-    if (bag.subagent === true || bag.isSubagent === true || bag.is_subagent === true) return true;
+    if (
+      bag.subagent === true ||
+      bag.isSubagent === true ||
+      bag.is_subagent === true ||
+      bag.swarmWorker === true ||
+      bag.isSwarmWorker === true ||
+      bag.is_swarm_worker === true
+    ) {
+      return true;
+    }
     if (nonEmptyString(bag.subagentId) || nonEmptyString(bag.subagent_id)) return true;
+    const workerName =
+      nonEmptyString(bag.workerName) ||
+      nonEmptyString(bag.worker_name) ||
+      nonEmptyString(bag.rosterName) ||
+      nonEmptyString(bag.roster_name);
+    if (workerName && !PRIMARY_HOST_AGENT_NAME_RE.test(workerName)) return true;
+    const swarmObj = bag.swarm && typeof bag.swarm === "object" && !Array.isArray(bag.swarm) ? bag.swarm : null;
+    if (swarmObj) {
+      if (swarmObj.isWorker === true || swarmObj.is_worker === true) return true;
+      const swRole = nonEmptyString(swarmObj.role);
+      if (swRole && !PRIMARY_HOST_AGENT_NAME_RE.test(swRole) && SUBAGENT_ROLE_RE.test(swRole)) return true;
+      const swName =
+        nonEmptyString(swarmObj.workerName) ||
+        nonEmptyString(swarmObj.worker_name) ||
+        nonEmptyString(swarmObj.name);
+      if (swName && !PRIMARY_HOST_AGENT_NAME_RE.test(swName) && swRole.toLowerCase() !== "coordinator") {
+        return true;
+      }
+    }
     const spec = bag.subagentSpec ?? bag.subagent_spec ?? null;
     if (spec && typeof spec === "object" && !Array.isArray(spec) && Object.keys(spec).length > 0) return true;
     const depth = Number(bag.nestingDepth ?? bag.nesting_depth);
@@ -129,6 +159,8 @@ export function isSubagentPayload(payload, env = process.env) {
     p.agent_type,
     p.agentName,
     p.agent_name,
+    p.swarmRole,
+    p.swarm_role,
     p.sessionType,
     p.session_type,
     p.sessionKind,
@@ -136,13 +168,17 @@ export function isSubagentPayload(payload, env = process.env) {
     common?.agentName,
     common?.agent_name,
     common?.role,
+    common?.swarmRole,
+    common?.swarm_role,
     meta?.role,
     meta?.agentRole,
     meta?.agent_role,
     meta?.agentType,
     meta?.agent_type,
     meta?.agentName,
-    meta?.agent_name
+    meta?.agent_name,
+    meta?.swarmRole,
+    meta?.swarm_role
   ];
   for (const candidate of roleCandidates) {
     const text = nonEmptyString(candidate);
@@ -281,15 +317,21 @@ async function main() {
           import("../context/lib/repo-skeleton.js")
         ]);
         store = new ContextModeStore({ hookMode: true });
+        const { convId, rootSessionId } = resolveSessionIds(payload, process.env);
         if (!isSubagent) {
-          store.clearSessionOverrides();
+          const hasOtherPrimary =
+            typeof store.hasOtherActivePrimarySession === "function" &&
+            store.hasOtherActivePrimarySession(convId);
+          if (!hasOtherPrimary) {
+            store.clearSessionOverrides();
+          }
           store.maybeRunDailyMaintenance(14);
         }
-        const { convId, rootSessionId } = resolveSessionIds(payload, process.env);
         if (workspaceDir && convId && typeof store.recordSessionWorkspace === "function") {
           store.recordSessionWorkspace(convId, workspaceDir, {
             rootSessionId: rootSessionId || convId,
             active: true,
+            isSubagent,
             source: "SessionStart"
           });
         }
