@@ -79,13 +79,13 @@ Requires **Node.js 22.16+ (22.x) or Node.js 24+**. Zero third-party packages —
 **Windows (PowerShell):**
 
 ```powershell
-irm https://raw.githubusercontent.com/zou172866/Antigravity-agy-dart/v1.9.0/install.ps1 | iex
+irm https://raw.githubusercontent.com/zou172866/Antigravity-agy-dart/v1.9.1/install.ps1 | iex
 ```
 
 **macOS / Linux:**
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/zou172866/Antigravity-agy-dart/v1.9.0/install.sh | sh
+curl -fsSL https://raw.githubusercontent.com/zou172866/Antigravity-agy-dart/v1.9.1/install.sh | sh
 ```
 
 ### Option 2: Let Antigravity install it
@@ -93,13 +93,13 @@ curl -fsSL https://raw.githubusercontent.com/zou172866/Antigravity-agy-dart/v1.9
 Send this to Antigravity:
 
 ```text
-Clone tag v1.9.0 of https://github.com/zou172866/Antigravity-agy-dart.git to a temp folder, run `node scripts/install.mjs install` (add `--install-rg` on Windows if `rg` is missing), and confirm `doctor` passes.
+Clone tag v1.9.1 of https://github.com/zou172866/Antigravity-agy-dart.git to a temp folder, run `node scripts/install.mjs install` (add `--install-rg` on Windows if `rg` is missing), and confirm `doctor` passes.
 ```
 
 ### Option 3: Clone & install with custom flags
 
 ```powershell
-git clone --branch v1.9.0 --depth 1 https://github.com/zou172866/Antigravity-agy-dart.git
+git clone --branch v1.9.1 --depth 1 https://github.com/zou172866/Antigravity-agy-dart.git
 cd Antigravity-agy-dart
 
 # Windows PowerShell (optional -InstallRg auto-installs ripgrep)
@@ -164,6 +164,11 @@ node ~/.gemini/config/plugins/agy-dart/scripts/install.mjs tool-loading lazy
 ---
 
 ## Changelog
+
+### v1.9.1
+- **Leaner startup prompt & on-demand skill docs (zero feature cuts)**: Trimmed `rules/AGENTS.md` and `agy-dart_context` tool descriptions to cut default Turn-0 startup overhead (`~1,344 → ~1,287` tokens; full catalog `1,956 → 1,883` tokens), and tightened `SKILL.md` + `error-playbook.md` to save **~3,278 tokens (-36%)** whenever troubleshooting docs are loaded on demand.
+- **Smaller installed footprint**: Stopped copying GitHub-only `README` files and 6 architecture/comparison SVGs into the local plugin install directory (`RUNTIME_FILES` slimmed from `72 → 64` files / `-112 KB`, while keeping all repo docs, `LICENSE`, `SECURITY.md`, `THIRD_PARTY_NOTICES.md`, and `assets/logo.svg` intact).
+- **Dead-code cleanup & shared helper consolidation**: Removed unreferenced internal functions/constants and unused dashboard CSS/i18n entries, consolidated 6 copies of hook stdin/session/path boilerplate into already-loaded `hooks/compile-cache.mjs` (zero extra files), and unified 5 copies of `truncateUtf8Safe` into the exact U+FFFD-preserving implementation in `context/lib/stable-json.js` (`-429` core lines, zero behavior drift).
 
 ### v1.9.0
 - **Gemini 4 95% cache & pricing alignment**: Updated cache savings math, per-variant pricing (Carbon/Argon, Neon, Hydrogen), minimum cacheable threshold (4,096 tokens), and multi-turn delta checks (2,050 tokens) for Gemini 4 so cost and hit-rate estimates stay accurate without false cache-miss warnings; also recognized Carbon/Neon default high-reasoning tiers and raised the keepalive ROI floor.

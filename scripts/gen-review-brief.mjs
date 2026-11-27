@@ -219,7 +219,7 @@ const CORE_LIB_ENTRIES = [
   ["context/lib/watchdog.js", "Sidecar 卡死看门狗与空闲 TTL 临期提醒引擎（`WatchdogMonitor`）：双源融合状态机、动态超时矩阵、空闲零 `statSync`、休眠时钟跳变防护、6 类归因指引、抢救版 Handoff Brief 与 Opt-in 防抖卡死/TTL 临期桌面提醒"],
   ["context/lib/text-diff.js", "零依赖行级 Unified Diff 引擎：首尾裁剪 + 有界 Myers + 线性降级保护 + 1-based `startLine` 偏移"],
   ["context/lib/executor.js", "本地沙盒脚本执行器（JS/Node/Python/Shell/PowerShell/CMD，带输出封顶与超时清理）"],
-  ["context/lib/stable-json.js", "`stableSortObject`、`stableStringify`、`sha256Hex`（保证 MCP Schema 与指纹 100% 字节确定性）"]
+  ["context/lib/stable-json.js", "`stableSortObject`、`stableStringify`、`sha256Hex` 与规范 `truncateUtf8Safe`（保证 MCP Schema 指纹确定性与 UTF-8 码点安全截断）"]
 ];
 
 const HOOK_ENTRIES = [
@@ -230,7 +230,7 @@ const HOOK_ENTRIES = [
   ["hooks/stop.mjs", "轻量 `Stop` 钩子（<5ms、零 stderr、Fail-Open，遵循官方 `{\"decision\":\"allow\"}` 与 `terminationReason`/`fullyIdle`/`error` 契约）：对话轮次结束时将 `watchdog_lease:<convId>` 切换为 `IDLE`"],
   ["hooks/cli-filter.mjs", "`PreToolUse.overwrite` 执行代理：Windows `cmd.exe`/`powershell.exe` 精确透传退出码、密钥脱敏、原输出入 FTS5、降噪并死守 `<= 8.8 KB`"],
   ["hooks/session-start.mjs", "前缀稳定启动钩子：支持 `stablePrefixOnly` 与子 Agent 自动省略易变 Git 尾段（并在子进程隔离禁用 Git）"],
-  ["hooks/compile-cache.mjs", "版本化 V8 编译缓存管理（保留最近 3 个版本）与跨 Node 22/24 的 `suppressSqliteExperimentalWarning()` 零 stderr 护栏"]
+  ["hooks/compile-cache.mjs", "版本化 V8 编译缓存管理（保留最近 3 个版本）、跨 Node 22/24 `suppressSqliteExperimentalWarning()` 零 stderr 护栏，以及全钩子共享轻量工具（`readStdin`/`parseHookPayload`/`isSameFilePath`/`resolveSessionId`/`resolveDirectConversationId`）"]
 ];
 
 const ENGINE_ENTRIES = [

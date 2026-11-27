@@ -79,13 +79,13 @@ Antigravity 偶尔会在后台反复重审长对话，悄悄把 5 小时额度�
 **Windows（PowerShell）：**
 
 ```powershell
-irm https://raw.githubusercontent.com/zou172866/Antigravity-agy-dart/v1.9.0/install.ps1 | iex
+irm https://raw.githubusercontent.com/zou172866/Antigravity-agy-dart/v1.9.1/install.ps1 | iex
 ```
 
 **macOS / Linux：**
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/zou172866/Antigravity-agy-dart/v1.9.0/install.sh | sh
+curl -fsSL https://raw.githubusercontent.com/zou172866/Antigravity-agy-dart/v1.9.1/install.sh | sh
 ```
 
 ### 方法二：直接发给 Antigravity 帮你装
@@ -93,13 +93,13 @@ curl -fsSL https://raw.githubusercontent.com/zou172866/Antigravity-agy-dart/v1.9
 复制下面这句发给 Antigravity 就行：
 
 ```text
-请将 https://github.com/zou172866/Antigravity-agy-dart.git 的 v1.9.0 标签克隆到临时目录，运行其中的 scripts/install.mjs install 完成全局安装并跑 doctor 自检（Windows 如未安装 rg 请同时传 --install-rg）。
+请将 https://github.com/zou172866/Antigravity-agy-dart.git 的 v1.9.1 标签克隆到临时目录，运行其中的 scripts/install.mjs install 完成全局安装并跑 doctor 自检（Windows 如未安装 rg 请同时传 --install-rg）。
 ```
 
 ### 方法三：克隆仓库自定义安装
 
 ```powershell
-git clone --branch v1.9.0 --depth 1 https://github.com/zou172866/Antigravity-agy-dart.git
+git clone --branch v1.9.1 --depth 1 https://github.com/zou172866/Antigravity-agy-dart.git
 cd Antigravity-agy-dart
 
 # Windows PowerShell（加 -InstallRg 可顺手自动安装快速搜索工具 rg）
@@ -164,6 +164,11 @@ node ~/.gemini/config/plugins/agy-dart/scripts/install.mjs tool-loading lazy
 ---
 
 ## 更新日志
+
+### v1.9.1
+- **开场规则与排错文档进一步瘦身（零减功能）**：精简 `rules/AGENTS.md` 与 `agy-dart_context` 工具描述，默认首轮开场占用从 `~1,344` 降至 `~1,287` token（全量目录 `1,956 → 1,883` token）；压缩 `SKILL.md` 与排错手册冗余表述，按需读取排错文档一次直省约 **3,278 token（-36%）**。
+- **安装目录体积更轻**：不再把仅用于 GitHub 主页展示的双语 README 和 6 张宣传图 SVG 复制进本机插件运行目录（`RUNTIME_FILES` 从 `72` 降至 `64` 文件 / 省 `112 KB`，仓库主页、合规声明与图标 `logo.svg` 完整保留）。
+- **清理死代码并收口跨文件重复样板**：移除未引用的内部函数/常量与面板残留样式/词条，把 6 份重复的钩子基础逻辑直接并入必载的 `hooks/compile-cache.mjs`（零新增文件），把 5 份 `truncateUtf8Safe` 统一为 `context/lib/stable-json.js` 的完整 UTF-8 码点边界实现（核心代码净减 `429` 行，行为零漂移）。
 
 ### v1.9.0
 - **对齐 Gemini 4 95% 缓存折扣与分档计价**：更新了 Gemini 4（含 Carbon/Argon、Neon、Hydrogen 变体）的 95% 缓存折扣、4,096 token 起步门槛和 2,050 token 增量判断，账本和成本估算更准、不再误报缓存失效；同步识别 Carbon/Neon 默认高推理档位，并提高自动续温的划算门槛。
